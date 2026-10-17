@@ -1,4 +1,5 @@
 import { withQueue } from "./journeys";
+import { publicPlace } from "./places";
 import { errorCount } from "./logs";
 import { getFeed, getRobotStatus, listCommands, stats } from "./robot";
 import { getStore } from "./store";
@@ -23,7 +24,7 @@ export async function board(robot: string) {
   const currentJourneyId = onScreen?.id ?? (fetched?.type === "guide" ? fetched.journeyId : undefined) ?? null;
   return {
     now: new Date().toISOString(),
-    places,
+    places: places.map(publicPlace),
     journeys,
     help,
     robot: status,

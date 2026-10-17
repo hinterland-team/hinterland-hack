@@ -1,22 +1,34 @@
 package com.hinterland.clinic
 
+import android.os.Process
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 
-// the radar while otto guides someone (docs/journeys.md 6.3): turns the radar data on, finds out the
-// frame and which angles the scan covers (logged on the first data), and tracks the follower behind.
-// the maths is in Lidar.kt (unit tested); this object only wires it to RobotApi data.
+// the radar while otto guides someone (docs/journeys.md 6.3, 6.7): turns the radar data on, finds out the
+// frame and which angles the scan covers (logged on the first data), and tracks the patient walking beside
+// otto (the side sectors; on our robot the back is blind). the maths is in Lidar.kt (unit tested); this
+// object only wires it to RobotApi data.
+// v3.3: the binder thread only hands the frame over. parsing and the leg search run on one background
+// thread at most 5 times a second, always on the newest frame (older ones are dropped).
 object Radar {
 
-    // the robot may send many frames a second; a few are plenty
-    private const val MIN_FRAME_MS = 150L
-    // frames summed before otto decides whether someone is behind him
+    // at most 5 frames a second: plenty for a person walking beside otto
+    private const val MIN_FRAME_MS = 200L
+    // frames summed before otto decides which angles the radar sees
     private const val COVERAGE_FRAMES = 15
     private const val FRESH_MS = 1_000L
+    // a side fix this fresh means "beside otto right now"
+    private const val BESIDE_FRESH_MS = 1_000L
     private const val MAP_SCAN_FRESH_MS = 2_000L
     // in front after the turn: people up to this far count
     private const val AHEAD_MAX_M = 6.0
-    private const val STATUS_EVERY_MS = 5_000L
+    private const val STATUS_EVERY_MS = 10_000L
+    // nobody beside for this long is worth a log line (shorter gaps are the normal flicker)
+    private const val UNSEEN_LOG_MS = 2_000L
+    private const val SUMMARY_EVERY_MS = 1_000L
     private const val SILENT_WARN_MS = 5_000L
 
     private val vote = FrameVote(
@@ -30,19 +42,35 @@ object Radar {
     private var coverage = Coverage()
     private val tracker = FollowerTracker()
 
+    // one background thread for the radar maths, low priority so the screen always comes first
+    private val worker = Executors.newSingleThreadExecutor { r ->
+        Thread({
+            runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }
+            r.run()
+        }, "otto-radar").apply { isDaemon = true }
+    }
+    private val pending = AtomicReference<String?>(null)
+    private val queued = AtomicBoolean(false)
+
     @Volatile var active = false
         private set
-    @Volatile private var lastFrameAt = 0L
+    @Volatile private var acceptedAt = 0L
     @Volatile private var frames = 0
     @Volatile private var loggedFirst = false
     @Volatile private var loggedBad = false
     @Volatile private var robotScan: Pair<Long, List<Point>>? = null
-    @Volatile private var mapScan: Pair<Long, List<Point>>? = null
+    // the newest frame as it came, its frame and the pose: the map frame is only made when asked (live map)
+    @Volatile private var lastRaw: RawScan? = null
     @Volatile private var statusAt = 0L
+    @Volatile private var summaryAt = 0L
     @Volatile private var startedAt = 0L
     @Volatile private var warnedSilent = false
+    @Volatile private var unseenLogged = false
+    @Volatile private var seenOnce = false
 
-    // decided after COVERAGE_FRAMES frames; until then the walk uses the schedule only
+    private class RawScan(val at: Long, val points: List<Point>, val frame: ScanFrame, val pose: RobotPose?)
+
+    // decided after COVERAGE_FRAMES frames (for the log and the staff menu)
     @Volatile var rearVisible = false
         private set
     @Volatile var follower: FollowerFix? = null
@@ -62,10 +90,13 @@ object Radar {
             rearVisible = false
             follower = null
             robotScan = null
-            mapScan = null
+            lastRaw = null
+            unseenLogged = false
+            seenOnce = false
         } finally {
             lock.unlock()
         }
+        pending.set(null)
         startedAt = System.currentTimeMillis()
         warnedSilent = false
         active = Robot.startRadar(::onData)
@@ -77,19 +108,31 @@ object Radar {
         if (!active) return
         Robot.stopRadar()
         active = false
-        val seen = if (tracker.everSeen) "follower seen" else "no follower seen"
+        pending.set(null)
+        val seen = if (tracker.everSeen) "patient seen beside" else "nobody seen beside"
         RobotLog.i(LogSource.LIDAR, "Radar data off after $frames frames, $seen, back ${if (rearVisible) "visible" else "not visible"}")
         summary = "Off. Last walk: $frames frames, back ${if (rearVisible) "visible" else "not visible"}, $seen"
     }
 
-    // binder thread
+    // binder thread: hand the newest frame over and return at once
     private fun onData(data: String?) {
         val now = System.currentTimeMillis()
-        if (!active || now - lastFrameAt < MIN_FRAME_MS) return
-        if (!lock.tryLock()) return
+        if (!active || data == null || now - acceptedAt < MIN_FRAME_MS) return
+        acceptedAt = now
+        pending.set(data)
+        if (queued.compareAndSet(false, true)) {
+            runCatching { worker.execute(::drain) }.onFailure { queued.set(false) }
+        }
+    }
+
+    // the radar thread
+    private fun drain() {
+        queued.set(false)
+        val data = pending.getAndSet(null) ?: return
+        val t0 = System.nanoTime()
+        lock.lock()
         try {
-            lastFrameAt = now
-            process(now, data)
+            if (active) process(System.currentTimeMillis(), data)
         } catch (e: Exception) {
             if (!loggedBad) {
                 loggedBad = true
@@ -98,14 +141,15 @@ object Radar {
         } finally {
             lock.unlock()
         }
+        PerfMonitor.radarFrame(System.nanoTime() - t0)
     }
 
-    private fun process(now: Long, data: String?) {
-        val raw = Json.scan(data)
+    private fun process(now: Long, data: String) {
+        val raw = ScanJson.parse(data)
         if (raw == null) {
             if (!loggedBad) {
                 loggedBad = true
-                RobotLog.w(LogSource.LIDAR, "Radar data not understood: ${data?.take(80)}")
+                RobotLog.w(LogSource.LIDAR, "Radar data not understood: ${data.take(80)}")
             }
             return
         }
@@ -116,7 +160,7 @@ object Radar {
         frames++
         coverage.add(pts)
         robotScan = now to pts
-        ScanMath.mapFrame(raw, frame, pose)?.let { mapScan = now to it }
+        lastRaw = RawScan(now, raw, frame, pose)
         if (!loggedFirst) {
             loggedFirst = true
             RobotLog.i(
@@ -130,26 +174,49 @@ object Radar {
             RobotLog.i(
                 LogSource.LIDAR,
                 "Radar covers ${coverage.describe()} after $frames frames: back " +
-                    if (rearVisible) "visible, follower watch is continuous" else "not visible, check-backs on the schedule only",
+                    if (rearVisible) "visible" else "not visible, the patient walks beside otto where the radar sees",
             )
         } else if (frames > COVERAGE_FRAMES && !rearVisible && coverage.rearVisible()) {
             rearVisible = true
-            RobotLog.i(LogSource.LIDAR, "Radar sees the back now (${coverage.describe()}), follower watch is continuous")
+            RobotLog.i(LogSource.LIDAR, "Radar sees the back now (${coverage.describe()})")
         }
-        val had = follower != null
-        follower = tracker.update(now, LegDetector.candidates(pts, Sector.REAR), pose)
-        val f = follower
-        // seen / not seen: every change, and a status line every few seconds while walking
-        if (had != (f != null) || now - statusAt >= STATUS_EVERY_MS) {
-            statusAt = now
-            RobotLog.i(
-                LogSource.LIDAR,
-                if (f != null) "Follower seen %.1f m behind".format(Locale.ROOT, f.distance)
-                else "No follower behind" + (tracker.lastSeenAt?.let { " for ${(now - it) / 1000} s" } ?: if (rearVisible) "" else " (back not visible)"),
-            )
+        follower = tracker.update(now, LegDetector.candidates(pts, Sector.SIDES), pose)
+        logFollower(now)
+        if (now - summaryAt >= SUMMARY_EVERY_MS) {
+            summaryAt = now
+            summary = "On: ${coverage.describe()}, back ${if (rearVisible) "visible" else "not visible"}" +
+                (follower?.let { ", patient beside %.1f m at %+.0f deg".format(Locale.ROOT, it.distance, Bearing.of(it.robot)) } ?: ", nobody beside now")
         }
-        summary = "On: ${coverage.describe()}, back ${if (rearVisible) "visible" else "not visible"}" +
-            (follower?.let { ", follower %.1f m".format(Locale.ROOT, it.distance) } ?: ", no follower now")
+    }
+
+    // seen / not seen without the 1-2 s flicker: the first sighting, gaps of 2 s and more, a status now and then
+    private fun logFollower(now: Long) {
+        val f = follower?.takeIf { now - it.at <= BESIDE_FRESH_MS }
+        val last = tracker.lastSeenAt
+        when {
+            f != null && !seenOnce -> {
+                seenOnce = true
+                statusAt = now
+                RobotLog.i(LogSource.LIDAR, "Patient seen beside: %.1f m at %+.0f deg".format(Locale.ROOT, f.distance, Bearing.of(f.robot)))
+            }
+            f != null && unseenLogged -> {
+                unseenLogged = false
+                statusAt = now
+                RobotLog.i(LogSource.LIDAR, "Patient beside again: %.1f m at %+.0f deg".format(Locale.ROOT, f.distance, Bearing.of(f.robot)))
+            }
+            f == null && last != null && !unseenLogged && now - last >= UNSEEN_LOG_MS -> {
+                unseenLogged = true
+                RobotLog.i(LogSource.LIDAR, "Nobody beside for ${(now - last) / 1000} s")
+            }
+            now - statusAt >= STATUS_EVERY_MS -> {
+                statusAt = now
+                RobotLog.i(
+                    LogSource.LIDAR,
+                    if (f != null) "Patient beside: %.1f m at %+.0f deg".format(Locale.ROOT, f.distance, Bearing.of(f.robot))
+                    else "Nobody beside" + (last?.let { " for ${(now - it) / 1000} s" } ?: " yet"),
+                )
+            }
+        }
     }
 
     // called now and then during a walk: says once when no radar data came at all
@@ -160,22 +227,58 @@ object Radar {
         RobotLog.w(LogSource.LIDAR, "No usable radar data ${SILENT_WARN_MS / 1000} s after switching it on: check-backs on the schedule only")
     }
 
+    // the patient was seen beside otto in this walk
     fun everSeen(): Boolean = tracker.everSeen
 
     fun lastSeenAt(): Long? = tracker.lastSeenAt
+
+    // the patient beside otto right now (robot frame, map point, distance), null when not seen just now
+    fun besideFix(now: Long = System.currentTimeMillis()): FollowerFix? =
+        follower?.takeIf { now - it.at <= BESIDE_FRESH_MS }
 
     // the follower's distance when seen just now
     fun followerDistance(now: Long = System.currentTimeMillis()): Double? =
         follower?.takeIf { now - it.at <= FRESH_MS }?.distance
 
-    // nearest person-like shape in front (after otto turned around), null when none or no fresh data
+    // nearest person-like shape in front (after otto turned), null when none or no fresh data
     fun nearestAhead(now: Long = System.currentTimeMillis()): Double? {
         val (at, pts) = robotScan ?: return null
         if (now - at > FRESH_MS) return null
         return LegDetector.nearest(pts, Sector.FRONT, AHEAD_MAX_M)?.distance
     }
 
-    // the latest scan in the map frame for the live map
-    fun mapScan(now: Long = System.currentTimeMillis()): List<Point>? =
-        mapScan?.takeIf { now - it.first <= MAP_SCAN_FRESH_MS }?.second
+    // pairs of legs and wide shapes in front (robot frame), for picking the patient after the turn
+    fun aheadPoints(now: Long = System.currentTimeMillis()): List<Point> {
+        val (at, pts) = robotScan ?: return emptyList()
+        if (now - at > FRESH_MS) return emptyList()
+        return LegDetector.candidates(pts, Sector.FRONT, AHEAD_MAX_M).filter { it.kind != LegKind.LEG }.map { it.at }
+    }
+
+    // a fresh scan has come since `since` (the first look after a turn waits for one)
+    fun scanSince(since: Long): Boolean = (robotScan?.first ?: 0L) >= since
+
+    // nothing within m in the part of the back the radar sees (|angle| >= 100 deg). false without fresh data:
+    // backing off a blocked way needs this (and the patient beside, not behind)
+    fun clearBehind(m: Double, now: Long = System.currentTimeMillis()): Boolean {
+        val (at, pts) = robotScan ?: return false
+        if (now - at > FRESH_MS) return false
+        return pts.none { kotlin.math.abs(ScanMath.angleDeg(it)) >= 100.0 && ScanMath.range(it) in 0.2..m }
+    }
+
+    // more free room ahead on the left than on the right (the little turn before trying a way again).
+    // null without fresh data
+    fun roomLeft(now: Long = System.currentTimeMillis()): Boolean? {
+        val (at, pts) = robotScan ?: return null
+        if (now - at > FRESH_MS) return null
+        fun free(from: Double, to: Double) = pts.filter { ScanMath.angleDeg(it) in from..to && ScanMath.range(it) >= 0.2 }
+            .minOfOrNull { ScanMath.range(it) } ?: Coverage.MAX_M
+        return free(10.0, 60.0) >= free(-60.0, -10.0)
+    }
+
+    // the latest scan in the map frame for the live map, made only when it is asked for
+    fun mapScan(now: Long = System.currentTimeMillis()): List<Point>? {
+        val r = lastRaw ?: return null
+        if (now - r.at > MAP_SCAN_FRESH_MS) return null
+        return ScanMath.mapFrame(r.points, r.frame, r.pose)
+    }
 }

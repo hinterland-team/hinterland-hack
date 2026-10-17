@@ -69,6 +69,8 @@ object Robot {
     private const val TURN_DEG_PER_S = 40f
     // after stopNavigation the chassis needs a moment before a turn (FAQ: resource conflict)
     const val NAV_RELEASE_MS = 700L
+    // backing off a blocked way (v3.3): slow, a person could be near
+    private const val BACK_SPEED = 0.15f
     // "Stop Charging and Undock": speed and distance are the doc defaults
     private const val LEAVE_SPEED = 0.7f
     private const val LEAVE_DISTANCE_M = 0.2f
@@ -326,6 +328,16 @@ object Robot {
         return list.mapNotNull { p -> runCatching { p.distance }.getOrNull()?.takeIf { it > 0.0 } }
     }
 
+    // the same with where each one is in view (Person.getAngleInView, degrees; javap-checked on core
+    // 1.0.20250821): only distance and angle, never a face, an id or a picture. null = no vision data
+    fun people(): List<SeenPerson>? {
+        if (!ready) return null
+        val list = runCatching { people.allPersons }.getOrNull() ?: return null
+        return list.mapNotNull { p ->
+            runCatching { SeenPerson(p.distance, p.angleInView.takeIf { it.isFinite() } ?: 0.0) }.getOrNull()?.takeIf { it.distance > 0.0 }
+        }
+    }
+
     // ---- focus following: turns otto towards the person he talks to. it holds the chassis,
     // so every drive stops it first (RobotAPI "Focus Following", note 1).
     // the jar marks start/stopFocusFollow deprecated (for startSmartFocusFollow, which is not in
@@ -414,6 +426,7 @@ object Robot {
     // drives to a map spot at the default speed or the given one (a guide's pace). gets off the charger
     // first, stops focus following, gives up when blocked for BLOCKED_LIMIT_MS in total or when
     // stopWhen() says so. interrupt() stops it on purpose (Interrupted). onTick runs every WATCH_MS.
+    // way = the blocked count to use (a walk counts the whole leg, v3.3); null = a fresh one for this drive
     suspend fun goTo(
         spot: String,
         speed: Speed? = null,
@@ -421,6 +434,7 @@ object Robot {
         interrupt: () -> Boolean = { false },
         onTick: (blocked: Boolean) -> Unit = {},
         onEvent: (NavEvent) -> Unit = {},
+        way: WayBlock? = null,
     ): NavOutcome {
         if (!ready) return NavOutcome.Failed(NavFailure.NOT_CONNECTED)
         if (chargingNow() && !leavePile()) return NavOutcome.Failed(NavFailure.DOCKED)
@@ -431,7 +445,7 @@ object Robot {
         var outcome: NavOutcome = NavOutcome.Failed(NavFailure.OTHER)
         try {
             for (attempt in 0..1) {
-                outcome = watched(spot, speed, stopWhen, interrupt, onTick, onEvent)
+                outcome = watched(spot, speed, stopWhen, interrupt, onTick, onEvent, way)
                 // the chassis may still be held (focus following, a turn that just ended) - try once more
                 val busy = (outcome as? NavOutcome.Failed)?.why == NavFailure.BUSY
                 if (!busy || attempt == 1) break
@@ -472,69 +486,80 @@ object Robot {
         interrupt: () -> Boolean,
         onTick: (Boolean) -> Unit,
         onEvent: (NavEvent) -> Unit,
+        way: WayBlock?,
     ): NavOutcome = coroutineScope {
-        // asks people to step aside (twice), then gives up on this way (BlockedWatch)
-        val blocked = BlockedWatch()
+        // asks people to step aside (twice), then gives up on this way (BlockedWatch, or the leg's LegBlock)
+        val blocked = way ?: BlockedWatch()
         var blockedFrom: Point? = null
         val lock = Any()
+        // a late obstacle status after this drive ended must not count for the next one (a leg's count lives on)
+        var live = true
         val nav = async {
             navigate(spot, speed) { ev ->
-                synchronized(lock) {
-                    if (ev == NavEvent.BLOCKED) {
-                        blocked.blocked(now())
-                    } else {
-                        blocked.clear(now())
+                val counted = synchronized(lock) {
+                    if (live) {
+                        if (ev == NavEvent.BLOCKED) blocked.blocked(now()) else blocked.clear(now())
                     }
+                    live
                 }
-                if (ev == NavEvent.CLEAR) onEvent(ev)
+                if (counted && ev == NavEvent.CLEAR) onEvent(ev)
             }
         }
         RobotLog.i(LogSource.NAV, "Driving to $spot" + (speed?.let { " at ${it.linear} m/s" } ?: ""))
         var result: NavOutcome? = null
-        while (result == null) {
-            result = withTimeoutOrNull(WATCH_MS) { nav.await() }
-            if (result != null) break
-            val t = now()
-            // "blocked" but the robot drove on: the end-of-obstacle status got lost, so it is clear
-            val pose = latestPose(t)
-            val unstuck = synchronized(lock) {
-                if (!blocked.isBlocked) {
-                    blockedFrom = null
-                    false
-                } else {
-                    val from = blockedFrom ?: pose?.point.also { blockedFrom = it }
-                    if (from != null && pose != null && blocked.moved(t, from.distanceTo(pose.point))) {
+        try {
+            while (result == null) {
+                result = withTimeoutOrNull(WATCH_MS) { nav.await() }
+                if (result != null) break
+                val t = now()
+                // "blocked" but the robot drove on: the end-of-obstacle status got lost, so it is clear
+                val pose = latestPose(t)
+                val unstuck = synchronized(lock) {
+                    if (!blocked.isBlocked) {
                         blockedFrom = null
-                        true
-                    } else {
                         false
+                    } else {
+                        val from = blockedFrom ?: pose?.point.also { blockedFrom = it }
+                        if (from != null && pose != null && blocked.moved(t, from.distanceTo(pose.point))) {
+                            blockedFrom = null
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
+                if (unstuck) {
+                    RobotLog.i(LogSource.NAV, "Obstacle status cleared: Otto moved on")
+                    onEvent(NavEvent.CLEAR)
+                }
+                val step = synchronized(lock) { blocked.step(t) }
+                onTick(synchronized(lock) { blocked.isBlocked })
+                when {
+                    stopWhen() -> {
+                        nav.cancel()
+                        result = NavOutcome.Failed(NavFailure.STOPPED)
+                    }
+                    interrupt() -> {
+                        nav.cancel()
+                        result = NavOutcome.Interrupted
+                    }
+                    step == BlockedStep.GIVE_UP -> {
+                        nav.cancel()
+                        val leg = (blocked as? LegBlock)?.let { ", blocked ${it.usedMs(t) / 1000} s in this try, ${it.totalMs(t) / 1000} s on this leg" }.orEmpty()
+                        RobotLog.w(LogSource.NAV, "Way to $spot stays blocked after asking ${blocked.asksDone} times$leg")
+                        result = NavOutcome.Failed(NavFailure.BLOCKED)
+                    }
+                    step == BlockedStep.ASK -> {
+                        RobotLog.i(LogSource.NAV, "Blocked on the way to $spot, asking people to step aside")
+                        onEvent(NavEvent.BLOCKED)
                     }
                 }
             }
-            if (unstuck) {
-                RobotLog.i(LogSource.NAV, "Obstacle status cleared: Otto moved on")
-                onEvent(NavEvent.CLEAR)
-            }
-            val step = synchronized(lock) { blocked.step(t) }
-            onTick(synchronized(lock) { blocked.isBlocked })
-            when {
-                stopWhen() -> {
-                    nav.cancel()
-                    result = NavOutcome.Failed(NavFailure.STOPPED)
-                }
-                interrupt() -> {
-                    nav.cancel()
-                    result = NavOutcome.Interrupted
-                }
-                step == BlockedStep.GIVE_UP -> {
-                    nav.cancel()
-                    RobotLog.w(LogSource.NAV, "Way to $spot stays blocked after asking ${blocked.asksDone} times")
-                    result = NavOutcome.Failed(NavFailure.BLOCKED)
-                }
-                step == BlockedStep.ASK -> {
-                    RobotLog.i(LogSource.NAV, "Blocked on the way to $spot, asking people to step aside")
-                    onEvent(NavEvent.BLOCKED)
-                }
+        } finally {
+            // the drive is over: an open blocked time is closed (a leg's count keeps the rest)
+            synchronized(lock) {
+                live = false
+                blocked.stop(now())
             }
         }
         result ?: NavOutcome.Failed(NavFailure.OTHER)
@@ -648,6 +673,42 @@ object Robot {
 
     fun stopMove() {
         runCatching { api.stopMove(reqIds.getAndIncrement(), object : CommandListener() {}) }
+    }
+
+    // RobotAPI "Linear Motion": goBackward(reqId, speed m/s, distance m, listener), javap-checked. backwards
+    // there is no obstacle check (the docs: only forward avoids), so the guide only backs off when nobody
+    // is behind otto. true when the robot took the command; waits until the move had its time
+    suspend fun back(distanceM: Float, speed: Float = BACK_SPEED): Boolean {
+        if (!ready) return false
+        if (stopFollow()) delay(FOLLOW_RELEASE_MS)
+        val d = distanceM.coerceIn(0.05f, 1.0f)
+        val expectedMs = (d / speed * 1000f).toLong()
+        val startedAt = now()
+        val ok = withTimeoutOrNull(expectedMs + 4_000) {
+            suspendCancellableCoroutine<Boolean> { cont ->
+                val finished = AtomicBoolean(false)
+                fun finish(v: Boolean) {
+                    if (finished.compareAndSet(false, true)) cont.resume(v)
+                }
+                val started = runCatching {
+                    api.goBackward(reqIds.getAndIncrement(), speed, d, object : CommandListener() {
+                        override fun onResult(result: Int, message: String?) =
+                            finish(result == Definition.RESULT_OK || message?.contains("succeed") == true)
+
+                        override fun onError(errorCode: Int, errorString: String?) {
+                            RobotLog.w(LogSource.NAV, "Back off error $errorCode")
+                            finish(false)
+                        }
+                    })
+                }.getOrDefault(-1)
+                if (started < 0) finish(false)
+                cont.invokeOnCancellation { stopMove() }
+            }
+        }
+        if (ok == null) stopMove()
+        val rest = expectedMs - (now() - startedAt)
+        if (ok == true && rest > 0) delay(rest + 200)
+        return ok == true
     }
 
     // the STATUS_POSE value when it is fresh, else null

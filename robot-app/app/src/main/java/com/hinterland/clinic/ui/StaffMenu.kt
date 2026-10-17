@@ -100,6 +100,11 @@ fun StaffMenu(staff: StaffUi, actions: ScreenActions, modifier: Modifier = Modif
                     }
                     Spacer(Modifier.height(10.dp))
                     StatusRow(Nova.Blue, staff.brain)
+                    // how smoothly the screen runs (6.7): frames, freezes, cpu, radar time
+                    if (staff.perf.isNotBlank()) {
+                        Spacer(Modifier.height(10.dp))
+                        StatusRow(if (staff.perfOk) Nova.Done else Nova.Amber, staff.perf)
+                    }
                 }
                 StatusCard("Radar") {
                     Text(staff.radar, style = text(SMALL, FontWeight.Normal, Nova.Ink), maxLines = 3, overflow = TextOverflow.Ellipsis)

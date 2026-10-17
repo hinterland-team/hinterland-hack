@@ -1,5 +1,6 @@
 package com.hinterland.clinic.ui
 
+import android.content.res.Resources
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.AnimationVector1D
@@ -19,7 +20,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -31,6 +34,8 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.imageResource
 import com.hinterland.clinic.Mood
 import com.hinterland.clinic.R
@@ -55,13 +60,18 @@ private const val IDLE_ACT_AFTER_MS = 15_000L
 @Composable
 fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) {
     val reduced = LocalReducedMotion.current
-    val body = ImageBitmap.imageResource(R.drawable.doctor_body)
-    val eyesL = Eye.entries.map { if (it.drawn) null else ImageBitmap.imageResource(it.left) }
-    val eyesR = Eye.entries.map { if (it.drawn) null else ImageBitmap.imageResource(it.right) }
-    val browL = ImageBitmap.imageResource(R.drawable.doctor_brow_l)
-    val browR = ImageBitmap.imageResource(R.drawable.doctor_brow_r)
-    val mouths = Mouth.entries.map { if (it.res == 0) null else ImageBitmap.imageResource(it.res) }
+    // the pictures are decoded once per process (FaceSprites), not again when the face comes back
+    val res = LocalContext.current.resources
+    val sprites = remember(res) { FaceSprites.get(res) }
+    val body = sprites.body
+    val eyesL = sprites.eyesL
+    val eyesR = sprites.eyesR
+    val browL = sprites.browL
+    val browR = sprites.browR
+    val mouths = sprites.mouths
     val smile = mouths[Mouth.SMILE.ordinal]!!
+    // the lens openings the eyes are clipped to: made once, not two new paths every frame
+    val lenses = remember { listOf(Rig.EyeL, Rig.EyeR).map { Path().apply { addOval(Rect(it, Rig.LENS_R)) } } }
 
     // one clock for breathing, bobbing and the effects. read only while drawing, so it redraws, not recomposes
     val clock = remember { mutableLongStateOf(0L) }
@@ -102,7 +112,9 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
     val sway = remember { Animatable(0f) }
     val talkAmp = remember { Animatable(0f) }
     val browPop = remember { Animatable(0f) }
-    var talkShape by remember { mutableStateOf(Mouth.O) }
+    // the syllable's mouth shape. only read in the effects below, never while composing: a new syllable
+    // redraws the face instead of recomposing it (v3.3, ~10 times a second while he talks)
+    val talkShape = remember { mutableStateOf(Mouth.O) }
 
     // blinking: a blink when the mood changes, like taking it in, then every few seconds
     LaunchedEffect(shown, reduced) {
@@ -221,7 +233,7 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
     // talking: syllables of different sizes, short pauses, the brows lift on the strong ones
     LaunchedEffect(talking, shown, reduced) {
         val p = poseFor(shown)
-        talkShape = p.talk.first()
+        talkShape.value = p.talk.first()
         if (!talking) {
             talkAmp.animateTo(0f, tween(150))
             return@LaunchedEffect
@@ -232,7 +244,7 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
         }
         while (true) {
             val a = Random.nextFloat()
-            talkShape = p.talk.filter { it != talkShape }.ifEmpty { p.talk }.random()
+            talkShape.value = p.talk.filter { it != talkShape.value }.ifEmpty { p.talk }.random()
             if (a > 0.82f) {
                 launch {
                     browPop.animateTo(5f, tween(90))
@@ -242,7 +254,7 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
             talkAmp.animateTo(a, tween(70))
             delay(Random.nextLong(60, 140))
             if (Random.nextInt(7) == 0) {
-                talkShape = p.mouth
+                talkShape.value = p.mouth
                 talkAmp.animateTo(0.1f, tween(90))
                 delay(Random.nextLong(120, 260))
             }
@@ -266,18 +278,29 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
 
     // every shape fades in and out on its own, so changing shape is a short crossfade
     val eyes = pose.eyes
-    val mouth = if (talking) talkShape else pose.mouth
     val fade: AnimationSpec<Float> = if (reduced) snap() else tween(160)
     val eyeW = Eye.entries.map { animateFloatAsState(if (it == eyes) 1f else 0f, fade, label = "eye$it") }
-    val mouthW = Mouth.entries.map {
-        animateFloatAsState(if (it == mouth) 1f else 0f, if (talking && !reduced) tween(70) else fade, label = "mouth$it")
+    // the mouth: the same crossfade (70 ms between syllables, else the fade), driven from the syllables
+    // themselves so they never recompose the face
+    val mouthW = remember {
+        val first = if (talking) talkShape.value else pose.mouth
+        Mouth.entries.map { Animatable(if (it == first) 1f else 0f) }
+    }
+    val talkingNow by rememberUpdatedState(talking)
+    val restMouth by rememberUpdatedState(pose.mouth)
+    LaunchedEffect(reduced) {
+        snapshotFlow { if (talkingNow) talkShape.value else restMouth }.collect { mouth ->
+            val shapeSpec: AnimationSpec<Float> = if (talkingNow && !reduced) tween(70) else if (reduced) snap() else tween(160)
+            Mouth.entries.forEachIndexed { i, mo -> launch { mouthW[i].animateTo(if (mo == mouth) 1f else 0f, shapeSpec) } }
+        }
     }
     val fxW = Fx.entries.map {
         animateFloatAsState(if (it in pose.fx) 1f else 0f, if (reduced) snap() else tween(400), label = "fx$it")
     }
     val fx = { f: Fx -> if (reduced && f == Fx.CONFETTI) 0f else fxW[f.ordinal].value }
 
-    Canvas(modifier) {
+    // its own layer: the face redraws every frame without the rest of the screen redrawing with it
+    Canvas(modifier.graphicsLayer()) {
         val now = clock.longValue
         val t = now / 1000f
         val since = (now - moodSince.longValue) / 1000f
@@ -319,7 +342,7 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
                                 val sprites = if (side == 0) eyesL else eyesR
                                 withTransform({
                                     // the eye stays inside its lens, however far he looks
-                                    clipPath(Path().apply { addOval(Rect(lens, Rig.LENS_R)) })
+                                    clipPath(lenses[side])
                                     translate(c.x, c.y)
                                     scale(eyeScale.value, eyeScale.value * lidS, Offset.Zero)
                                 }) {
@@ -373,6 +396,25 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
                 drawConfetti(fx(Fx.CONFETTI), since, t, view)
             }
         }
+    }
+}
+
+// the face's pictures (doctor_*.webp, small, in drawable-nodpi), decoded once per process. they are drawn
+// scaled on the gpu, which costs nothing; bitmaps at screen size would only take more memory
+internal class FaceSprites private constructor(res: Resources) {
+    val body = ImageBitmap.imageResource(res, R.drawable.doctor_body)
+    val eyesL = Eye.entries.map { if (it.drawn) null else ImageBitmap.imageResource(res, it.left) }
+    val eyesR = Eye.entries.map { if (it.drawn) null else ImageBitmap.imageResource(res, it.right) }
+    val browL = ImageBitmap.imageResource(res, R.drawable.doctor_brow_l)
+    val browR = ImageBitmap.imageResource(res, R.drawable.doctor_brow_r)
+    val mouths = Mouth.entries.map { if (it.res == 0) null else ImageBitmap.imageResource(res, it.res) }
+
+    companion object {
+        // drawable-nodpi: the same pictures for any screen or configuration, so one copy for the process
+        @Volatile private var cached: FaceSprites? = null
+
+        fun get(res: Resources): FaceSprites =
+            cached ?: synchronized(this) { cached ?: FaceSprites(res).also { cached = it } }
     }
 }
 

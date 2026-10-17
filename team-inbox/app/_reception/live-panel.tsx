@@ -18,6 +18,7 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 import type { Board } from "@/lib/board";
+import { isNotifyEvent } from "@/lib/channel-types";
 import type { FeedItem, JourneyWithQueue, Place, RobotStatus, WalkAction } from "@/lib/types";
 import { currentLeg } from "@/lib/types";
 import { ROBOT, WALK_ACTION_LABEL, clockTime, commandState, commandText, post, robotLabel, seenAgo, stageOf } from "@/lib/ui";
@@ -170,7 +171,8 @@ const WALK_ICONS: Record<WalkAction, typeof HandPalm> = {
 
 function Timeline({ journey, now, run, busy }: { journey: JourneyWithQueue; now: number; run: Run; busy: string | null }) {
   const stage = stageOf(journey, now);
-  const events = journey.events.filter((e) => !e.type.startsWith("teams_") && !e.type.startsWith("email_")).slice(-5);
+  // messages to staff show on the journey's row, the timeline is about the walk
+  const events = journey.events.filter((e) => !isNotifyEvent(e.type)).slice(-5);
   const leg = currentLeg(journey);
   const withOtto = leg.status === "pickup" || leg.status === "walking";
   return (

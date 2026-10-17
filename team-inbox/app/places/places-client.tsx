@@ -3,6 +3,7 @@
 import {
   Armchair,
   ArrowRight,
+  Bell,
   CheckCircle,
   Circle,
   DoorOpen,
@@ -15,10 +16,11 @@ import {
   UsersThree,
 } from "@phosphor-icons/react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
-import type { Place, PlaceKind } from "@/lib/types";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type NotificationsView, channelChipName } from "@/lib/channel-types";
+import type { MapState, Place, PlaceKind } from "@/lib/types";
 import { ALWAYS_PUBLIC, DEFAULT_MINUTES, MAX_MINUTES, MIN_MINUTES, PLACE_KINDS, ROOM_KINDS } from "@/lib/types";
-import { KIND_LABEL, LoginNeeded, PAGE, api, post } from "@/lib/ui";
+import { KIND_LABEL, LoginNeeded, PAGE, ROBOT, api, post } from "@/lib/ui";
 import { Button, Switch } from "../components/button";
 
 const INPUT =
@@ -51,18 +53,30 @@ function KindIcon({ kind, size = 20 }: { kind: PlaceKind; size?: number }) {
 
 export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: boolean; emailOn: boolean }) {
   const [places, setPlaces] = useState<Place[] | null>(null);
+  const [notify, setNotify] = useState<NotificationsView | null>(null);
+  const [map, setMap] = useState<MapState | null>(null);
   const [adding, setAdding] = useState<PlaceKind | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setPlaces(await api<Place[]>("/api/places"));
+      // the channels (who gets the messages) and otto's map (are the spots on it) only add hints
+      const [list, n, m] = await Promise.all([
+        api<Place[]>("/api/places"),
+        api<NotificationsView>("/api/channels").catch(() => null),
+        api<{ map: MapState | null }>(`/api/robot/map?robot=${ROBOT}`).catch(() => null),
+      ]);
+      setPlaces(list);
+      setNotify(n);
+      setMap(m?.map ?? null);
       setError(null);
     } catch (e) {
       if (!(e instanceof LoginNeeded)) setError(e instanceof Error ? e.message : "Could not load the places");
     }
   }, []);
+
+  const spots = map?.places.length ? new Set(map.places.map((s) => s.name)) : null;
 
   useEffect(() => {
     load();
@@ -190,6 +204,9 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
                         place={p}
                         places={places}
                         practiceChannel={practiceChannel}
+                        messages={messageLine(p, notify)}
+                        onMap={spots ? spots.has(p.spot) : null}
+                        mapName={map?.mapName}
                         onEdit={() => setEditing(p.id)}
                         reload={load}
                       />
@@ -205,16 +222,45 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
   );
 }
 
+// "Messages to Practice Teams, Slack" from the notification channels. null = not loaded (the old chip then)
+function messageLine(place: Place, view: NotificationsView | null) {
+  if (!view || place.kind === "exit") return null;
+  const byId = new Map(view.channels.map((c) => [c.id, c]));
+  const names = (view.routing[place.id] ?? []).flatMap((id) => {
+    const c = byId.get(id);
+    return c ? [channelChipName(c)] : [];
+  });
+  return names.length ? `Messages to ${names.join(", ")}` : "No messages, only the reception board";
+}
+
+function Hint({ warn = false, icon, children }: { warn?: boolean; icon: ReactNode; children: ReactNode }) {
+  return (
+    <p
+      className={`mt-3 flex items-start gap-2 rounded-xl px-3 py-2.5 text-sm ${warn ? "bg-warn-soft text-warn" : "bg-subtle text-muted"}`}
+    >
+      <span className="mt-px shrink-0">{icon}</span>
+      <span className="min-w-0 break-words">{children}</span>
+    </p>
+  );
+}
+
 function PlaceRow({
   place,
   places,
   practiceChannel,
+  messages,
+  onMap,
+  mapName,
   onEdit,
   reload,
 }: {
   place: Place;
   places: Place[];
   practiceChannel: boolean;
+  messages: string | null;
+  // is the map spot on otto's map. null = otto has not sent its map yet
+  onMap: boolean | null;
+  mapName?: string;
   onEdit: () => void;
   reload: () => Promise<void>;
 }) {
@@ -227,10 +273,13 @@ function PlaceRow({
     place.selfCheckIn ? "Self check-in on Otto" : null,
     waiting ? `Waits in ${waiting.name}` : null,
     place.kind === "room" || place.kind === "other" ? `${place.avgMinutes} min per patient` : null,
-    place.kind !== "exit" ? teams : null,
-    place.notifyEmail ? `Email to ${place.notifyEmail}` : null,
+    place.kind === "exit" || messages ? null : teams,
+    !messages && place.notifyEmail ? `Email to ${place.notifyEmail}` : null,
     place.viaSpot ? `Detour via ${place.viaSpot}` : null,
   ].filter(Boolean) as string[];
+  const usedBy = place.kind === "waiting" ? places.filter((p) => p.waitingPlaceId === place.id) : [];
+  const anyWaiting = places.some((p) => p.kind === "waiting" && p.active);
+  const mapText = mapName ? `Otto's map (${mapName})` : "Otto's map";
 
   const remove = async () => {
     try {
@@ -259,14 +308,25 @@ function PlaceRow({
           <p className="mt-0.5 text-sm text-muted">
             Map spot <span className="font-mono text-ink">{place.spot}</span>
           </p>
-          {chips.length > 0 && (
+          {(chips.length > 0 || (onMap === false && place.kind !== "waiting")) && (
             <ul className="mt-2 flex flex-wrap gap-1.5">
               {chips.map((c) => (
                 <li key={c} className="max-w-full truncate rounded-full bg-subtle px-2.5 py-1 text-xs font-semibold text-muted">
                   {c}
                 </li>
               ))}
+              {onMap === false && place.kind !== "waiting" && (
+                <li className="max-w-full truncate rounded-full bg-warn-soft px-2.5 py-1 text-xs font-semibold text-warn">
+                  Spot not on {mapText}
+                </li>
+              )}
             </ul>
+          )}
+          {messages && (
+            <p className="mt-2 flex items-start gap-1.5 text-sm text-muted">
+              <Bell size={16} aria-hidden className="mt-0.5 shrink-0" />
+              <span className="min-w-0 break-words">{messages}</span>
+            </p>
           )}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -288,6 +348,28 @@ function PlaceRow({
           )}
         </div>
       </div>
+      {place.kind === "room" && (!waiting || !waiting.active) && (
+        <Hint icon={<Armchair size={18} aria-hidden />}>
+          {waiting
+            ? `Its waiting room ${waiting.name} is inactive, so Otto walks patients straight in.`
+            : "No waiting room: Otto walks patients straight into the room."}{" "}
+          {anyWaiting
+            ? "To seat them in a waiting room first, pick one with Edit."
+            : "To seat them first, add a place of kind Waiting room, then pick it here with Edit."}
+        </Hint>
+      )}
+      {place.kind === "waiting" && (
+        <Hint warn={onMap === false || usedBy.length === 0} icon={<MapPin size={18} aria-hidden />}>
+          {onMap === true
+            ? `The spot ${place.spot} is on ${mapText}.`
+            : onMap === false
+              ? `The spot ${place.spot} is not on ${mapText} yet. The team adds it on the robot, this page can't.`
+              : `Otto needs the spot ${place.spot} on its map. The team adds it on the robot, this page can't.`}{" "}
+          {usedBy.length
+            ? `Waiting room for ${usedBy.map((p) => p.name).join(", ")}: the room gets "Your visitor has arrived" with Call in.`
+            : "No room uses it yet: pick it as the waiting room of a room."}
+        </Hint>
+      )}
       {confirm && (
         <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-danger-soft p-3">
           <span className="flex-1 basis-48 text-[15px] font-medium text-danger">
@@ -329,7 +411,10 @@ function PlaceForm({
   const [isPublic, setPublic] = useState(place?.public ?? false);
   const [selfCheckIn, setSelfCheckIn] = useState(place?.selfCheckIn ?? false);
   const [waitingId, setWaitingId] = useState(place?.waitingPlaceId ?? "");
-  const [webhook, setWebhook] = useState(place?.teamsWebhookUrl ?? "");
+  // the server only sends a masked hint of a saved webhook. empty keeps it, a new link replaces it
+  const savedHook = place?.teamsWebhookUrl;
+  const [webhook, setWebhook] = useState("");
+  const [dropHook, setDropHook] = useState(false);
   const [email, setEmail] = useState(place?.notifyEmail ?? "");
   const [via, setVia] = useState(place?.viaSpot ?? "");
   const [active, setActive] = useState(place?.active ?? true);
@@ -359,6 +444,10 @@ function PlaceForm({
       selfCheckIn: roomKind && selfCheckIn,
       active,
     };
+    if (!webhook.trim()) {
+      if (place && savedHook && dropHook) body.teamsWebhookUrl = "";
+      else delete body.teamsWebhookUrl;
+    }
     try {
       if (place) await post("/api/places", { id: place.id, ...body }, "PATCH");
       else {
@@ -460,6 +549,7 @@ function PlaceForm({
         />
         <p id={`spot-help-${formId}`} className="mt-1 text-sm text-muted">
           Exactly as the spot is called on Otto&apos;s map. Empty means the same as the name.
+          {kind === "waiting" && " The team adds the spot on the robot's map, this page can't."}
         </p>
       </div>
 
@@ -535,9 +625,13 @@ function PlaceForm({
               </option>
             ))}
           </select>
-          {waitingRooms.length === 0 && (
-            <p className="mt-1 text-sm text-muted">Add a place of kind Waiting room to pick one here.</p>
-          )}
+          <p className="mt-1 text-sm text-muted">
+            {waitingRooms.length === 0
+              ? "Add a place of kind Waiting room to pick one here."
+              : waitingId
+                ? "Otto seats patients there first. The room gets \"Your visitor has arrived\" with Call in, then Otto fetches them."
+                : "Otto walks patients straight into the room."}
+          </p>
         </div>
       )}
 
@@ -548,7 +642,7 @@ function PlaceForm({
             checked={selfCheckIn}
             onChange={setSelfCheckIn}
             label="Patients can check in for it on Otto"
-            description="Shown as a tile on the robot. Otto walks them to the waiting room and the room gets a Teams card."
+            description="Shown as a tile on the robot. Otto walks them to the waiting room and the room gets a message."
           />
         )}
         <Switch
@@ -586,12 +680,29 @@ function PlaceForm({
             onChange={(e) => setWebhook(e.target.value)}
             inputMode="url"
             autoComplete="off"
-            placeholder="https://"
+            spellCheck={false}
+            placeholder={savedHook && !dropHook ? "Saved. Paste a new link to replace it" : "https://"}
           />
+          {savedHook && !dropHook && (
+            <p className="mt-1 flex flex-wrap items-center gap-x-2 text-sm text-muted">
+              <span className="font-mono">Saved: {savedHook}</span>
+              <Button kind="ghost" size="sm" onClick={() => setDropHook(true)}>
+                Remove the saved link
+              </Button>
+            </p>
+          )}
+          {dropHook && <p className="mt-1 text-sm text-muted">The saved link goes when you save.</p>}
           <p className="mt-1 text-sm text-muted">
-            {practiceChannel
-              ? "Empty means the practice channel gets the cards."
-              : "Empty means no Teams card for this place (no practice channel is set up)."}
+            {savedHook && !dropHook
+              ? "Its messages go to this channel instead of the practice channel."
+              : practiceChannel
+                ? "Empty means the practice channel gets the cards."
+                : "Empty means no own Teams channel for this place."}{" "}
+            Slack, Telegram, WhatsApp, Discord and more are on the{" "}
+            <Link href="/notifications" className="font-semibold text-primary hover:underline">
+              Notifications
+            </Link>{" "}
+            page.
           </p>
         </div>
       )}

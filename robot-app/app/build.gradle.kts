@@ -45,6 +45,8 @@ android {
         buildConfigField("String", "CALL_LANGUAGES", "\"${local("robot.callLanguages", "de,en")}\"")
         // otto turns towards the person he talks to (RobotApi focus following); false turns it off
         buildConfigField("boolean", "FOCUS_FOLLOW", local("robot.focusFollow", "true").toBoolean().toString())
+        // the side the patient walks on, next to otto: left or right (docs/journeys.md 6.7)
+        buildConfigField("String", "WALK_SIDE", "\"${local("robot.walkSide", "left")}\"")
         // nova deploy on the robot, gets the busy hold while otto walks (docs/deploy.md)
         buildConfigField("String", "NOVA_DEPLOY_PACKAGE", "\"${local("novaDeploy.package", "com.novadeploy.agent")}\"")
     }

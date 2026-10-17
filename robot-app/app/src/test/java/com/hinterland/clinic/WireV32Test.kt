@@ -129,8 +129,9 @@ class WireV32Test {
         val t = 1_000_000L
         assertTrue(r.due(t, moving = false))
         r.sent(t)
-        assertFalse(r.due(t + 900, moving = true))
-        assertTrue(r.due(t + 1_000, moving = true))
+        // every 2 s while moving (v3.3, was 1 s)
+        assertFalse(r.due(t + 1_900, moving = true))
+        assertTrue(r.due(t + 2_000, moving = true))
         assertFalse(r.due(t + 14_000, moving = false))
         assertTrue(r.due(t + 15_000, moving = false))
         val places = listOf(MapPlace("A", Point(1.0, 1.0)))

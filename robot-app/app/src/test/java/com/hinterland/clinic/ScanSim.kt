@@ -14,6 +14,8 @@ class ScanSim(
     private val maxRange: Double = 10.0,
     private val noiseM: Double = 0.003,
     seed: Int = 7,
+    // where the scan starts; null = centred on straight ahead (our robot: -110, fov 230)
+    private val startDeg: Double? = null,
 ) {
     private val random = Random(seed)
     private val segments = ArrayList<Pair<Point, Point>>()
@@ -44,7 +46,7 @@ class ScanSim(
         val out = ArrayList<Point>()
         val n = (fovDeg / stepDeg).toInt()
         for (i in 0 until n) {
-            val deg = -fovDeg / 2 + i * stepDeg
+            val deg = (startDeg ?: -fovDeg / 2) + i * stepDeg
             val a = Math.toRadians(deg)
             val dx = cos(a)
             val dy = sin(a)

@@ -21,7 +21,8 @@ data class MapReport(
     val remainingMeters: Double? = null,
 )
 
-// about 1 per second while moving, every 15 s when idle; places on change or every 60 s
+// every 2 s while moving (v3.3, was 1 s: half the json and network work), every 15 s when idle;
+// places on change or every 60 s
 class MapRate(
     private val movingMs: Long = MOVING_MS,
     private val idleMs: Long = IDLE_MS,
@@ -46,7 +47,7 @@ class MapRate(
     }
 
     companion object {
-        const val MOVING_MS = 1_000L
+        const val MOVING_MS = 2_000L
         const val IDLE_MS = 15_000L
         const val PLACES_MS = 60_000L
     }

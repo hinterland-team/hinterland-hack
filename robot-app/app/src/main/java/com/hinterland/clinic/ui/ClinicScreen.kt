@@ -500,12 +500,12 @@ fun BigButton(
     height: Dp = Space.button,
 ) {
     val reduced = LocalReducedMotion.current
+    // read while drawing only (v3.3): the light moves by redrawing, the button does not recompose every frame
     val halo = if (pulse && !reduced) {
         val loop = rememberInfiniteTransition(label = "pulse")
-        val v by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(2_400, easing = LinearEasing)), label = "halo")
-        v
+        loop.animateFloat(0f, 1f, infiniteRepeatable(tween(2_400, easing = LinearEasing)), label = "halo")
     } else {
-        0f
+        null
     }
     val bg = if (primary) Nova.Blue else Nova.Card
     val fg = if (primary) Color.White else Nova.Blue
@@ -519,10 +519,12 @@ fun BigButton(
             .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        if (halo > 0f) {
+        if (halo != null) {
             // a soft light that drifts across the button now and then
             Canvas(Modifier.fillMaxSize()) {
-                val x = size.width * (halo * 1.6f - 0.3f)
+                val h = halo.value
+                if (h <= 0f) return@Canvas
+                val x = size.width * (h * 1.6f - 0.3f)
                 drawRect(
                     Brush.horizontalGradient(
                         listOf(Color.White.copy(alpha = 0f), Color.White.copy(alpha = 0.16f), Color.White.copy(alpha = 0f)),

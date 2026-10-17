@@ -41,6 +41,19 @@ class FeedTest {
     }
 
     @Test
+    fun aReadyLineComesBackFromTheListenerOnlyOnce() {
+        // otto says a ready line (text-to-speech) and the speech listener reports it again, maybe in parts
+        val f = FeedBuffer()
+        assertTrue(f.ottoSaid(1_000, "Good. Let's keep going."))
+        assertFalse(f.ottoSaid(1_800, "Good."))
+        assertFalse(f.ottoSaid(2_400, "Let's keep going."))
+        // something else, or the same words much later, count again
+        assertTrue(f.ottoSaid(3_000, "We're almost there."))
+        assertTrue(f.ottoSaid(30_000, "We're almost there."))
+        assertEquals(3, f.drain().size)
+    }
+
+    @Test
     fun blankLinesAreDroppedLongOnesCut() {
         val f = FeedBuffer()
         f.ottoSaid(1, "   ")

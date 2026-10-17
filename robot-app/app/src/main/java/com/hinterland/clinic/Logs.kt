@@ -3,9 +3,6 @@ package com.hinterland.clinic
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
 // robot logs (docs/journeys.md 6.2): shown in the staff menu and shipped in batches to
@@ -114,9 +111,10 @@ object RobotLog {
     private const val TAG = "Otto"
 
     private val lines = LogQueue(shipFrom = if (BuildConfig.LOG_DEBUG) LogLevel.DEBUG else LogLevel.INFO)
-    private val _recent = MutableStateFlow<List<LogLine>>(emptyList())
-    val recent: StateFlow<List<LogLine>> = _recent.asStateFlow()
     private val pace = ShipPace()
+
+    // the last lines for the staff menu, newest last. made when asked (v3.3: no copy of all 300 per line)
+    fun recent(): List<LogLine> = lines.recent()
 
     fun d(source: LogSource, text: String) = add(LogLevel.DEBUG, source, text)
     fun i(source: LogSource, text: String) = add(LogLevel.INFO, source, text)
@@ -132,7 +130,6 @@ object RobotLog {
             LogLevel.WARN -> Log.w(tag, line.text)
             LogLevel.ERROR -> Log.e(tag, line.text)
         }
-        _recent.value = lines.recent()
     }
 
     fun pending(): Int = lines.pending()

@@ -1,4 +1,4 @@
--- nova clinic v3.2 schema. safe to run again (npm run db:setup).
+-- nova clinic v3.3 schema. safe to run again (npm run db:setup).
 -- scripts/schema.mjs runs the one-time cleanup of the v1/v2 tables first
 
 create table if not exists places (
@@ -24,6 +24,21 @@ alter table places add column if not exists via_spot text;
 alter table places add column if not exists notify_email text;
 alter table places drop constraint if exists places_kind_check;
 alter table places add constraint places_kind_check check (kind in ('room', 'waiting', 'reception', 'exit', 'other'));
+-- v3.3: the notification channels a place picked. null = the default channels
+alter table places add column if not exists channel_ids jsonb;
+
+-- v3.3: notification channels made on /notifications. config holds the webhook links, bot tokens and api keys:
+-- only staff routes read it and the api only ever answers with masked hints
+create table if not exists notify_channels (
+  id text primary key,
+  type text not null check (type in ('teams', 'slack', 'telegram', 'whatsapp', 'discord', 'email', 'webhook')),
+  label text not null,
+  config jsonb not null default '{}'::jsonb,
+  is_default boolean not null default true,
+  active boolean not null default true,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
 
 -- a patient is only a ticket. no names, no notes
 create table if not exists journeys (

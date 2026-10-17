@@ -190,49 +190,34 @@ class ScheduleTest {
         assertNull(CheckBack.nearestOf(null, -1.0))
     }
 
-    // ---- talk window ----
+    // the talk window is a short listening window since v3.3: StopsTest
 
-    @Test
-    fun noAnswerMeansGoOnAfterSixSeconds() {
-        val w = TalkWindow(t0)
-        assertEquals(TalkStep.LISTEN, w.next(t0 + 5_800, userSpokeAt = 0, talking = false, decided = false))
-        assertEquals(TalkStep.DONE, w.next(t0 + 6_000, 0, false, false))
-        assertFalse(w.answeredByVoice)
-        assertEquals(0.5f, w.listened(t0 + 3_000), 1e-6f)
+    // after a stop facing the patient straight behind: the navigation plans for 1.5 s, then turns otto
+    // back to the path at the slowest pace (0.6 rad/s, about 34 deg/s) for ~5.3 s
+    private fun turnChecksAfterStop(turnedAround: Boolean): Int {
+        val s = CheckSchedule()
+        var t = t0
+        repeat(41) { s.tick(t, false, 0.0); t += 250 }
+        s.done(1.0, Math.toRadians(180.0), turnedAround = turnedAround)
+        var turns = 0
+        for (i in 0 until 60) {
+            val ms = i * 250.0
+            val deg = if (ms < 1_500) 180.0 else (180.0 - 34.0 * (ms - 1_500) / 1_000.0).coerceAtLeast(0.0)
+            s.tick(t, false, Math.toRadians(deg))
+            if (s.due(t) == CheckReason.TURN) {
+                turns++
+                s.done(1.0, Math.toRadians(deg))
+            }
+            t += 250
+        }
+        return turns
     }
 
     @Test
-    fun aSpokenAnswerGetsOttosReplyFirst() {
-        val w = TalkWindow(t0)
-        assertEquals(TalkStep.LISTEN, w.next(t0 + 1_000, 0, false, false))
-        // "yes, all fine" at 2 s; the planner thinks, otto answers until 6 s
-        assertEquals(TalkStep.REPLY, w.next(t0 + 2_200, t0 + 2_000, false, false))
-        assertEquals(TalkStep.REPLY, w.next(t0 + 4_000, t0 + 2_000, true, false))
-        assertEquals(TalkStep.REPLY, w.next(t0 + 6_000, t0 + 2_000, true, false))
-        assertEquals(TalkStep.REPLY, w.next(t0 + 6_500, t0 + 2_000, false, false))
-        assertEquals(TalkStep.DONE, w.next(t0 + 7_800, t0 + 2_000, false, false))
-        assertTrue(w.answeredByVoice)
-    }
-
-    @Test
-    fun aTapEndsTheWindowAtOnce() {
-        val w = TalkWindow(t0)
-        assertEquals(TalkStep.DONE, w.next(t0 + 1_000, 0, false, decided = true))
-    }
-
-    @Test
-    fun aReplyThatNeverEndsIsCut() {
-        val w = TalkWindow(t0)
-        w.next(t0 + 1_000, t0 + 1_000, true, false)
-        assertEquals(TalkStep.REPLY, w.next(t0 + 9_000, t0 + 1_000, true, false))
-        assertEquals(TalkStep.DONE, w.next(t0 + 10_000, t0 + 1_000, true, false))
-    }
-
-    @Test
-    fun speechFromBeforeTheQuestionDoesNotCount() {
-        val w = TalkWindow(t0)
-        assertEquals(TalkStep.DONE, w.next(t0 + 6_000, userSpokeAt = t0 - 500, talking = false, decided = false))
-        assertFalse(w.answeredByVoice)
+    fun afterAStopTheTurnBackToThePathIsNoCorner() {
+        // with the normal 4 s at the start of a drive this was taken for a corner: a second stop right away
+        assertEquals(1, turnChecksAfterStop(turnedAround = false))
+        assertEquals(0, turnChecksAfterStop(turnedAround = true))
     }
 
     // ---- blocked way ----
@@ -293,13 +278,5 @@ class ScheduleTest {
         assertTrue(steps.take(4).none { it == BlockedStep.GIVE_UP })
     }
 
-    @Test
-    fun theWaypointIsTriedOnceForBlockedWays() {
-        assertTrue(Detour.shouldTry(NavFailure.BLOCKED, "Hall Corner", tried = false))
-        assertTrue(Detour.shouldTry(NavFailure.NO_PATH, "Hall Corner", tried = false))
-        assertFalse(Detour.shouldTry(NavFailure.BLOCKED, "Hall Corner", tried = true))
-        assertFalse(Detour.shouldTry(NavFailure.BLOCKED, null, tried = false))
-        assertFalse(Detour.shouldTry(NavFailure.BLOCKED, " ", tried = false))
-        assertFalse(Detour.shouldTry(NavFailure.NOT_LOCALIZED, "Hall Corner", tried = false))
-    }
+    // the detour steps after a blocked way: DetoursTest
 }

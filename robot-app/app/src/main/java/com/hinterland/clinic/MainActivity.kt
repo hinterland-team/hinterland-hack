@@ -84,6 +84,8 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 Robot.connect(this@MainActivity)
                 Clinic.refreshScreenInfo()
+                // frame times, dropped frames and cpu for the staff menu and the log (6.7), main thread
+                launch { PerfMonitor.run(this@MainActivity) }
                 OttoBrain.run()
             }
         }

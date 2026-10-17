@@ -44,6 +44,8 @@ enum class GuidePhase(val view: String) {
     PAUSED("waiting"),
     LOOKING("waiting"),
     LOST("help"),
+    // the way stays blocked after the detours: the team is called, otto waits with the patient (6.7)
+    BLOCKED("help"),
     ARRIVED("arrived"),
     NOBODY_CAME("waiting"),
     FAILED("help"),
@@ -74,6 +76,8 @@ data class GuideUi(
     val talk: TalkUi? = null,
     // otto takes the place's waypoint because the way was blocked (6.6)
     val detour: Boolean = false,
+    // the side the patient walks on, next to otto (6.7)
+    val side: WalkSide = WalkSide.LEFT,
 ) {
     fun step(): String = when (phase) {
         GuidePhase.TO_PICKUP -> "Coming to pick you up"
@@ -85,6 +89,7 @@ data class GuideUi(
         GuidePhase.PAUSED -> "Waiting until you're ready"
         GuidePhase.LOOKING -> "Looking for you"
         GuidePhase.LOST -> "The team is on the way"
+        GuidePhase.BLOCKED -> "The way is blocked"
         GuidePhase.ARRIVED -> if (exit) "Goodbye and get well soon" else "We're here"
         GuidePhase.NOBODY_CAME -> "Nobody came"
         GuidePhase.FAILED -> "I can't get there now"
@@ -102,7 +107,7 @@ enum class TalkStage { ASKING, LISTENING, REPLYING }
 data class TalkUi(
     val question: String,
     val stage: TalkStage = TalkStage.ASKING,
-    val listenMs: Long = TalkWindow.LISTEN_MS,
+    val listenMs: Long = ListenWindow.MAX_MS,
     // 0..1 of the listening time, set when the screen should show a fixed ring (previews)
     val listened: Float? = null,
     // changes with every new talk, so the ring starts again
@@ -126,6 +131,9 @@ data class StaffUi(
     val brain: String = "",
     val logs: List<LogLine> = emptyList(),
     val logsPending: Int = 0,
+    // how smoothly the app runs (6.7): one line, and whether it looks fine
+    val perf: String = "",
+    val perfOk: Boolean = true,
 )
 
 enum class CheckInStep { WHO, ASK_DESK, PACE, CONFIRM, SENDING, FAILED }
@@ -195,7 +203,7 @@ data class UiState(
         flash != null -> flash
         help != null -> Mood.CONCERNED
         guide?.phase in setOf(GuidePhase.LOOKING, GuidePhase.LOST) -> Mood.CONCERNED
-        guide?.phase in setOf(GuidePhase.FAILED, GuidePhase.NOBODY_CAME) -> Mood.SORRY
+        guide?.phase in setOf(GuidePhase.FAILED, GuidePhase.NOBODY_CAME, GuidePhase.BLOCKED) -> Mood.SORRY
         guide?.talk != null -> Mood.LISTENING
         guide?.phase in setOf(GuidePhase.CHECKING, GuidePhase.WAITING, GuidePhase.PICKUP) -> Mood.LISTENING
         guide?.phase == GuidePhase.ARRIVED -> Mood.HAPPY
@@ -281,12 +289,18 @@ data class UiState(
                     GuidePhase.PAUSED -> appendLine("The walk is paused. When the person is ready, use SET_PACE with the pace they want.")
                     GuidePhase.CHECKING -> if (guide.talk != null) {
                         appendLine(
-                            "Otto turned around and asked the patient if all is good and whether to slow down. " +
+                            "Otto turned to the patient and asked if all is good and whether to slow down. " +
                                 "If they say yes or all good, answer in a few warm words. Slower: SET_PACE. Wait or a break: PAUSE_WALK.",
                         )
                     }
                     GuidePhase.ARRIVED -> appendLine("Arrived. The screen asks how the walk was (thumbs up or down).")
+                    GuidePhase.BLOCKED -> appendLine(
+                        "The way is blocked. Otto asked the team for help, waits here with the patient and tries the way again now and then.",
+                    )
                     else -> Unit
+                }
+                if (guide.walkingNow || guide.phase == GuidePhase.CHECKING) {
+                    appendLine("The patient walks next to Otto, on his ${guide.side.wire} side, so he can see them.")
                 }
             }
             chassis != null -> appendLine(

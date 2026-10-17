@@ -34,6 +34,8 @@ export type Place = {
   viaSpot?: string;
   // second channel next to teams (needs RESEND_API_KEY + EMAIL_FROM)
   notifyEmail?: string;
+  // the notification channels this place picked (/notifications). absent = the default channels
+  channelIds?: string[];
   createdAt: string;
 };
 
@@ -60,6 +62,17 @@ export const EVENT_TYPES = [
   "teams_failed",
   "email_sent",
   "email_failed",
+  // v3.3 channels: <type>_notified / <type>_failed (slack, telegram, whatsapp, discord, webhook; teams and email as above)
+  "slack_notified",
+  "slack_failed",
+  "telegram_notified",
+  "telegram_failed",
+  "whatsapp_notified",
+  "whatsapp_failed",
+  "discord_notified",
+  "discord_failed",
+  "webhook_notified",
+  "webhook_failed",
   "walk_control",
   "robot_assigned",
   "pickup_started",

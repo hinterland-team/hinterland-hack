@@ -4,7 +4,7 @@ import { getStore } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
-// robot asks a person for help: { robot, summary, urgency, journeyId?, ticket? } -> teams message to the practice channel
+// robot asks a person for help: { robot, summary, urgency, journeyId?, ticket? } -> message to the default notification channels
 export const POST = route(async (req) => {
   requireRobot(req);
   const { help, notified } = await requestHelp(await readJson(req), baseUrl(req));

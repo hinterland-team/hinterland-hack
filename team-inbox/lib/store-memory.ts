@@ -1,5 +1,15 @@
 // in-memory store for local demos. only type imports here so tests can load it directly
-import type { JourneyChange, LogQuery, NewJourney, PlacePatch, PurgeCutoffs, Store, StoredJourney } from "./store-types";
+import type { NotifyChannel } from "./channel-types";
+import type {
+  ChannelPatch,
+  JourneyChange,
+  LogQuery,
+  NewJourney,
+  PlacePatch,
+  PurgeCutoffs,
+  Store,
+  StoredJourney,
+} from "./store-types";
 import type {
   Counters,
   FeedItem,
@@ -27,6 +37,7 @@ type Data = {
   maps: Record<string, MapState>;
   feed: FeedItem[];
   hits: { key: string; at: string }[];
+  channels: NotifyChannel[];
 };
 
 const fresh = (): Data => ({
@@ -44,6 +55,7 @@ const fresh = (): Data => ({
   maps: {},
   feed: [],
   hits: [],
+  channels: [],
 });
 
 // lives on globalThis so it survives hot reload. gone on restart.
@@ -99,6 +111,8 @@ export const memoryStore: Store = {
       if (patch[key]) p[key] = patch[key] as string;
       else delete p[key];
     }
+    if (patch.channelIds === null) delete p.channelIds;
+    else if (patch.channelIds) p.channelIds = [...patch.channelIds];
     return copy(p);
   },
   async deletePlace(id) {
@@ -258,6 +272,34 @@ export const memoryStore: Store = {
   },
   async setSetting(key, value) {
     data.settings[key] = value;
+  },
+
+  async listChannels() {
+    return copy([...data.channels].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)));
+  },
+  async createChannel(channel) {
+    data.channels.push(copy(channel));
+    return copy(channel);
+  },
+  async updateChannel(id, patch: ChannelPatch) {
+    const c = data.channels.find((x) => x.id === id);
+    if (!c) return null;
+    if (patch.label !== undefined) c.label = patch.label;
+    if (patch.config !== undefined) c.config = copy(patch.config);
+    if (patch.isDefault !== undefined) c.isDefault = patch.isDefault;
+    if (patch.active !== undefined) c.active = patch.active;
+    c.updatedAt = patch.updatedAt;
+    return copy(c);
+  },
+  async deleteChannel(id) {
+    const before = data.channels.length;
+    data.channels = data.channels.filter((c) => c.id !== id);
+    for (const p of data.places) {
+      if (!p.channelIds?.includes(id)) continue;
+      p.channelIds = p.channelIds.filter((x) => x !== id);
+      if (!p.channelIds.length) delete p.channelIds;
+    }
+    return data.channels.length < before;
   },
 
   async countLoginFailures(key, since) {

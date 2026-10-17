@@ -1,6 +1,8 @@
 // postgres store (neon). only type imports here so the sql can be tested outside next
+import type { ChannelType, NotifyChannel } from "./channel-types";
 import type { MapFrame } from "./robot-data";
 import type {
+  ChannelPatch,
   JourneyChange,
   LogQuery,
   NewJourney,
@@ -68,7 +70,23 @@ function toPlace(r: Row): Place {
   if (r.waiting_place_id) p.waitingPlaceId = String(r.waiting_place_id);
   if (r.via_spot) p.viaSpot = String(r.via_spot);
   if (r.notify_email) p.notifyEmail = String(r.notify_email);
+  const ids = json<unknown>(r.channel_ids);
+  if (Array.isArray(ids)) p.channelIds = ids.map(String);
   return p;
+}
+
+function toChannel(r: Row): NotifyChannel {
+  const config = json<Record<string, unknown> | null>(r.config) ?? {};
+  return {
+    id: String(r.id),
+    type: String(r.type) as ChannelType,
+    label: String(r.label),
+    config: Object.fromEntries(Object.entries(config).map(([k, v]) => [k, String(v)])),
+    isDefault: Boolean(r.is_default),
+    active: Boolean(r.active),
+    createdAt: iso(r.created_at),
+    updatedAt: iso(r.updated_at),
+  };
 }
 
 function toLeg(r: Row): Leg {
@@ -293,8 +311,8 @@ export function createPgStore(sql: SqlClient): Store {
     },
     async createPlace(p) {
       const rows = await sql.query(
-        `insert into places (id, name, room, spot, kind, public, avg_minutes, teams_webhook_url, active, waiting_place_id, self_check_in, created_at, via_spot, notify_email)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13, $14) returning *`,
+        `insert into places (id, name, room, spot, kind, public, avg_minutes, teams_webhook_url, active, waiting_place_id, self_check_in, created_at, via_spot, notify_email, channel_ids)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13, $14, $15::jsonb) returning *`,
         [
           p.id,
           p.name,
@@ -310,6 +328,7 @@ export function createPgStore(sql: SqlClient): Store {
           p.createdAt,
           p.viaSpot ?? null,
           p.notifyEmail ?? null,
+          p.channelIds ? JSON.stringify(p.channelIds) : null,
         ],
       );
       return toPlace(rows[0]);
@@ -328,7 +347,8 @@ export function createPgStore(sql: SqlClient): Store {
            teams_webhook_url = case when $11::boolean then $12::text else teams_webhook_url end,
            waiting_place_id = case when $13::boolean then $14::text else waiting_place_id end,
            via_spot = case when $15::boolean then $16::text else via_spot end,
-           notify_email = case when $17::boolean then $18::text else notify_email end
+           notify_email = case when $17::boolean then $18::text else notify_email end,
+           channel_ids = case when $19::boolean then $20::jsonb else channel_ids end
          where id = $1 returning *`,
         [
           id,
@@ -349,6 +369,8 @@ export function createPgStore(sql: SqlClient): Store {
           patch.viaSpot || null,
           patch.notifyEmail !== undefined,
           patch.notifyEmail || null,
+          patch.channelIds !== undefined,
+          patch.channelIds ? JSON.stringify(patch.channelIds) : null,
         ],
       );
       return rows[0] ? toPlace(rows[0]) : null;
@@ -681,6 +703,54 @@ export function createPgStore(sql: SqlClient): Store {
         `insert into settings (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value`,
         [key, value],
       );
+    },
+
+    async listChannels() {
+      const rows = await sql.query(`select * from notify_channels order by created_at, id`);
+      return rows.map(toChannel);
+    },
+    async createChannel(c) {
+      const rows = await sql.query(
+        `insert into notify_channels (id, type, label, config, is_default, active, created_at, updated_at)
+         values ($1, $2, $3, $4::jsonb, $5, $6, $7::timestamptz, $8::timestamptz) returning *`,
+        [c.id, c.type, c.label, JSON.stringify(c.config), c.isDefault, c.active, c.createdAt, c.updatedAt],
+      );
+      return toChannel(rows[0]);
+    },
+    async updateChannel(id, patch: ChannelPatch) {
+      const rows = await sql.query(
+        `update notify_channels set
+           label = coalesce($2::text, label),
+           config = coalesce($3::jsonb, config),
+           is_default = coalesce($4::boolean, is_default),
+           active = coalesce($5::boolean, active),
+           updated_at = $6::timestamptz
+         where id = $1 returning *`,
+        [
+          id,
+          patch.label ?? null,
+          patch.config ? JSON.stringify(patch.config) : null,
+          patch.isDefault ?? null,
+          patch.active ?? null,
+          patch.updatedAt,
+        ],
+      );
+      return rows[0] ? toChannel(rows[0]) : null;
+    },
+    async deleteChannel(id) {
+      const rows = await sql.query(
+        `with d as (delete from notify_channels where id = $1 returning id),
+         u as (
+           update places set channel_ids = case
+               when jsonb_array_length(channel_ids - $1::text) = 0 then null
+               else channel_ids - $1::text end
+           where channel_ids @> jsonb_build_array($1::text) and exists (select 1 from d)
+           returning id
+         )
+         select id from d`,
+        [id],
+      );
+      return rows.length > 0;
     },
 
     async countLoginFailures(key, since) {

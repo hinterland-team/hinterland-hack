@@ -30,6 +30,9 @@ object Clinic {
     // the self check-in screen closes by itself when nobody touches it
     private const val CHECK_IN_IDLE_MS = 90_000L
     private const val GUIDE_CARD_KEEP_MS = 4_000L
+    // the mouth stops this long after a ready line is over
+    private const val SAID_LINGER_MS = 400L
+    private const val LOG_TASK_CHARS = 40
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -71,8 +74,14 @@ object Clinic {
 
     // ---- listeners (worker threads) ----
 
+    // the last time the mic heard the patient (taps do not count, unlike OttoBrain.heardUser)
+    @Volatile private var voiceAt = 0L
+
+    fun lastVoiceAt(): Long = voiceAt
+
     fun onUserSpeech(text: String, final: Boolean) {
         if (text.isBlank()) return
+        voiceAt = now()
         OttoBrain.heardUser()
         if (final) {
             lastUserText = text
@@ -87,6 +96,7 @@ object Clinic {
     fun onRobotSpeech(text: String, final: Boolean) {
         if (text.isBlank()) return
         OttoBrain.heardRobot()
+        Voice.heardRobot(now())
         if (final) feed.ottoSaid(now(), text)
         _ui.update { it.copy(subtitle = text, subtitleFromUser = false, speaking = true) }
         speakingJob?.cancel()
@@ -166,6 +176,7 @@ object Clinic {
     private fun staffSnapshot(): StaffUi {
         val b = _ui.value.brain
         val issue = Robot.chassisIssue()
+        val perf = PerfMonitor.live()
         return StaffUi(
             robotName = Backend.robot,
             version = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
@@ -183,8 +194,10 @@ object Clinic {
             charging = Robot.chargingNow(),
             radar = Radar.summary,
             brain = "${b.state.label}: ${b.goal}",
-            logs = RobotLog.recent.value,
+            logs = RobotLog.recent(),
             logsPending = RobotLog.pending(),
+            perf = perf?.short() ?: "Screen: measuring, the first numbers come after a few seconds",
+            perfOk = perf?.smooth ?: true,
         )
     }
 
@@ -273,9 +286,11 @@ object Clinic {
         if (g != null && g.phase != GuidePhase.ARRIVED) {
             g.heard(sample.orEmpty())
             val asked = g.phase == GuidePhase.PACE
+            // the walk's ready line (6.7): said at once, no llm round trip while walking
+            val line = g.paceLine(pace)
             g.choosePace(pace)
             // during the pace question the guide's next line already answers
-            if (!asked) speak("Confirm in a few warm words that you walk at ${pace.label.lowercase()} now.", lang, pace.label)
+            if (!asked) sayLine(line)
             return true
         }
         speak("Say in a few words that you will walk at that pace when you walk together.", lang, pace.label)
@@ -289,7 +304,7 @@ object Clinic {
         val g = Guide.current
         if (g != null && g.pause()) {
             g.heard(sample.orEmpty())
-            speak("Say: of course, you wait right here, they should just tell you when they are ready. Short.", lang, "Of course, I'll wait.")
+            sayLine(g.line(LineKey.PAUSE_OK))
             return true
         }
         speak("Say kindly that you are not walking right now.", lang, "I'm not walking right now.")
@@ -724,6 +739,15 @@ object Clinic {
                 RobotLog.i(LogSource.BRAIN, "Walk control ${cmd.action ?: "?"} ignored: no matching walk")
                 return
             }
+            // the line before the change: slower / faster is measured from the pace now
+            val line = g.line(
+                when (c) {
+                    WalkControl.WAIT -> LineKey.PAUSE_OK
+                    WalkControl.RESUME -> LineKey.GO_ON
+                    WalkControl.SLOWER -> LineKey.SLOWER_OK
+                    WalkControl.FASTER -> LineKey.FASTER_OK
+                },
+            )
             val applied = g.control(c)
             RobotLog.i(LogSource.BRAIN, "Walk control ${c.wire} for ${g.ticket.ifBlank { "a patient" }}" + if (applied) "" else " (nothing to change)")
             feed.patientIntent(
@@ -735,17 +759,7 @@ object Clinic {
                     WalkControl.FASTER -> "Asked to walk faster (phone)"
                 },
             )
-            if (applied) {
-                speakLater(
-                    when (c) {
-                        WalkControl.WAIT -> "Say: of course, you wait right here until they are ready. Short."
-                        WalkControl.RESUME -> "Say briefly and warmly that you walk on now."
-                        WalkControl.SLOWER -> "Confirm in a few warm words that you walk a bit slower now."
-                        WalkControl.FASTER -> "Confirm in a few warm words that you walk a bit faster now."
-                    },
-                    g.speechLang,
-                )
-            }
+            if (applied) sayLineLater(line)
         } finally {
             commandDone(cmd.id)
         }
@@ -802,15 +816,17 @@ object Clinic {
         _ui.update { it.copy(walking = on) }
     }
 
-    // blocked: ask people to let otto pass, at most every OBSTACLE_TALK_EVERY_MS
-    fun onNavEvent(ev: NavEvent, lang: Lang = Lang(null)) {
+    // blocked: ask people to let otto pass, at most every OBSTACLE_TALK_EVERY_MS. ready = a walk's own
+    // line for it (6.7), said at once; without one the llm writes it
+    fun onNavEvent(ev: NavEvent, lang: Lang = Lang(null), ready: String? = null) {
         when (ev) {
             NavEvent.BLOCKED -> {
                 setTask("Something is in my way")
                 val now = now()
                 if (now - lastObstacleTalk >= OBSTACLE_TALK_EVERY_MS) {
                     lastObstacleTalk = now
-                    scope.launch { Voice.speak("Politely ask the people in your way to let you pass.", lang) }
+                    if (ready != null) sayLineLater(ready)
+                    else scope.launch { Voice.speak("Politely ask the people in your way to let you pass.", lang) }
                 }
             }
             NavEvent.CLEAR -> setTask(null)
@@ -831,19 +847,48 @@ object Clinic {
 
     // ---- helpers ----
 
-    // english instruction -> a spoken line in the person's language; the screen text if the llm fails
-    suspend fun speak(task: String, lang: Lang, screen: String) {
-        val ok = working { Voice.speak(task, lang) }
-        if (!ok) {
-            RobotLog.w(LogSource.VOICE, "Speech failed, showing it on the screen")
-            _ui.update { it.copy(subtitle = screen, subtitleFromUser = false) }
+    // english instruction -> a spoken line in the person's language. when the llm does not deliver, the
+    // ready line is said instead (a walk's line in the patient's language, else the english screen text),
+    // so there is no silent gap (6.7). a line the patient talked over is not said again. every llm line
+    // logs how long it took
+    suspend fun speak(task: String, lang: Lang, screen: String, ready: String? = null) {
+        val r = working { Voice.speakTimed(task, lang) }
+        val what = task.take(LOG_TASK_CHARS).trimEnd()
+        when {
+            r.ok -> RobotLog.i(
+                LogSource.VOICE,
+                "Llm line (\"$what...\"): " + (r.firstWordsMs?.let { "first words after ${secs(it)}, " } ?: "") +
+                    "done after ${secs(r.totalMs)}" + if (r.tries > 1) ", 2nd try" else "",
+            )
+            r.interrupted -> RobotLog.i(LogSource.VOICE, "Llm line (\"$what...\") stopped after ${secs(r.totalMs)}: the patient spoke, the agent answers")
+            else -> {
+                RobotLog.w(LogSource.VOICE, "Speech failed after ${secs(r.totalMs)} (${r.tries} tries), said the ready line instead")
+                sayLine(ready ?: screen)
+            }
         }
     }
 
-    // the same, without waiting (otto turns or drives meanwhile)
-    fun speakLater(task: String, lang: Lang) {
-        scope.launch { Voice.speak(task, lang) }
+    // a ready line (the walk's line set, a fallback): text-to-speech only, no llm, so it starts at once.
+    // on the screen like otto's other words. false when the tts did not play it (talked over, failed)
+    suspend fun sayLine(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty()) return true
+        _ui.update { it.copy(subtitle = t, subtitleFromUser = false, speaking = true) }
+        speakingJob?.cancel()
+        feed.ottoSaid(now(), t)
+        val ok = Voice.say(t)
+        speakingJob = scope.launch {
+            delay(SAID_LINGER_MS)
+            _ui.update { it.copy(speaking = false) }
+        }
+        return ok
     }
+
+    fun sayLineLater(text: String) {
+        scope.launch { sayLine(text) }
+    }
+
+    private fun secs(ms: Long) = String.format(java.util.Locale.ROOT, "%.1f s", ms / 1000.0)
 
     private suspend fun <T> working(block: suspend () -> T): T {
         _ui.update { it.copy(working = it.working + 1) }

@@ -1,6 +1,6 @@
 "use client";
 
-import { Door, MapPin, MapTrifold, Robot, SignOut, TerminalWindow, UsersThree } from "@phosphor-icons/react";
+import { Bell, Door, MapPin, MapTrifold, Robot, SignOut, TerminalWindow, UsersThree } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { PAGE } from "@/lib/ui";
@@ -12,6 +12,7 @@ const LINKS = [
   { href: "/map", label: "Map", icon: MapTrifold },
   { href: "/logs", label: "Logs", icon: TerminalWindow },
   { href: "/places", label: "Places", icon: MapPin },
+  { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/simulate", label: "Simulate", icon: Robot },
 ];
 
@@ -43,7 +44,7 @@ export function SiteHeader({ signOut }: { signOut: boolean }) {
                   key={l.href}
                   href={l.href}
                   aria-current={active ? "page" : undefined}
-                  className={`flex h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold lg:h-10 ${
+                  className={`flex h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold lg:h-10 [&:last-child:nth-child(3n+1)]:col-span-3 ${
                     active ? "bg-primary-soft text-primary-ink" : "text-muted hover:bg-subtle hover:text-ink"
                   }`}
                 >

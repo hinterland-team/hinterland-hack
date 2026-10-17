@@ -141,7 +141,7 @@ enum class CheckReason(val detail: String) {
     REGULAR("regular check"),
     TURN("after a turn"),
     OBSTACLE("after waiting for an obstacle"),
-    FOLLOWER_LOST("nobody behind on the radar"),
+    FOLLOWER_LOST("nobody beside on the radar"),
 }
 
 // the adaptive check-back schedule (docs/journeys.md 6.3): the first check 10 s after the start, then
@@ -169,6 +169,7 @@ class CheckSchedule(
     private var settleHeading = 0.0
     private var settleSince = 0L
     private var lostWanted = false
+    private var armMs = TURN_ARM_MS
 
     // navigation time from the last check (or the start) until the next one
     var intervalMs: Long = firstMs
@@ -189,10 +190,12 @@ class CheckSchedule(
         if (heading == null) return
         val ref = refHeading
         // every drive starts by turning on the spot towards the path: that is no corner
-        if (ref == null || (!turnPending && now - stretchStart < TURN_ARM_MS)) {
+        if (ref == null || (!turnPending && now - stretchStart < armMs)) {
             refHeading = heading
             return
         }
+        // the longer start after a stop is for one stretch only
+        armMs = TURN_ARM_MS
         val fromRef = Math.toDegrees(abs(ScanMath.wrap(heading - ref)))
         if (!turnPending && fromRef > turnDeg) {
             turnPending = true
@@ -238,12 +241,14 @@ class CheckSchedule(
         return null
     }
 
-    // a check-back happened; distance = how far the patient was (null = unknown)
-    fun done(distance: Double?, heading: Double?) {
+    // a check-back happened; distance = how far the patient was (null = unknown). turnedAround = otto
+    // turned towards the patient and the navigation turns him back to the path: no corner either
+    fun done(distance: Double?, heading: Double?, turnedAround: Boolean = false) {
         checks++
         distance?.takeIf { it > 0.0 }?.let { lastDistance = it }
         intervalMs = intervalAfter(checks, lastDistance)
         restart(heading)
+        if (turnedAround) armMs = TURN_ARM_AFTER_STOP_MS
     }
 
     // near the destination: no turning around, just start the count again
@@ -257,6 +262,7 @@ class CheckSchedule(
         turnPending = false
         turnedDeg = 0.0
         refHeading = heading ?: refHeading
+        armMs = TURN_ARM_MS
     }
 
     companion object {
@@ -272,6 +278,8 @@ class CheckSchedule(
         const val TURN_SETTLE_MS = 1_500L
         // turns in the first seconds of each drive are the robot facing its path
         const val TURN_ARM_MS = 4_000L
+        // after a stop otto faces the patient: turning back to the path at a slow pace takes longer
+        const val TURN_ARM_AFTER_STOP_MS = 7_000L
         // a turn or obstacle check needs this much navigation time since the last check
         const val MIN_GAP_MS = 6_000L
         // trust grows per check: at most 15 s after the first, +5 s per check, up to MAX_MS
@@ -307,87 +315,46 @@ object NearGoal {
         here != null && dest != null && here.distanceTo(dest) <= SKIP_WITHIN_M
 }
 
-enum class TalkStep { LISTEN, REPLY, DONE }
-
-// the short face-to-face talk at a check-back (docs/journeys.md 6.4): otto asked a yes/no question,
-// listens about 6 s, gives otto's ai time to answer when the patient spoke, then otto walks on.
-class TalkWindow(
-    private val startedAt: Long,
-    private val listenMs: Long = LISTEN_MS,
-    private val replyMaxMs: Long = REPLY_MAX_MS,
-) {
-    private var spokeAt: Long? = null
-    private var quietSince: Long? = null
-
-    // true once the patient spoke in this window
-    val answeredByVoice get() = spokeAt != null
-
-    // userSpokeAt = last time the mic heard the patient; talking = otto's ai is busy (thinking, speaking,
-    // an action); decided = the patient chose already (tap, pace change, wait)
-    fun next(now: Long, userSpokeAt: Long, talking: Boolean, decided: Boolean): TalkStep {
-        if (spokeAt == null && userSpokeAt >= startedAt) spokeAt = userSpokeAt
-        val spoke = spokeAt
-        if (spoke == null) {
-            if (decided) return TalkStep.DONE
-            return if (now - startedAt >= listenMs) TalkStep.DONE else TalkStep.LISTEN
-        }
-        // they spoke: wait for otto's answer, at most replyMaxMs after the last words
-        val lastWords = maxOf(spoke, userSpokeAt)
-        if (now - lastWords >= replyMaxMs) return TalkStep.DONE
-        if (talking || now - lastWords < REPLY_START_MS) {
-            quietSince = null
-            return TalkStep.REPLY
-        }
-        val q = quietSince ?: now.also { quietSince = it }
-        return if (now - q >= QUIET_END_MS) TalkStep.DONE else TalkStep.REPLY
-    }
-
-    // 0..1 of the listening time, for the ring on the screen
-    fun listened(now: Long): Float = ((now - startedAt).toFloat() / listenMs).coerceIn(0f, 1f)
-
-    companion object {
-        const val LISTEN_MS = 6_000L
-        const val REPLY_MAX_MS = 9_000L
-        // the planner needs a moment before it shows that it works on an answer
-        const val REPLY_START_MS = 1_500L
-        const val QUIET_END_MS = 1_200L
-    }
-}
+// the face-to-face talk at a check-back (docs/journeys.md 6.4) is a short listening window since v3.3:
+// ListenWindow in Stops.kt (at most 5 s, the walk does not wait for otto's ai to answer)
 
 enum class BlockedStep { NONE, ASK, GIVE_UP }
 
 // something is in otto's way (docs/journeys.md 6.6): ask people to step aside, ask once more after
-// 10 s, give up on this way 8 s after the second ask (the guide then tries the place's viaSpot once,
-// then calls the team). blocked longer than 25 s in total during one drive also ends it.
+// 10 s, give up on this way 8 s after the second ask. blocked longer than 25 s in total during one drive
+// also ends it. this one counts one drive (going home, to a spot); a walk with a patient counts the whole
+// leg across restarts and then tries the detour steps (LegBlock, Detours.kt, v3.3)
 class BlockedWatch(
     private val askEveryMs: Long = ASK_EVERY_MS,
     private val maxAsks: Int = MAX_ASKS,
     private val graceMs: Long = GRACE_AFTER_LAST_ASK_MS,
     private val totalLimitMs: Long = TOTAL_LIMIT_MS,
-) {
+) : WayBlock {
     private val clock = BlockedClock()
     private var asks = 0
     private var lastAskAt = 0L
 
-    val isBlocked: Boolean get() = clock.isBlocked()
-    val asksDone: Int get() = asks
+    override val isBlocked: Boolean get() = clock.isBlocked()
+    override val asksDone: Int get() = asks
 
-    fun blocked(now: Long) = clock.blocked(now)
+    override fun blocked(now: Long) = clock.blocked(now)
 
-    fun clear(now: Long) {
+    override fun clear(now: Long) {
         clock.clear(now)
         asks = 0
     }
 
+    override fun stop(now: Long) = clock.clear(now)
+
     // the robot drove on while "blocked" (the end-of-obstacle status never came): it is not blocked.
     // movedM = meters since the blocked status started. true when that cleared it
-    fun moved(now: Long, movedM: Double): Boolean {
+    override fun moved(now: Long, movedM: Double): Boolean {
         if (!clock.isBlocked() || movedM < MOVED_CLEARS_M) return false
         clear(now)
         return true
     }
 
-    fun step(now: Long): BlockedStep {
+    override fun step(now: Long): BlockedStep {
         if (clock.total(now) > totalLimitMs) return BlockedStep.GIVE_UP
         if (!clock.isBlocked()) return BlockedStep.NONE
         if (asks == 0 || (asks < maxAsks && now - lastAskAt >= askEveryMs)) {
@@ -408,11 +375,7 @@ class BlockedWatch(
     }
 }
 
-// after a failed stretch: try the place's waypoint once when the way was blocked or had no path
-object Detour {
-    fun shouldTry(why: NavFailure, viaSpot: String?, tried: Boolean): Boolean =
-        !tried && !viaSpot.isNullOrBlank() && why in setOf(NavFailure.BLOCKED, NavFailure.NO_PATH)
-}
+// after a failed stretch: the detour steps in Detours.kt (v3.3; the place's viaSpot is the first waypoint)
 
 enum class FarStep { WAIT, CAME, STILL_FAR, GONE }
 

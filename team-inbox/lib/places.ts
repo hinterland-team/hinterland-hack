@@ -1,6 +1,9 @@
+import { MAX_PLACE_CHANNELS } from "./channel-types";
+import { channelIdsKnown, forgetLast } from "./channels";
 import { now, numberOrNull, retention } from "./common";
 import { emailList } from "./email";
 import { ApiError, text } from "./http";
+import { maskUrl } from "./notify";
 import { getStore } from "./store";
 import type { PlacePatch } from "./store-types";
 import {
@@ -33,6 +36,20 @@ function cleanEmail(value: unknown): string | null | undefined {
   const list = emailList(raw);
   if (!list) throw new ApiError(400, "notifyEmail must be one email address, or up to 5 separated by commas");
   return list.join(", ");
+}
+
+// the channels a place picked on /notifications. undefined = not sent, null = back to the default channels
+async function cleanChannelIds(value: unknown): Promise<string[] | null | undefined> {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (!Array.isArray(value) || value.length > MAX_PLACE_CHANNELS || value.some((v) => typeof v !== "string")) {
+    throw new ApiError(400, `channelIds must be a list of at most ${MAX_PLACE_CHANNELS} channel ids, or null for the default channels`);
+  }
+  const known = await channelIdsKnown();
+  const ids = [...new Set(value as string[])];
+  const unknown = ids.find((id) => !known.has(id));
+  if (unknown) throw new ApiError(400, `there is no channel ${unknown.slice(0, 80)}`);
+  return ids;
 }
 
 // whole minutes 1-120. undefined = not sent
@@ -77,8 +94,14 @@ function checkWaiting(places: Place[], kind: PlaceKind, waitingPlaceId: string |
   if (!w || w.kind !== "waiting") throw new ApiError(400, "waitingPlaceId must be a place of kind waiting");
 }
 
+// what leaves the server: the own teams webhook is a secret (anyone with it can post into the channel),
+// so only a masked hint goes out. the dashboard sends a new link to replace it, or "" to remove it
+export function publicPlace(p: Place): Place {
+  return p.teamsWebhookUrl ? { ...p, teamsWebhookUrl: maskUrl(p.teamsWebhookUrl) } : p;
+}
+
 export async function listPlaces() {
-  return getStore().listPlaces();
+  return (await getStore().listPlaces()).map(publicPlace);
 }
 
 export async function createPlace(body: Record<string, unknown>) {
@@ -116,7 +139,9 @@ export async function createPlace(body: Record<string, unknown>) {
   if (via) place.viaSpot = via;
   const email = cleanEmail(body.notifyEmail);
   if (email) place.notifyEmail = email;
-  return store.createPlace(place);
+  const channelIds = await cleanChannelIds(body.channelIds);
+  if (channelIds) place.channelIds = channelIds;
+  return publicPlace(await store.createPlace(place));
 }
 
 export async function updatePlace(body: Record<string, unknown>) {
@@ -151,11 +176,15 @@ export async function updatePlace(body: Record<string, unknown>) {
   else if (pub !== undefined) patch.public = pub;
   const m = minutes(body.avgMinutes);
   if (m !== undefined) patch.avgMinutes = m;
-  const webhook = cleanWebhook(body.teamsWebhookUrl);
+  // the masked hint sent back unchanged (an older page) keeps the saved link
+  const maskedBack = Boolean(place.teamsWebhookUrl) && body.teamsWebhookUrl === maskUrl(place.teamsWebhookUrl ?? "");
+  const webhook = maskedBack ? undefined : cleanWebhook(body.teamsWebhookUrl);
   if (webhook !== undefined) patch.teamsWebhookUrl = webhook;
   if (body.viaSpot !== undefined) patch.viaSpot = text(body.viaSpot, 80) ?? null;
   const email = cleanEmail(body.notifyEmail);
   if (email !== undefined) patch.notifyEmail = email;
+  const channelIds = await cleanChannelIds(body.channelIds);
+  if (channelIds !== undefined) patch.channelIds = channelIds;
 
   if (body.waitingPlaceId !== undefined) patch.waitingPlaceId = text(body.waitingPlaceId, 80) ?? null;
   const selfCheckIn = bool(body.selfCheckIn, "selfCheckIn");
@@ -172,11 +201,15 @@ export async function updatePlace(body: Record<string, unknown>) {
 
   const updated = await store.updatePlace(id, patch);
   if (!updated) throw new ApiError(404, "place not found");
+  // a new own webhook or address: the status line of the old one goes
+  if (patch.teamsWebhookUrl !== undefined && patch.teamsWebhookUrl !== (place.teamsWebhookUrl ?? null)) await forgetLast(`place:${id}:teams`);
+  if (patch.notifyEmail !== undefined && patch.notifyEmail !== (place.notifyEmail ?? null)) await forgetLast(`place:${id}:email`);
+  const out = publicPlace(updated);
   // no longer a waiting room: the rooms that used it walk straight in
   if (place.kind === "waiting" && kind !== "waiting") {
     for (const p of places) if (p.waitingPlaceId === id) await store.updatePlace(p.id, { waitingPlaceId: null });
   }
-  return updated;
+  return out;
 }
 
 export async function deletePlace(id: string | undefined) {

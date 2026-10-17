@@ -1,10 +1,10 @@
+import { notifyPlace } from "./channels";
 import { event, now, retention, robotName, today } from "./common";
-import { cardToEmail, emailConfigured, sendEmail } from "./email";
 import { ApiError, type Caller, text } from "./http";
 import { clearJourneyFeed } from "./live-feed";
+import { type CardLinks, onTheWayMessage, placeLabel, robotLabel, visitorMessage } from "./messages";
 import { getStore } from "./store";
 import type { JourneyChange, StoredJourney } from "./store-types";
-import { type CardLinks, onTheWayCard, placeLabel, robotLabel, sendToTeams, visitorCard, webhookFor } from "./teams";
 import {
   type Counters,
   FINAL_LEG_STATUSES,
@@ -189,39 +189,19 @@ async function expectedIn(placeId: string) {
   return `about ${Math.max(1, Math.ceil(row.walkSeconds / row.walks / 60))} min`;
 }
 
-async function sendTeams(url: string | undefined, card: unknown, who: string): Promise<JourneyEvent> {
-  if (!url) return event("teams_skipped", `No Teams channel for ${who}, the board shows it`);
-  return (await sendToTeams(url, card))
-    ? event("teams_notified", `Teams card sent to ${who}`)
-    : event("teams_failed", "Teams did not take the card");
-}
-
-// the same message by email when the place has an address and resend is set up
-async function sendMail(place: Place, card: unknown): Promise<JourneyEvent | null> {
-  if (!place.notifyEmail || !emailConfigured()) return null;
-  return (await sendEmail(place.notifyEmail, cardToEmail(card)))
-    ? event("email_sent", `Email sent to ${place.name}`)
-    : event("email_failed", `The email to ${place.name} did not go out`);
-}
-
-async function send(place: Place, card: unknown): Promise<JourneyEvent[]> {
-  const [teams, mail] = await Promise.all([sendTeams(webhookFor(place), card, place.name), sendMail(place, card)]);
-  return mail ? [teams, mail] : [teams];
-}
-
-// card when a leg starts: "A17 is on the way" to the destination. a walk to a waiting room
-// gets its card ("Your visitor has arrived") when the patient sits there
+// message when a leg starts: "A17 is on the way" to the destination, on all of its channels
+// (lib/channels.ts). a walk to a waiting room gets its message ("Your visitor has arrived") when the patient sits there
 async function notifyLeg(j: Journey, leg: Leg, base: string) {
   const places = await activePlaces();
   const to = places.find((p) => p.id === leg.toPlaceId);
   if (!to) return;
   if (j.forPlaceId && j.forPlaceId !== to.id) return;
   if (to.kind === "exit") {
-    await addEvents(j.id, [event("teams_skipped", "Guiding to the exit, no Teams card")]);
+    await addEvents(j.id, [event("teams_skipped", "Guiding to the exit, no message")]);
     return;
   }
-  const card = onTheWayCard(j, to, await expectedIn(to.id), links(base, j, places));
-  await addEvents(j.id, await send(to, card));
+  const message = onTheWayMessage(j, to, await expectedIn(to.id), links(base, j, places));
+  await addEvents(j.id, await notifyPlace(to, message));
 }
 
 async function notifyVisitor(j: Journey, leg: Leg, base: string) {
@@ -229,8 +209,8 @@ async function notifyVisitor(j: Journey, leg: Leg, base: string) {
   const room = places.find((p) => p.id === j.forPlaceId);
   const waiting = places.find((p) => p.id === leg.toPlaceId);
   if (!room || !waiting) return;
-  const card = visitorCard(j, room, waiting, links(base, j, places));
-  await addEvents(j.id, await send(room, card));
+  const message = visitorMessage(j, room, waiting, links(base, j, places));
+  await addEvents(j.id, await notifyPlace(room, message));
 }
 
 // ---------- create

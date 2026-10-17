@@ -6,13 +6,13 @@ export const dynamic = "force-dynamic";
 // dashboard and robot: all places (the robot reads spots and public / self check-in places)
 export const GET = route(async () => json(await listPlaces()));
 
-// { name, room?, spot?, kind, public?, avgMinutes?, teamsWebhookUrl?, waitingPlaceId?, selfCheckIn?, active? }
+// { name, room?, spot?, kind, public?, avgMinutes?, teamsWebhookUrl?, notifyEmail?, waitingPlaceId?, selfCheckIn?, active?, channelIds? }
 export const POST = route(async (req) => {
   await requireStaff(req);
   return json(await createPlace(await readJson(req)), 201);
 });
 
-// { id, ...fields }. room / teamsWebhookUrl / waitingPlaceId: "" removes it
+// { id, ...fields }. room / teamsWebhookUrl / waitingPlaceId: "" removes it. channelIds: null = the default channels
 export const PATCH = route(async (req) => {
   await requireStaff(req);
   return json(await updatePlace(await readJson(req)));

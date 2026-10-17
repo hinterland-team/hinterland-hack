@@ -5,12 +5,23 @@ package com.hinterland.clinic
 class FeedBuffer(private val capacity: Int = CAPACITY) {
 
     private val items = ArrayDeque<FeedItem>()
+    private var lastSaid = ""
+    private var lastSaidAt = 0L
 
     // what the last feed answer said; off until the dashboard turns it on
     @Volatile var showPatientText = false
 
+    // a ready line otto says himself (v3.3) comes back once more from the speech listener, maybe in parts:
+    // the same words within SAME_LINE_MS count once
     @Synchronized
-    fun ottoSaid(at: Long, text: String) = add(FeedItem(at, FeedItem.OTTO, FeedItem.SAID, text))
+    fun ottoSaid(at: Long, text: String): Boolean {
+        val key = text.lowercase().filter { it.isLetterOrDigit() }
+        if (key.isNotEmpty() && at - lastSaidAt in 0..SAME_LINE_MS && lastSaid.contains(key)) return false
+        if (!add(FeedItem(at, FeedItem.OTTO, FeedItem.SAID, text))) return false
+        lastSaid = key
+        lastSaidAt = at
+        return true
+    }
 
     @Synchronized
     fun ottoDid(at: Long, text: String) = add(FeedItem(at, FeedItem.OTTO, FeedItem.ACTION, text))
@@ -54,5 +65,6 @@ class FeedBuffer(private val capacity: Int = CAPACITY) {
         const val CAPACITY = 100
         const val BATCH = 20
         const val MAX_TEXT = 300
+        const val SAME_LINE_MS = 10_000L
     }
 }

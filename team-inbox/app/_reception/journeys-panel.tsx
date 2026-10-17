@@ -7,7 +7,7 @@ import type { JourneyWithQueue, Place } from "@/lib/types";
 import { currentLeg, lineKey } from "@/lib/types";
 import { STAGE_TONE, type Stage, type StageKey, placeText, stageOf } from "@/lib/ui";
 import { JourneyActions, type Run } from "../components/journey-actions";
-import { PaceNote, StageLine, TicketBadge } from "../components/journey-bits";
+import { NotifyLine, PaceNote, StageLine, TicketBadge } from "../components/journey-bits";
 
 const ORDER: StageKey[] = ["failed", "staff", "room", "waiting", "walking", "pickup"];
 
@@ -135,6 +135,7 @@ export function JourneysPanel({
                       <div className="mt-2 max-w-60">
                         <StageLine stage={stage} />
                       </div>
+                      <NotifyLine journey={j} places={places} />
                     </div>
                     <div className="col-span-2 @md:col-span-1 @md:col-start-2">
                       <JourneyActions journey={j} stage={stage} places={places} run={run} busy={busy} />

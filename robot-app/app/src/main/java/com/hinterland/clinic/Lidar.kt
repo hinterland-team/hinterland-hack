@@ -200,13 +200,19 @@ class Coverage(private val binDeg: Int = 10) {
     }
 }
 
-// where to look for legs: behind otto while he drives, in front after he turned around
+// where to look for legs: beside or behind otto while he drives, in front after he turned to the patient
 enum class Sector(val fromDeg: Double, val toDeg: Double) {
     REAR(100.0, 180.0),
     FRONT(0.0, 60.0),
+    // v3.3 walk beside: both sides from a little ahead of otto's shoulder round to the back. on our robot
+    // the radar sees -110..+120 deg, so the patient beside him (a little behind) is in view
+    SIDES(50.0, 180.0),
     ;
 
     fun contains(deg: Double): Boolean = abs(deg) in fromDeg..toDeg
+
+    // this sector goes over +-180 (behind): angles sort on 0..360 so it stays one sweep
+    val wraps: Boolean get() = toDeg >= 180.0
 }
 
 enum class LegKind { PAIR, BLOB, LEG }
@@ -228,21 +234,25 @@ object LegDetector {
     const val PAIR_MAX_M = 0.55
     // a leg is round: its middle points bulge towards the sensor
     const val LEG_BULGE_M = 0.006
+    // a wide shape reaching this close to the range limit was cut by it (a far wall), not ended by itself
+    const val RANGE_EDGE_M = 0.05
 
     // shapes in the sector, in angle order. each shape is a list of points (robot frame)
     fun clusters(points: List<Point>, sector: Sector, minRange: Double = MIN_RANGE_M, maxRange: Double = MAX_RANGE_M): List<List<Point>> {
-        val inside = points.filter {
-            val r = ScanMath.range(it)
-            r in minRange..maxRange && sector.contains(ScanMath.angleDeg(it))
+        // each angle once (the radar runs this several times a second)
+        val inside = ArrayList<Pair<Double, Point>>()
+        for (p in points) {
+            val r = ScanMath.range(p)
+            if (r < minRange || r > maxRange) continue
+            val a = ScanMath.angleDeg(p)
+            if (!sector.contains(a)) continue
+            // the rear and the side sectors go over +-180: sort on 0..360 there so it stays one sweep
+            inside += (if (sector.wraps) (a + 360.0) % 360.0 else a) to p
         }
-        // the rear sector goes over +-180: sort on 0..360 there so it stays one sweep
-        val sorted = inside.sortedBy {
-            val a = ScanMath.angleDeg(it)
-            if (sector == Sector.REAR) (a + 360.0) % 360.0 else a
-        }
+        inside.sortBy { it.first }
         val out = ArrayList<List<Point>>()
         var current = ArrayList<Point>()
-        for (p in sorted) {
+        for ((_, p) in inside) {
             val last = current.lastOrNull()
             if (last != null && last.distanceTo(p) > GAP_M) {
                 out += current
@@ -264,7 +274,9 @@ object LegDetector {
             val center = centroid(c)
             when {
                 width in LEG_MIN_M..LEG_MAX_M && round(c) -> legs += center to width
-                width > LEG_MAX_M && width <= BLOB_MAX_M -> out += LegCandidate(center, ScanMath.range(center), LegKind.BLOB, width)
+                // a wall cut short by the range limit looks like a wide shape: not a person (v3.3)
+                width > LEG_MAX_M && width <= BLOB_MAX_M && c.none { ScanMath.range(it) > maxRange - RANGE_EDGE_M } ->
+                    out += LegCandidate(center, ScanMath.range(center), LegKind.BLOB, width)
             }
         }
         // pair up legs, closest pairs first; each leg once
@@ -313,8 +325,8 @@ object LegDetector {
 // the follower estimate otto keeps while he walks
 data class FollowerFix(val robot: Point, val map: Point?, val distance: Double, val at: Long)
 
-// follows one leg-like shape behind otto from frame to frame. a shape that stays put on the map while
-// otto drives on is furniture, not a patient: it is ignored for a while.
+// follows one leg-like shape beside or behind otto from frame to frame. a shape that stays put on the map
+// while otto drives on is furniture, not a patient: it is ignored for a while.
 class FollowerTracker(
     private val gateM: Double = 0.8,
     private val keepMs: Long = 1_500,
@@ -344,7 +356,7 @@ class FollowerTracker(
         everSeen = false
     }
 
-    // one radar frame: leg candidates in the robot frame (REAR sector) and the pose, if known
+    // one radar frame: leg candidates in the robot frame (the side sectors) and the pose, if known
     fun update(now: Long, candidates: List<LegCandidate>, pose: RobotPose?): FollowerFix? {
         ignored.removeAll { now - it.second > IGNORE_MS }
         val usable = candidates.filter { c ->
@@ -414,37 +426,4 @@ class FollowerTracker(
     }
 }
 
-// continuous watch while the back is visible: nobody behind for 4 s -> check back at once.
-// it only fires once the follower was seen in this walk (so it works for this person), and it stops
-// trusting itself after two false alarms (the camera found the patient close each time).
-class FollowerWatch(private val lostMs: Long = LOST_MS, private val maxFalseAlarms: Int = 2) {
-    private var since = 0L
-    private var fired = false
-    var falseAlarms = 0
-        private set
-    val trusted get() = falseAlarms < maxFalseAlarms
-
-    // the walk (re)starts: count from now
-    fun start(now: Long) {
-        since = now
-        fired = false
-    }
-
-    // true = check back now (once until the next start)
-    fun check(now: Long, rearVisible: Boolean, everSeen: Boolean, lastSeenAt: Long?): Boolean {
-        if (fired || !trusted || !rearVisible || !everSeen) return false
-        val from = maxOf(since, lastSeenAt ?: 0L)
-        if (now - from < lostMs) return false
-        fired = true
-        return true
-    }
-
-    // the camera found the patient close after the watch fired
-    fun falseAlarm() {
-        falseAlarms++
-    }
-
-    companion object {
-        const val LOST_MS = 4_000L
-    }
-}
+// the watch that asks for a check-back when nobody is beside otto any more: SideWatch (Stops.kt, v3.3)

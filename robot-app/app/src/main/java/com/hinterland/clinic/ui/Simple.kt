@@ -100,18 +100,18 @@ fun Message(
 @Composable
 fun IconBadge(glyph: GlyphKind, fg: Color, bg: Color, size: Dp = 168.dp, pulse: Boolean = false) {
     val reduced = LocalReducedMotion.current
+    // read while drawing only (v3.3): the rings redraw, the badge does not recompose every frame
     val ring = if (pulse && !reduced) {
         val loop = rememberInfiniteTransition(label = "badge")
-        val v by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1_800, easing = LinearEasing)), label = "ring")
-        v
+        loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1_800, easing = LinearEasing)), label = "ring")
     } else {
-        -1f
+        null
     }
     Box(Modifier.size(size), contentAlignment = Alignment.Center) {
-        if (ring >= 0f) {
+        if (ring != null) {
             Canvas(Modifier.size(size)) {
                 for (i in 0..1) {
-                    val q = (ring + i * 0.5f) % 1f
+                    val q = (ring.value + i * 0.5f) % 1f
                     drawCircle(fg.copy(alpha = (1f - q) * 0.25f), this.size.minDimension / 2f * (0.7f + 0.3f * q))
                 }
             }
@@ -149,12 +149,12 @@ fun RowScope.PictureButton(label: String, glyph: GlyphKind, onClick: () -> Unit)
 @Composable
 fun TalkHint(label: String = "Or just talk to me") {
     val reduced = LocalReducedMotion.current
+    // read while drawing only (v3.3): the waves redraw, the row does not recompose every frame
     val wave = if (reduced) {
-        0.5f
+        null
     } else {
         val loop = rememberInfiniteTransition(label = "talkHint")
-        val v by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1_400, easing = LinearEasing)), label = "wave")
-        v
+        loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1_400, easing = LinearEasing)), label = "wave")
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(width = 112.dp, height = 72.dp), contentAlignment = Alignment.CenterStart) {
@@ -164,7 +164,7 @@ fun TalkHint(label: String = "Or just talk to me") {
             Canvas(Modifier.size(width = 112.dp, height = 72.dp)) {
                 val c = Offset(36.dp.toPx(), size.height / 2f)
                 for (i in 0..2) {
-                    val q = (wave + i / 3f) % 1f
+                    val q = ((wave?.value ?: 0.5f) + i / 3f) % 1f
                     val r = 40.dp.toPx() + q * 28.dp.toPx()
                     drawArc(
                         Nova.Blue.copy(alpha = (1f - q) * 0.8f), -40f, 80f, false,
@@ -340,17 +340,17 @@ fun ArrivedCheck(size: Dp = 132.dp) {
 @Composable
 fun Spinner(size: Dp = 96.dp) {
     val reduced = LocalReducedMotion.current
+    // read while drawing only (v3.3)
     val spin = if (reduced) {
-        0f
+        null
     } else {
         val loop = rememberInfiniteTransition(label = "spinner")
-        val v by loop.animateFloat(0f, 360f, infiniteRepeatable(tween(1_200, easing = LinearEasing)), label = "spin")
-        v
+        loop.animateFloat(0f, 360f, infiniteRepeatable(tween(1_200, easing = LinearEasing)), label = "spin")
     }
     Canvas(Modifier.size(size)) {
         val w = 9.dp.toPx()
         drawCircle(Nova.SkySoft, this.size.minDimension / 2f - w / 2f, style = Stroke(w))
-        drawArc(Nova.Blue, spin, 100f, false, Offset(w / 2f, w / 2f), Size(this.size.width - w, this.size.height - w), style = Stroke(w, cap = StrokeCap.Round))
+        drawArc(Nova.Blue, spin?.value ?: 0f, 100f, false, Offset(w / 2f, w / 2f), Size(this.size.width - w, this.size.height - w), style = Stroke(w, cap = StrokeCap.Round))
     }
 }
 

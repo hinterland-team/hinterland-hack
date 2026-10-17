@@ -61,7 +61,8 @@ private enum class GuideLayout { PICKUP, PACE, WALK, ARRIVED, END }
 private fun GuidePhase.layout(): GuideLayout = when (this) {
     GuidePhase.TO_PICKUP, GuidePhase.PICKUP -> GuideLayout.PICKUP
     GuidePhase.PACE -> GuideLayout.PACE
-    GuidePhase.WALKING, GuidePhase.CHECKING, GuidePhase.WAITING, GuidePhase.PAUSED, GuidePhase.LOOKING, GuidePhase.LOST -> GuideLayout.WALK
+    GuidePhase.WALKING, GuidePhase.CHECKING, GuidePhase.WAITING, GuidePhase.PAUSED, GuidePhase.LOOKING, GuidePhase.LOST,
+    GuidePhase.BLOCKED -> GuideLayout.WALK
     GuidePhase.ARRIVED -> GuideLayout.ARRIVED
     GuidePhase.NOBODY_CAME, GuidePhase.FAILED, GuidePhase.CANCELLED -> GuideLayout.END
 }
@@ -210,6 +211,11 @@ private fun WalkNow(g: GuideUi, actions: ScreenActions) {
             "Help is coming", "A team member is on the way.",
             { IconBadge(GlyphKind.PERSON, Nova.Amber, Nova.AmberSoft, pulse = true) }, imHere,
         )
+        // the way stays blocked: otto waits here with the patient until the team comes (6.7)
+        GuidePhase.BLOCKED -> Message(
+            "The way is blocked", "Help is on the way. Please wait with me.",
+            { IconBadge(GlyphKind.ROUTE, Nova.Amber, Nova.AmberSoft, pulse = true) },
+        )
         else -> Column(Modifier.fillMaxSize()) {
             Headline(g.destination, maxLines = 1)
             g.destinationNote?.let { Say(it, maxLines = 1) }
@@ -223,7 +229,8 @@ private fun WalkNow(g: GuideUi, actions: ScreenActions) {
                     when {
                         g.phase == GuidePhase.CHECKING -> "Are you still with me?"
                         g.detour -> "The way is blocked. Stay close to me."
-                        else -> "Please follow me."
+                        // walk beside (6.7): where otto's radar sees the patient
+                        else -> "Please walk on my ${g.side.wire}."
                     },
                     style = text(Big.line, FontWeight.SemiBold, Nova.Teal),
                     maxLines = 1,
@@ -267,12 +274,12 @@ private fun Listening(talk: TalkUi) {
             ring.animateTo(1f, tween(talk.listenMs.toInt(), easing = LinearEasing))
         }
     }
+    // read while drawing only (v3.3): the loop redraws the ring, nothing recomposes
     val breathe = if (reduced || talk.stage == TalkStage.LISTENING) {
-        0f
+        null
     } else {
         val loop = rememberInfiniteTransition(label = "talkWait")
-        val v by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1_100), RepeatMode.Reverse), label = "breathe")
-        v
+        loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1_100), RepeatMode.Reverse), label = "breathe")
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(112.dp), contentAlignment = Alignment.Center) {
@@ -286,7 +293,7 @@ private fun Listening(talk: TalkUi) {
                         style = Stroke(w, cap = StrokeCap.Round),
                     )
                 } else {
-                    drawCircle(Nova.Teal.copy(alpha = 0.25f + 0.25f * breathe), size.minDimension / 2f - w / 2f, style = Stroke(w))
+                    drawCircle(Nova.Teal.copy(alpha = 0.25f + 0.25f * (breathe?.value ?: 0f)), size.minDimension / 2f - w / 2f, style = Stroke(w))
                 }
             }
             Glyph(GlyphKind.MIC, Nova.Teal, 52.dp)

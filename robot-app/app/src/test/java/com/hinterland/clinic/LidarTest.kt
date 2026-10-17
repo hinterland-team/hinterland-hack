@@ -190,31 +190,70 @@ class LidarTest {
         assertTrue(fixes.takeLast(5).all { it == null })
     }
 
+    // ---- v3.3 walk beside: our robot's radar sees -110..+120 deg, the back is blind ----
+
+    private fun ourRadar(seed: Int = 7) = ScanSim(fovDeg = 230.0, startDeg = -110.0, seed = seed)
+
     @Test
-    fun followerWatchFiresOnceAfterFourSeconds() {
-        val w = FollowerWatch()
-        w.start(t0)
-        // never saw the follower in this walk: the radar may just not see this person
-        assertFalse(w.check(t0 + 10_000, rearVisible = true, everSeen = false, lastSeenAt = null))
-        // back not visible: the schedule does the job
-        assertFalse(w.check(t0 + 10_000, rearVisible = false, everSeen = true, lastSeenAt = t0))
-        assertFalse(w.check(t0 + 3_900, rearVisible = true, everSeen = true, lastSeenAt = t0))
-        assertTrue(w.check(t0 + 4_000, rearVisible = true, everSeen = true, lastSeenAt = t0))
-        assertFalse(w.check(t0 + 6_000, rearVisible = true, everSeen = true, lastSeenAt = t0))
-        // after the check-back it counts again from the restart
-        w.start(t0 + 20_000)
-        assertFalse(w.check(t0 + 23_000, rearVisible = true, everSeen = true, lastSeenAt = t0))
-        assertTrue(w.check(t0 + 24_100, rearVisible = true, everSeen = true, lastSeenAt = t0))
+    fun aPatientBesideOnTheLeftIsInTheSideSector() {
+        // next to otto on the left, a little behind: about 108 deg
+        val pts = ourRadar().corridor(halfWidth = 1.5).person(-0.3, 0.9).scan()
+        val c = LegDetector.nearest(pts, Sector.SIDES)
+        assertNotNull(c)
+        assertEquals(0.95, c!!.distance, 0.12)
+        assertTrue(Bearing.of(c.at) in 95.0..120.0)
+        // the old rear-only sector misses most of it (only 100..120 deg of it is in view at all)
+        val wallsOnly = ourRadar().corridor(halfWidth = 1.5).scan()
+        assertNull(LegDetector.nearest(wallsOnly, Sector.SIDES))
     }
 
     @Test
-    fun followerWatchStopsTrustingItselfAfterTwoFalseAlarms() {
-        val w = FollowerWatch()
-        w.falseAlarm()
-        assertTrue(w.trusted)
-        w.falseAlarm()
-        assertFalse(w.trusted)
-        w.start(t0)
-        assertFalse(w.check(t0 + 60_000, rearVisible = true, everSeen = true, lastSeenAt = t0))
+    fun aPatientRightBehindIsInvisibleOnOurRobot() {
+        // field test 17.10: straight behind otto the radar sees nothing, so the follower flickered
+        val pts = ourRadar().corridor(halfWidth = 1.5).person(-1.1, 0.0).scan()
+        assertNull(LegDetector.nearest(pts, Sector.SIDES))
+    }
+
+    @Test
+    fun theOldRearSectorCutTheWallIntoAFakeFollower() {
+        // the edge of our radar's view (-110 deg) cut the corridor wall into a 0.3 m piece in the rear
+        // sector (|a| >= 100), shaped like a person. in the side sectors the wall stays one long shape
+        val pts = ourRadar().corridor(halfWidth = 1.5).scan()
+        assertEquals(LegKind.BLOB, LegDetector.nearest(pts, Sector.REAR)?.kind)
+        assertNull(LegDetector.nearest(pts, Sector.SIDES))
+    }
+
+    @Test
+    fun aWallCutShortByTheRangeLimitIsNoPerson() {
+        // a wall 2.48 m to the side: only a 0.6 m piece of it is within 2.5 m
+        val pts = ourRadar().wall(-6.0, 2.48, 6.0, 2.48).scan()
+        assertNull(LegDetector.nearest(pts, Sector.SIDES))
+        // a real wide shape (a wheelchair) beside otto still counts
+        val chair = ourRadar().box(-0.2, 1.1, w = 0.6, h = 0.6).scan()
+        assertEquals(LegKind.BLOB, LegDetector.nearest(chair, Sector.SIDES)?.kind)
+    }
+
+    @Test
+    fun aPatientBesideIsTrackedEveryFrameWhileOttoDrives() {
+        val tr = FollowerTracker()
+        val fixes = ArrayList<FollowerFix?>()
+        var t = 0.0
+        while (t <= 6.0) {
+            val pose = RobotPose(2.0 + 0.6 * t, 0.0, 0.0)
+            val sim = ourRadar(seed = (t * 10).toInt()).corridor(halfWidth = 1.5, from = -20.0, to = 40.0).person(-0.25, 0.85)
+            fixes += tr.update(t0 + (t * 1000).toLong(), LegDetector.candidates(sim.scan(), Sector.SIDES), pose)
+            t += 0.2
+        }
+        // confirmed after two frames, then never lost: the side watch has nothing to fire on
+        assertTrue(fixes.drop(2).all { it != null })
+        assertTrue(Bearing.of(fixes.last()!!.robot) in 95.0..120.0)
+    }
+
+    @Test
+    fun theSideSectorsAreOneSweepOverTheBack() {
+        // a leg straight behind (angles near +180 and -180) stays one shape in the side sectors too
+        val pts = ScanSim(stepDeg = 0.25).leg(-1.0, 0.0, r = 0.08).scan()
+        assertEquals(1, LegDetector.clusters(pts, Sector.SIDES).size)
+        assertTrue(Sector.SIDES.contains(120.0) && Sector.SIDES.contains(-60.0) && !Sector.SIDES.contains(30.0))
     }
 }

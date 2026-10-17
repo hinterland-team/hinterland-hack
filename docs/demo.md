@@ -34,11 +34,11 @@ Otto stands on its **Reception Point** spot, the way to Dr. Blue is free of bags
 - Judges see: a new row "A17" on the board, Otto's screen mirrored in the robot card, the conversation feed.
 - Speaker: "No name, no reason for the visit. Just a ticket and a room."
 
-**0:50 - 1:40 The walk** (Patient walks behind Otto)
-- Otto starts walking. Speaker switches the big screen to `/map` (or points at the live map on the Reception page): "This is Otto, this is its trail, these dots are what its LiDAR sees, and this orange dot is the patient behind it. 9 metres to go."
+**0:50 - 1:40 The walk** (Patient walks next to Otto, on his left, a little behind - Otto asks for it at the start; his radar sees there, not straight behind)
+- Otto starts walking. Speaker switches the big screen to `/map` (or points at the live map on the Reception page): "This is Otto, this is its trail, these dots are what its LiDAR sees, and this orange dot is the patient beside it. 9 metres to go."
 - Patient taps **Slower** on the phone, a few seconds later **Wait**: Otto stops. Then **Go on**.
 - Patient taps **Talk** and says "How far is it?". Otto answers out loud.
-- Otto turns around once to check on the patient ("All good?") and goes on.
+- While the radar sees the patient beside him, Otto just says a short line and walks on. Every 2nd check he stops for a few seconds, turns to the patient ("All good?") and goes on. If the patient drops back for 5 s, he turns to where they were last seen.
 - Judges see: on the map the arrow moving and the metres going down; in the conversation "asked Otto to walk slower (phone)" and the question; on the journey timeline every step.
 - Speaker: "The patient can steer Otto from behind, where the robot's mics can't hear well."
 
@@ -61,7 +61,7 @@ Otto stands on its **Reception Point** spot, the way to Dr. Blue is free of bags
 | What | Do |
 |---|---|
 | Otto shows "can't drive" / red Out of service box | Start Nova Clinic again from the robot's home screen (not from a notification or the installer). |
-| Otto is blocked by people | Ask the audience to step aside. Otto asks twice, then tries the detour spot, then calls the team: the help alert on the board is part of the story. |
+| Otto is blocked by people | Ask the audience to step aside. Otto asks twice (about 25 s), backs off a little and tries again, then takes a map spot around the jam, then calls the team and waits with the patient: the help alert on the board is part of the story. |
 | The phone page does not open | Show the Wait / Go on / Slower / Faster buttons in the robot card on the dashboard: same commands. |
 | Talk does nothing | Speech-to-text needs https. On the laptop server (http) the patient types the question instead. |
 | No Teams card | Show the room view `/room` on the doctor's phone instead, it updates every 2 seconds. |

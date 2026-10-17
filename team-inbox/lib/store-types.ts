@@ -1,3 +1,4 @@
+import type { NotifyChannel } from "./channel-types";
 import type { MapFrame, NewLog } from "./robot-data";
 import type {
   Counters,
@@ -25,7 +26,11 @@ export type PlacePatch = Partial<Pick<Place, "name" | "spot" | "kind" | "public"
   waitingPlaceId?: string | null;
   viaSpot?: string | null;
   notifyEmail?: string | null;
+  // null = back to the default channels
+  channelIds?: string[] | null;
 };
+
+export type ChannelPatch = Partial<Pick<NotifyChannel, "label" | "config" | "isDefault" | "active">> & { updatedAt: string };
 
 // a journey as stored. version guards against two writers at the same time
 export type StoredJourney = Journey & { version: number };
@@ -111,6 +116,13 @@ export interface Store {
 
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
+
+  // notification channels made on /notifications, oldest first. config has the tokens: server only
+  listChannels(): Promise<NotifyChannel[]>;
+  createChannel(channel: NotifyChannel): Promise<NotifyChannel>;
+  updateChannel(id: string, patch: ChannelPatch): Promise<NotifyChannel | null>;
+  // also takes it off the places that picked it (a place left with none goes back to the defaults)
+  deleteChannel(id: string): Promise<boolean>;
 
   // login failures per hashed address, for the rate limit
   countLoginFailures(key: string, since: string): Promise<number>;

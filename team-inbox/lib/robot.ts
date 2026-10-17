@@ -1,10 +1,11 @@
+import { notifyHelp } from "./channels";
 import { hoursAgo, now, numberOrNull, retention, robotName, today } from "./common";
 import { ApiError, text } from "./http";
 import { markAssigned } from "./journeys";
 import { feedId, readFeed, saveFeed } from "./live-feed";
+import { helpMessage } from "./messages";
 import { cleanMapFrame } from "./robot-data";
 import { getStore } from "./store";
-import { helpCard, sendToTeams } from "./teams";
 import {
   FEED_KINDS,
   FEED_WHO,
@@ -145,7 +146,8 @@ export async function requestHelp(body: Record<string, unknown>, base: string) {
   const ticket = normalizeTicket(body.ticket);
   if (ticket) help.ticket = ticket;
   await store.createHelp(help);
-  const notified = await sendToTeams(process.env.TEAMS_WEBHOOK_URL, helpCard(help, `${base}/`));
+  // to the default channels (the practice teams channel and the ones marked default on /notifications)
+  const notified = await notifyHelp(helpMessage(help, `${base}/`));
   if (notified) await store.setHelpNotified(help.id, true);
   return { help: { ...help, notified }, notified };
 }
