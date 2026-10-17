@@ -46,6 +46,8 @@ object OttoBrain {
     private const val LOG_EVERY_MS = 60_000L
     // an action that never finished does not keep otto "in a conversation" forever
     private const val ACTION_MAX_MS = 6 * 60_000L
+    // "moved by hand" at most this often in the log
+    private const val MOVED_LOG_MS = 10_000L
 
     private class Running(val job: Job, val preemptible: Boolean)
 
@@ -110,6 +112,12 @@ object OttoBrain {
     @Volatile private var lastSnap = Snapshot(now = now())
     @Volatile private var loggedAt = 0L
 
+    // show mode: the small turns; someone moved otto by hand (logged, calm mode spec)
+    private val showMoves = ShowMoves()
+    @Volatile private var movedSum = 0.0
+    @Volatile private var movedLoggedAt = 0L
+    @Volatile private var lowBatteryLogged = false
+
     private fun now() = System.currentTimeMillis()
 
     // runs while the screen is in front (MainActivity). tasks live in our own scope,
@@ -125,7 +133,24 @@ object OttoBrain {
             launch { refreshPlaces() }
             launch { RobotLog.ship() }
             launch { LiveMap.loop() }
+            // docs/robot-setup.md: live settings, the real map and the floors
+            launch { Config.loop() }
+            launch { MapSync.loop() }
         }
+    }
+
+    // a mode change (Modes): a drive that the new mode does not allow stops, a new show starts where otto is
+    fun modeChanged(old: RobotMode, new: RobotMode) {
+        if (new == RobotMode.SHOW) showMoves.reset()
+        if (!ModeRules.drivesHome(new)) returnHomeNow = false
+        val running = current
+        if (running != null && running.preemptible && Brain.stopsFor(lastPlan, new)) {
+            RobotLog.i(LogSource.BRAIN, "${Brain.goal(lastPlan, lastSnap)} stopped: ${new.label} mode")
+            running.job.cancel()
+        }
+        if (new.silent) Robot.stopFollow()
+        lowBatteryLogged = false
+        publish()
     }
 
     // ---- signals (listener threads) ----
@@ -277,8 +302,12 @@ object OttoBrain {
     private suspend fun tick() {
         val now = now()
         val inFlight = if (now - actionAt < ACTION_MAX_MS) actions.get() else 0
+        val mode = Modes.current
         Clinic.expireCheckIn(now)
         Clinic.setChassis(Robot.chassisIssue())
+        // show / calm: the mic stays off (AgentOS opens it again when the app comes to the front)
+        Screen.enforce()
+        noteMovedByHand(now, mode)
         // the self check-in screen counts as a conversation: nothing new starts meanwhile
         val talk = if (Clinic.ui.value.checkIn != null) TalkLevel.ACTIVE
         else Brain.talkLevel(now, agent, agentAt, userSpokeAt, robotSpokeAt, inFlight)
@@ -296,7 +325,17 @@ object OttoBrain {
             look(now, talk)
             checkHome(now)
         }
-        val snap = snapshot(now, talk)
+        // show mode: is a small turn due? (nobody very close, not on the charger)
+        val turn = if (!busy && ModeRules.idleTurns(mode) && Robot.ready) {
+            showMoves.due(now, Robot.peopleDistances()?.let { it.minOrNull() ?: Double.MAX_VALUE }, Robot.chargingNow())
+        } else {
+            null
+        }
+        val snap = snapshot(now, talk, mode, turn)
+        Brain.lowBatteryNote(snap).let { note ->
+            if (note != null && !lowBatteryLogged) RobotLog.w(LogSource.BRAIN, note)
+            lowBatteryLogged = note != null
+        }
         val plan = Brain.decide(snap)
         trackWaiting(plan, now)
         lastSnap = snap
@@ -343,8 +382,20 @@ object OttoBrain {
         Robot.checkHome()
     }
 
-    private fun snapshot(now: Long, talk: TalkLevel) = Snapshot(
+    // calm mode spec: log what happens when someone pushes otto (he does not react)
+    private fun noteMovedByHand(now: Long, mode: RobotMode) {
+        val d = Robot.movedByHand() ?: return
+        movedSum += d
+        if (now - movedLoggedAt < MOVED_LOG_MS) return
+        movedLoggedAt = now
+        RobotLog.i(LogSource.NAV, String.format(java.util.Locale.ROOT, "Otto was moved %.1f m while he did not drive (%s mode)", movedSum, mode.wire))
+        movedSum = 0.0
+    }
+
+    private fun snapshot(now: Long, talk: TalkLevel, mode: RobotMode = Modes.current, turn: ShowTurn? = null) = Snapshot(
         now = now,
+        mode = mode,
+        showTurn = turn,
         robotReady = Robot.ready,
         homeSpot = Robot.home,
         helpActive = helpActive(),
@@ -402,6 +453,8 @@ object OttoBrain {
     }
 
     private fun taskFor(plan: Plan): Task? = when (plan) {
+        is Plan.Refuse -> Task(preemptible = false) { refuse(plan.command, plan.why) }
+        is Plan.Turn -> Task(preemptible = true) { showTurn(plan.turn) }
         is Plan.RunCommand -> Task(preemptible = false) { runCommand(plan.command, plan.excuse) }
         is Plan.Greet -> Task(preemptible = false) { greet(plan.visitorId) }
         Plan.GoCharge -> Task(preemptible = true) { goCharge() }
@@ -411,6 +464,31 @@ object OttoBrain {
     }
 
     // ---- tasks ----
+
+    // a command the mode does not take: closed as refused, a walk's leg as failed, so the dashboard says why
+    private suspend fun refuse(cmd: RobotCommand, why: String) {
+        commands.removeAll { it.id == cmd.id }
+        markHandled(cmd.id)
+        ownByCommand.remove(cmd.id)
+        cmd.journeyId?.let { ownByJourney.remove(it) }
+        refuseNow(cmd, why)
+    }
+
+    private suspend fun refuseNow(cmd: RobotCommand, why: String) {
+        RobotLog.i(LogSource.BRAIN, "Command ${cmd.type}" + (cmd.ticket?.let { " for $it" } ?: "") + " refused: $why")
+        if (cmd.type == RobotCommand.GUIDE) Clinic.refuseGuide(cmd, why)
+        Clinic.commandDone(cmd.id, CommandResult(false, why))
+    }
+
+    // show mode: a small, gentle turn on the spot
+    private suspend fun showTurn(t: ShowTurn) {
+        val ok = Robot.turn(t.degrees.toFloat(), t.left, ShowMoves.TURN_SPEED)
+        showMoves.turned(t, ok, now())
+        RobotLog.d(
+            LogSource.BRAIN,
+            String.format(java.util.Locale.ROOT, "Show turn %.0f deg %s%s, %.0f deg from the start", t.degrees, if (t.left) "left" else "right", if (ok) "" else " (not taken)", showMoves.offsetDeg),
+        )
+    }
 
     private suspend fun runCommand(cmd: RobotCommand, excuse: Boolean) {
         commands.removeAll { it.id == cmd.id }
@@ -447,7 +525,49 @@ object OttoBrain {
             // with a journey it comes from the patient's phone page
             RobotCommand.ASK -> if (cmd.journeyId != null) Clinic.askDuringWalk(cmd) else Clinic.askFromTeam(cmd)
             RobotCommand.WALK_CONTROL -> Clinic.walkControl(cmd)
+            // docs/robot-setup.md 2: refused while guiding (the poll answers that at once), else switch and localise
+            RobotCommand.SWITCH_MAP -> {
+                val r = try {
+                    MapSync.switchMap(cmd)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    CommandResult(false, "Map switch failed: ${e.javaClass.simpleName} ${e.message.orEmpty().take(80)}")
+                }
+                parkedAt = null
+                Clinic.commandDone(cmd.id, r)
+                publish()
+            }
             else -> Clinic.skipCommand(cmd)
+        }
+    }
+
+    // commands that need no body and no turn: at once, also during a walk and in every mode
+    private fun runAtOnce(cmd: RobotCommand) {
+        when (cmd.type) {
+            RobotCommand.SET_MODE -> {
+                val mode = RobotMode.of(cmd.mode)
+                val r = if (mode == null) {
+                    RobotLog.w(LogSource.BRAIN, "set_mode with an unknown mode \"${cmd.mode ?: ""}\"")
+                    CommandResult(false, "Unknown mode \"${cmd.mode ?: ""}\": normal, show or calm")
+                } else {
+                    Modes.request(mode, "dashboard")
+                }
+                scope.launch { Clinic.commandDone(cmd.id, r) }
+            }
+            RobotCommand.CONFIG_CHANGED -> {
+                Config.requestNow("config_changed")
+                scope.launch { Clinic.commandDone(cmd.id) }
+            }
+            // "Recheck servers" on the dashboard's debug page: the servers, the settings, the map image
+            RobotCommand.RECHECK -> scope.launch {
+                RobotLog.i(LogSource.NET, "Recheck asked by the dashboard")
+                Servers.checkAll()
+                Config.requestNow("recheck")
+                MapSync.resend()
+                val up = Servers.states.value.count { it.up == true }
+                Clinic.commandDone(cmd.id, CommandResult(up > 0, "$up of ${Servers.states.value.size} servers answer, using ${ServerList.host(Servers.current)}"))
+            }
         }
     }
 
@@ -538,9 +658,35 @@ object OttoBrain {
         if (running != null && !running.preemptible && !guiding) return
         while (commands.size < MAX_QUEUE) {
             val cmd = Clinic.pollCommand() ?: break
-            RobotLog.i(LogSource.BRAIN, "Command ${cmd.type}" + (cmd.ticket?.let { " for $it" } ?: "") + (cmd.action?.let { " ($it)" } ?: ""))
+            RobotLog.i(
+                LogSource.BRAIN,
+                "Command ${cmd.type}" + (cmd.ticket?.let { " for $it" } ?: "") + (cmd.action?.let { " ($it)" } ?: "") +
+                    (cmd.mode?.let { " ($it)" } ?: "") + (cmd.mapName?.let { " ($it)" } ?: ""),
+            )
             if (cmd.type == RobotCommand.WALK_CONTROL) {
                 if (markHandled(cmd.id)) Clinic.walkControl(cmd) else Clinic.commandDone(cmd.id)
+                continue
+            }
+            // mode, settings, recheck: no body needed, at once
+            if (cmd.type == RobotCommand.SET_MODE || cmd.type == RobotCommand.CONFIG_CHANGED || cmd.type == RobotCommand.RECHECK) {
+                if (markHandled(cmd.id)) runAtOnce(cmd) else Clinic.commandDone(cmd.id)
+                continue
+            }
+            // docs/robot-setup.md 2: no map switch while otto walks with a patient (answered via done + log)
+            if (cmd.type == RobotCommand.SWITCH_MAP && guiding) {
+                if (markHandled(cmd.id)) {
+                    val why = "Otto is walking with a patient. Switch the map after the walk."
+                    RobotLog.w(LogSource.NAV, "Map switch to ${cmd.mapName ?: "?"} refused: $why")
+                    Clinic.commandDone(cmd.id, CommandResult(false, why))
+                } else {
+                    Clinic.commandDone(cmd.id)
+                }
+                continue
+            }
+            // show / calm: walks and words are refused at once, so the dashboard can say why
+            val refused = ModeRules.refuses(Modes.current, cmd.type)
+            if (refused != null) {
+                if (markHandled(cmd.id)) refuseNow(cmd, refused) else Clinic.commandDone(cmd.id)
                 continue
             }
             if (guiding && (cmd.type == RobotCommand.ASK || cmd.type == RobotCommand.SAY)) {
@@ -575,20 +721,25 @@ object OttoBrain {
     private suspend fun heartbeat() {
         var sentAt = 0L
         var sentScreen: ScreenMirror? = null
+        var sentSetup: SetupState? = null
         while (true) {
             val now = now()
             val screen = Clinic.ui.value.mirror()
+            // a new settings version, map, localisation or mode goes out at once too (the dashboard's "applied")
+            val setup = SetupState(MapSync.current, MapSync.localised, Config.version, Modes.current, Modes.pending, MapSync.maps)
             val moving = Clinic.ui.value.walking || Guide.current?.walking == true
             val every = if (moving) HEARTBEAT_MOVING_MS else HEARTBEAT_MS
-            val due = now - sentAt >= every || (screen != sentScreen && now - sentAt >= SCREEN_PUSH_MIN_MS)
+            val changed = screen != sentScreen || setup != sentSetup
+            val due = now - sentAt >= every || (changed && now - sentAt >= SCREEN_PUSH_MIN_MS)
             if (due) {
                 Robot.refreshPower()
                 val pose = Robot.robotPose()
                 publish(pose)
                 sentAt = now
                 sentScreen = screen
+                sentSetup = setup
                 if (Backend.configured) {
-                    val body = Json.heartbeat(Backend.robot, _status.value, screen, Servers.current, BuildConfig.VERSION_NAME, pose)
+                    val body = Json.heartbeat(Backend.robot, _status.value, screen, Servers.current, BuildConfig.VERSION_NAME, pose, setup)
                     withContext(Dispatchers.IO) { runCatching { Backend.heartbeat(body) } }
                         .onFailure { e -> quietLog("heartbeat: ${Backend.friendly(e)}") }
                 }
@@ -658,7 +809,7 @@ object OttoBrain {
         helpActive() -> "Urgent help was called at reception"
         issue != null -> issue.detail
         !Robot.ready && now - startedAt > BOOT_GRACE_MS -> Robot.note ?: "Robot API not connected"
-        else -> failure?.takeIf { now - it.first < FAILURE_SHOW_MS }?.second
+        else -> failure?.takeIf { now - it.first < FAILURE_SHOW_MS }?.second ?: Brain.lowBatteryNote(lastSnap)
     }
 
     // the backend may be down for a while; one line a minute is enough (never the token)

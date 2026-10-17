@@ -34,8 +34,10 @@ data class LineContext(
     val destination: String,
     val side: WalkSide = WalkSide.LEFT,
     val arrival: Arrival = Arrival.ROOM,
-    // the patient asked at the robot: the start line also tells them their ticket
+    // the patient asked at the robot: TICKET_IS tells them their ticket (said together with the next line)
     val ownRequest: Boolean = false,
+    // ... and it was a check-in (not only "take me to the exit")
+    val checkIn: Boolean = false,
 )
 
 enum class LineKey {
@@ -43,6 +45,8 @@ enum class LineKey {
     CALL_OUT, FOUND_AGAIN, HALF_WAY, ALMOST_THERE, ARRIVED, SLOWER_OK, FASTER_OK, PAUSE_OK, EXCUSE_ME,
     // a blocked way (Detours.kt): stepping back, another way, the team is called, going back
     BACK_UP, DETOUR, BLOCKED_HELP, GOING_BACK,
+    // asked at the robot: the ticket, said as one line with the pace question or the start (SpeechTurns)
+    TICKET_IS,
 }
 
 object LineSet {
@@ -55,9 +59,12 @@ object LineSet {
 
     // the fixed english line (also the example for the llm). calm, hardly any exclamation marks (Voice.STYLE)
     fun english(key: LineKey, c: LineContext): String = when (key) {
-        LineKey.START -> buildString {
-            if (c.ownRequest && c.ticket.isNotBlank()) append("Your ticket is ${c.ticket}. ")
-            append("Please walk next to me, on my ${c.side.wire} side, a little behind me. We're going to ${c.destination}.")
+        // the ticket is never in here: TICKET_IS is said with the line before the walk (no line twice)
+        LineKey.START -> "Please walk next to me, on my ${c.side.wire} side, a little behind me. We're going to ${c.destination}."
+        LineKey.TICKET_IS -> when {
+            c.ticket.isBlank() -> if (c.checkIn) "You're checked in." else "Alright."
+            c.checkIn -> "You're checked in. Your ticket is ${c.ticket}."
+            else -> "Your ticket is ${c.ticket}."
         }
         LineKey.PACE_QUESTION -> "Shall I walk normally, or a bit slower?"
         LineKey.CHECK_OK -> "Good. Let's keep going."
@@ -88,12 +95,13 @@ object LineSet {
 
     // what the line has to say, for the llm
     fun task(key: LineKey, c: LineContext): String = when (key) {
-        LineKey.START -> buildString {
-            if (c.ownRequest && c.ticket.isNotBlank()) append("Tell the patient their ticket is ${c.ticket}. ")
-            append(
-                "Ask them to walk next to you on your ${c.side.wire} side, a little behind you, so you can see them, " +
-                    "and say you are going to ${c.destination} together.",
-            )
+        LineKey.START ->
+            "Ask them to walk next to you on your ${c.side.wire} side, a little behind you, so you can see them, " +
+                "and say you are going to ${c.destination} together. Do not mention the ticket."
+        LineKey.TICKET_IS -> when {
+            c.ticket.isBlank() -> if (c.checkIn) "Say in a few words that they are checked in." else "Say a short friendly okay."
+            c.checkIn -> "Tell the patient in one short sentence that they are checked in and their ticket is ${c.ticket}."
+            else -> "Tell the patient in one short sentence that their ticket is ${c.ticket}."
         }
         LineKey.PACE_QUESTION -> "Ask in one short question whether you should walk normally or a bit slower."
         LineKey.CHECK_OK -> "The patient is right with you: say very briefly and warmly that all is fine and you keep going."
@@ -131,6 +139,9 @@ object LineSet {
         "You write the short lines Otto, the guide robot of a doctor's practice, says out loud while he walks a patient " +
             "to a room. ${Voice.STYLE} Each line is one or two very short sentences. A patient is only a ticket number, " +
             "never a name. No medical advice, no symptoms, no quotation marks inside the lines, no stage directions."
+
+    // with the dashboard's extra style note (voice.styleNote)
+    fun system(note: String): String = if (note.isBlank()) SYSTEM else "$SYSTEM Otto's style also: ${note.trim()}"
 
     // the user message: the language, then one line per key with what to say and the english example
     fun prompt(c: LineContext, lang: Lang): String = buildString {

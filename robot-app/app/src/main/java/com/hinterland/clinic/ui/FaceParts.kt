@@ -75,10 +75,16 @@ internal enum class Mouth(@DrawableRes val res: Int = 0) {
 
 internal enum class Fx { RINGS, DOTS, SPARKLES, CONFETTI, HEARTS, ZZZ, QUESTION, SWEAT, NOTES }
 
-// little things otto does by himself when nobody needs him for a while (and the tired yawn)
-internal enum class Act { NONE, LOOK_AROUND, WINK, HUM, STRETCH, TILT, YAWN }
+// little things otto does by himself when nobody needs him for a while (and the tired yawn).
+// SING: show mode only, the mouth moves like singing, notes float up, no sound
+internal enum class Act { NONE, LOOK_AROUND, WINK, HUM, STRETCH, TILT, YAWN, SING }
 
 internal val IDLE_ACTS = listOf(Act.LOOK_AROUND, Act.WINK, Act.HUM, Act.STRETCH, Act.TILT)
+
+// show mode (RobotModes.kt): livelier, and he "sings" now and then
+internal val SHOW_ACTS = listOf(Act.LOOK_AROUND, Act.SING, Act.WINK, Act.LOOK_AROUND, Act.SING, Act.TILT, Act.STRETCH)
+
+private val SING_TALK = listOf(Mouth.O, Mouth.LAUGH, Mouth.O, Mouth.SMILE, Mouth.O)
 
 private val HAPPY_TALK = listOf(Mouth.O, Mouth.LAUGH, Mouth.O, Mouth.SMILE)
 private val SAD_TALK = listOf(Mouth.O, Mouth.FROWN)
@@ -142,6 +148,7 @@ internal fun poseFor(mood: Mood): Pose = when (mood) {
 internal fun Pose.with(act: Act): Pose = when (act) {
     Act.YAWN -> copy(eyes = Eye.SQUINT, lid = 0.35f, mouth = Mouth.O, mouthScale = 1.35f, brow = -1f, browTilt = 4f)
     Act.HUM -> copy(eyes = Eye.SQUINT, lid = 0.85f, mouth = Mouth.O, mouthScale = 0.55f, fx = fx + Fx.NOTES)
+    Act.SING -> copy(eyes = Eye.SQUINT, lid = 0.9f, brow = 7f, mouth = Mouth.O, fx = fx + Fx.NOTES, talk = SING_TALK)
     Act.STRETCH -> copy(eyes = Eye.LAUGH, brow = 10f, mouth = Mouth.O, mouthScale = 0.8f)
     Act.WINK -> copy(browAsym = -5f, mouth = Mouth.LAUGH)
     Act.TILT -> copy(eyes = Eye.GLANCE, browAsym = 6f)

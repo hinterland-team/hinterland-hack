@@ -40,6 +40,9 @@ class NovaApp : Application() {
                         "If someone needs a person from the practice team, use CALL_STAFF with urgency normal. " +
                         "If someone describes an emergency or feels very unwell, immediately use CALL_STAFF with urgency urgent " +
                         "and tell them to call 112 right away. " +
+                        // field test 17.10: the agent's own sentence and the action's answer came one after the other
+                        "Each of these actions says its result out loud itself: when you use one, do not add a sentence of your " +
+                        "own before or after it, and say only one thing at a time. " +
                         "Otherwise talk freely and kindly. Keep every answer short. Always answer in the language the person speaks."
                 )
                 // without SAY the planner cannot ask follow-up questions out loud
@@ -49,6 +52,8 @@ class NovaApp : Application() {
             override fun onExecuteAction(action: Action, params: Bundle?): Boolean = false
         }
 
+        // voice.volume (a live setting) goes to the music stream
+        Audio.init(this)
         Clinic.start()
         // nova deploy must not replace the app while otto walks someone
         DeployHold.start(this)

@@ -57,8 +57,9 @@ private const val IDLE_ACT_AFTER_MS = 15_000L
 // otto's face: the doctor art as a rig (FaceParts.kt). every mood has a pose; on top he blinks,
 // glances around, nods, hops when happy, droops when sorry, and his mouth talks in any mood.
 // with reduced motion the face stays still and only changes its expression.
+// show = show mode (RobotModes.kt): his little habits come often, with a silent "singing" now and then
 @Composable
-fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) {
+fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false, show: Boolean = false) {
     val reduced = LocalReducedMotion.current
     // the pictures are decoded once per process (FaceSprites), not again when the face comes back
     val res = LocalContext.current.resources
@@ -102,6 +103,8 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
 
     var act by remember { mutableStateOf(Act.NONE) }
     val pose = poseFor(shown).with(act)
+    // the mouth moves with syllables while he talks, and while he "sings" in show mode (no sound)
+    val mouthMoves = talking || act == Act.SING
 
     val blink = remember { Animatable(1f) }
     val wink = remember { Animatable(1f) }
@@ -157,8 +160,8 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
         }
     }
 
-    // where he looks, and his little habits when nobody needs him
-    LaunchedEffect(shown, talking, reduced) {
+    // where he looks, and his little habits when nobody needs him (in show mode all the time)
+    LaunchedEffect(shown, talking, reduced, show) {
         act = Act.NONE
         launch { wink.animateTo(1f, tween(120)) }
         launch { sway.animateTo(0f, tween(250)) }
@@ -188,10 +191,11 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
             else -> {
                 val since = TimeSource.Monotonic.markNow()
                 while (true) {
-                    delay(Random.nextLong(1_200, 3_400))
-                    val bored = shown == Mood.IDLE && !talking && since.elapsedNow().inWholeMilliseconds > IDLE_ACT_AFTER_MS
-                    if (bored && Random.nextInt(3) == 0) {
-                        val a = IDLE_ACTS.random()
+                    delay(if (show) Random.nextLong(900, 2_400) else Random.nextLong(1_200, 3_400))
+                    val bored = (show && !talking) ||
+                        (shown == Mood.IDLE && !talking && since.elapsedNow().inWholeMilliseconds > IDLE_ACT_AFTER_MS)
+                    if (bored && Random.nextInt(if (show) 2 else 3) == 0) {
+                        val a = if (show) SHOW_ACTS.random() else IDLE_ACTS.random()
                         act = a
                         try {
                             perform(a, gaze, wink, sway, squash)
@@ -231,10 +235,10 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
     }
 
     // talking: syllables of different sizes, short pauses, the brows lift on the strong ones
-    LaunchedEffect(talking, shown, reduced) {
-        val p = poseFor(shown)
+    LaunchedEffect(mouthMoves, shown, reduced) {
+        val p = poseFor(shown).with(if (act == Act.SING) Act.SING else Act.NONE)
         talkShape.value = p.talk.first()
-        if (!talking) {
+        if (!mouthMoves) {
             talkAmp.animateTo(0f, tween(150))
             return@LaunchedEffect
         }
@@ -283,10 +287,10 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
     // the mouth: the same crossfade (70 ms between syllables, else the fade), driven from the syllables
     // themselves so they never recompose the face
     val mouthW = remember {
-        val first = if (talking) talkShape.value else pose.mouth
+        val first = if (mouthMoves) talkShape.value else pose.mouth
         Mouth.entries.map { Animatable(if (it == first) 1f else 0f) }
     }
-    val talkingNow by rememberUpdatedState(talking)
+    val talkingNow by rememberUpdatedState(mouthMoves)
     val restMouth by rememberUpdatedState(pose.mouth)
     LaunchedEffect(reduced) {
         snapshotFlow { if (talkingNow) talkShape.value else restMouth }.collect { mouth ->
@@ -368,9 +372,9 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
                                 }
                             }
 
-                            // mouth: opens with the syllables while talking
+                            // mouth: opens with the syllables while talking (and singing in show mode)
                             val m = Rig.Mouth + Offset(g.x * 0.3f, 0f)
-                            val talkOpen = if (talking) 0.72f + 0.5f * talkAmp.value else 1f
+                            val talkOpen = if (mouthMoves) 0.72f + 0.5f * talkAmp.value else 1f
                             withTransform({
                                 translate(m.x, m.y)
                                 scale(mouthScale.value, mouthScale.value * talkOpen, Offset.Zero)
@@ -458,6 +462,14 @@ private suspend fun perform(a: Act, gaze: Animatable<Offset, AnimationVector2D>,
             repeat(4) {
                 sway.animateTo(3f, tween(400, easing = FastOutSlowInEasing))
                 sway.animateTo(-3f, tween(400, easing = FastOutSlowInEasing))
+            }
+            sway.animateTo(0f, tween(300))
+        }
+        // show mode: swaying to the beat while the mouth sings (the talk effect moves it, act == SING)
+        Act.SING -> {
+            repeat(6) {
+                sway.animateTo(4f, tween(380, easing = FastOutSlowInEasing))
+                sway.animateTo(-4f, tween(380, easing = FastOutSlowInEasing))
             }
             sway.animateTo(0f, tween(300))
         }

@@ -52,8 +52,17 @@ object Backend {
         return if (reply.code == 204) null else Json.command(reply.body)
     }
 
-    fun commandDone(id: String) {
-        call("POST", "/api/robot/commands/${enc(id)}/done", JSONObject())
+    // result = { ok, detail } for commands that can be refused or fail (switch_map, set_mode, a walk in show mode)
+    fun commandDone(id: String, result: CommandResult? = null) {
+        call("POST", "/api/robot/commands/${enc(id)}/done", Json.commandDone(result))
+    }
+
+    // GET /api/robot/config -> { version, settings } (docs/robot-setup.md 3), the raw answer
+    fun config(): String = call("GET", "/api/robot/config?robot=${enc(robot)}").body
+
+    // the floor plan of a map (docs/robot-setup.md 1), 204
+    fun mapImage(body: JSONObject) {
+        call("POST", "/api/robot/map/image", body, readTimeoutMs = 30_000)
     }
 
     // returns the help request id (null if the backend did not send one). summary has no health details.
@@ -147,10 +156,10 @@ object Backend {
 
     private class Reply(val code: Int, val body: String)
 
-    private fun call(method: String, path: String, body: JSONObject? = null): Reply {
+    private fun call(method: String, path: String, body: JSONObject? = null, readTimeoutMs: Int = 10_000): Reply {
         if (base.isEmpty()) throw BackendException("teamInbox.url is missing in local.properties")
         try {
-            return send(method, path, body)
+            return send(method, path, body, readTimeoutMs)
         } catch (e: IOException) {
             // the network is gone or this server is down: look for another one soon
             Servers.reportFailure()
@@ -158,13 +167,13 @@ object Backend {
         }
     }
 
-    private fun send(method: String, path: String, body: JSONObject?): Reply {
+    private fun send(method: String, path: String, body: JSONObject?, readTimeoutMs: Int): Reply {
         val conn = URL(base + path).openConnection() as HttpURLConnection
         try {
             // android's HttpURLConnection (okhttp inside) accepts PATCH, the plain jvm one would not
             conn.requestMethod = method
             conn.connectTimeout = 5_000
-            conn.readTimeout = 10_000
+            conn.readTimeout = readTimeoutMs
             conn.setRequestProperty("Accept", "application/json")
             if (token.isNotBlank()) {
                 conn.setRequestProperty("Authorization", "Bearer $token")

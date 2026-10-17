@@ -23,6 +23,8 @@ data class Place(
     val waitingPlaceId: String? = null,
     // optional waypoint otto tries once when the way to this place is blocked (docs/journeys.md 6.6)
     val viaSpot: String? = null,
+    // the floor map the place is on, empty = any (docs/robot-setup.md 2)
+    val mapName: String? = null,
 ) {
     // what otto calls it: "Room B204" when it has a room number, else its name
     val label: String get() = room?.let { "Room $it" } ?: name
@@ -32,6 +34,10 @@ data class Place(
 data class CheckInTarget(val to: Place, val forPlace: Place)
 
 object Places {
+
+    // the places on the floor otto is on (and those without a map). otto cannot take the elevator, so he only
+    // offers and walks to these (docs/robot-setup.md 2)
+    fun onMap(places: List<Place>, mapName: String?): List<Place> = places.filter { Floors.onMap(it.mapName, mapName) }
 
     // patients may ask for these: places marked public, plus exit and reception (always public)
     fun public(places: List<Place>): List<Place> =

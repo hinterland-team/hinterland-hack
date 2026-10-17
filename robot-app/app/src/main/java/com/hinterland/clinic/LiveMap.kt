@@ -19,10 +19,12 @@ data class MapReport(
     val followerSource: String? = null,
     val target: MapPlace? = null,
     val remainingMeters: Double? = null,
+    // the robot's maps (floors), null = not due this time
+    val maps: List<FloorMap>? = null,
 )
 
 // every 2 s while moving (v3.3, was 1 s: half the json and network work), every 15 s when idle;
-// places on change or every 60 s
+// places on change or every 60 s. the two intervals are live settings (sensors.mapMovingS / mapIdleS)
 class MapRate(
     private val movingMs: Long = MOVING_MS,
     private val idleMs: Long = IDLE_MS,
@@ -31,8 +33,20 @@ class MapRate(
     private var sentAt = 0L
     private var placesAt = 0L
     private var placesKey: Int? = null
+    private var mapsAt = 0L
+    private var mapsKey: Int? = null
 
-    fun due(now: Long, moving: Boolean): Boolean = now - sentAt >= if (moving) movingMs else idleMs
+    fun due(now: Long, moving: Boolean, movingEveryMs: Long = movingMs, idleEveryMs: Long = idleMs): Boolean =
+        now - sentAt >= if (moving) movingEveryMs else idleEveryMs
+
+    // the floors: on change or with the places every minute
+    fun mapsDue(now: Long, maps: List<FloorMap>): Boolean =
+        maps.isNotEmpty() && (maps.hashCode() != mapsKey || now - mapsAt >= placesMs)
+
+    fun mapsSent(now: Long, maps: List<FloorMap>) {
+        mapsAt = now
+        mapsKey = maps.hashCode()
+    }
 
     fun sent(now: Long) {
         sentAt = now
@@ -94,19 +108,22 @@ object LiveMap {
 
     private const val TICK_MS = 500L
     private const val FAIL_PAUSE_MS = 10_000L
-    private const val MAP_NAME_MS = 60_000L
     private const val PLACES_REFRESH_MS = 60_000L
     private const val PLACES_RETRY_MS = 15_000L
 
     private val rate = MapRate()
     @Volatile private var places: List<MapPlace> = emptyList()
     @Volatile private var placesAt = 0L
-    @Volatile private var mapName: String? = null
-    @Volatile private var mapNameAt = 0L
     @Volatile private var failures = 0
 
     // the map spots otto knows (for "near <spot>" in the heartbeat)
     fun knownPlaces(): List<MapPlace> = places
+
+    // otto is on another map now: its spots at the next frame
+    fun mapChanged() {
+        placesAt = 0L
+        places = emptyList()
+    }
 
     // runs with the brain
     suspend fun loop() {
@@ -121,32 +138,33 @@ object LiveMap {
         val now = System.currentTimeMillis()
         val guide = Guide.current
         val moving = Clinic.ui.value.walking || guide?.walking == true
-        if (!rate.due(now, moving)) return
+        val s = Config.current
+        if (!rate.due(now, moving, s.mapMovingS * 1000L, s.mapIdleS * 1000L)) return
         val pose = Robot.robotPose() ?: return
         // map spots: every minute, every 15 s while otto has none yet
         if (now - placesAt >= PLACES_REFRESH_MS || (places.isEmpty() && now - placesAt >= PLACES_RETRY_MS)) {
             placesAt = now
             Robot.mapPlaces().takeIf { it.isNotEmpty() }?.let { places = it }
         }
-        if (now - mapNameAt >= MAP_NAME_MS) {
-            mapNameAt = now
-            Robot.mapName()?.let { mapName = it }
-        }
         val list = places
         val sendPlaces = rate.placesDue(now, list)
+        // the floors (docs/robot-setup.md 2), from MapSync
+        val maps = MapSync.maps
+        val sendMaps = rate.mapsDue(now, maps)
         val follower = guide?.followerForMap()
         val targetSpot = guide?.targetSpot ?: Robot.driving
         val target = targetSpot?.let { WalkMath.find(it, list) }
         val report = MapReport(
             robot = Backend.robot,
             pose = pose,
-            mapName = mapName,
+            mapName = MapSync.current,
             places = list.takeIf { sendPlaces },
             scan = Radar.mapScan(now).orEmpty(),
             follower = follower?.first,
             followerSource = follower?.second,
             target = target,
             remainingMeters = target?.let { pose.point.distanceTo(it.point) },
+            maps = maps.takeIf { sendMaps },
         )
         val body = Json.mapReport(report)
         rate.sent(now)
@@ -155,6 +173,7 @@ object LiveMap {
             if (failures > 0) RobotLog.i(LogSource.NET, "Live map is sending again")
             failures = 0
             if (sendPlaces) rate.placesSent(now, list)
+            if (sendMaps) rate.mapsSent(now, maps)
         } else {
             if (failures == 0) RobotLog.w(LogSource.NET, "Live map not sent: ${Backend.friendly(ok.exceptionOrNull()!!)}")
             failures++

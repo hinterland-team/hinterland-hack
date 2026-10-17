@@ -44,11 +44,13 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinterland.clinic.GuidePhase
 import com.hinterland.clinic.GuideUi
 import com.hinterland.clinic.Pace
+import com.hinterland.clinic.ScreenPrefs
 import com.hinterland.clinic.TalkStage
 import com.hinterland.clinic.TalkUi
 import com.hinterland.clinic.UiState
@@ -84,8 +86,8 @@ fun GuideContent(state: UiState, actions: ScreenActions) {
         val now = state.guide ?: g
         when (layout) {
             GuideLayout.PICKUP -> Pickup(now, actions)
-            GuideLayout.PACE -> PaceQuestion(actions)
-            GuideLayout.WALK -> Walk(now, actions)
+            GuideLayout.PACE -> PaceQuestion(actions, state.screen.talkHints)
+            GuideLayout.WALK -> Walk(now, actions, state.screen)
             GuideLayout.ARRIVED -> Arrived(now, actions)
             GuideLayout.END -> End(now)
         }
@@ -161,11 +163,11 @@ private fun PhoneCard(url: String) {
 // ---- pace ----
 
 @Composable
-private fun PaceQuestion(actions: ScreenActions) {
+private fun PaceQuestion(actions: ScreenActions, talkHints: Boolean) {
     Column(Modifier.fillMaxSize()) {
         Headline("How shall we walk?")
         Spacer(Modifier.height(Space.xs))
-        Say("Tap or just tell me.")
+        Say(if (talkHints) "Tap or just tell me." else "Please tap.")
         Spacer(Modifier.height(Space.l))
         Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
             PictureButton("Normal", GlyphKind.PACE_3) { actions.pace(Pace.NORMAL) }
@@ -177,7 +179,7 @@ private fun PaceQuestion(actions: ScreenActions) {
 // ---- walking, check-back, waiting, lost ----
 
 @Composable
-private fun Walk(g: GuideUi, actions: ScreenActions) {
+private fun Walk(g: GuideUi, actions: ScreenActions, screen: ScreenPrefs) {
     val reduced = LocalReducedMotion.current
     AnimatedContent(
         targetState = g.talk != null,
@@ -189,12 +191,23 @@ private fun Walk(g: GuideUi, actions: ScreenActions) {
         modifier = Modifier.fillMaxSize(),
     ) { talking ->
         val talk = g.talk
-        if (talking && talk != null) Talk(talk, actions) else WalkNow(g, actions)
+        if (talking && talk != null) Talk(talk, actions, screen.talkHints) else WalkNow(g, actions, screen.privacyLine)
+    }
+}
+
+// docs/journeys.md 1: a short privacy line during the walk (screen.privacyLine, empty = none)
+@Composable
+private fun PrivacyLine(line: String) {
+    if (line.isBlank()) return
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Glyph(GlyphKind.CHECK, Nova.InkFaint, 26.dp)
+        Spacer(Modifier.width(Space.xs))
+        Text(line, style = text(22.sp, FontWeight.Medium, Nova.InkSoft), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable
-private fun WalkNow(g: GuideUi, actions: ScreenActions) {
+private fun WalkNow(g: GuideUi, actions: ScreenActions, privacyLine: String) {
     val imHere = @Composable { BigButton("I'm here", GlyphKind.CHECK, onClick = actions.imHere, height = Big.button) }
     when (g.phase) {
         GuidePhase.WAITING -> Message("I'll wait for you", "Take your time.", { IconBadge(GlyphKind.PAUSE, Nova.Teal, Nova.TealSoft) }, imHere)
@@ -239,6 +252,9 @@ private fun WalkNow(g: GuideUi, actions: ScreenActions) {
             if (g.needsPresence) {
                 Spacer(Modifier.height(Space.m))
                 imHere()
+            } else if (privacyLine.isNotBlank()) {
+                Spacer(Modifier.height(Space.s))
+                PrivacyLine(privacyLine)
             }
         }
     }
@@ -246,7 +262,7 @@ private fun WalkNow(g: GuideUi, actions: ScreenActions) {
 
 // face to face at a check-back: the question, otto listening, three big answers
 @Composable
-private fun Talk(talk: TalkUi, actions: ScreenActions) {
+private fun Talk(talk: TalkUi, actions: ScreenActions, talkHints: Boolean) {
     Column(Modifier.fillMaxSize()) {
         Headline(talk.question.substringBefore('?').trim() + "?")
         talk.question.substringAfter('?', "").trim().takeIf { it.isNotEmpty() }?.let {
@@ -254,7 +270,7 @@ private fun Talk(talk: TalkUi, actions: ScreenActions) {
             Say(it, maxLines = 1)
         }
         Spacer(Modifier.weight(1f))
-        Listening(talk)
+        Listening(talk, talkHints)
         Spacer(Modifier.weight(1f))
         Buttons {
             BigButton("All good", GlyphKind.CHECK, onClick = actions.allGood, modifier = Modifier.weight(1.3f), height = Big.button)
@@ -266,7 +282,7 @@ private fun Talk(talk: TalkUi, actions: ScreenActions) {
 
 // a mic in a soft circle; while otto listens a ring runs down over the listening time
 @Composable
-private fun Listening(talk: TalkUi) {
+private fun Listening(talk: TalkUi, talkHints: Boolean) {
     val reduced = LocalReducedMotion.current
     val ring = remember(talk.id) { Animatable(talk.listened ?: 0f) }
     LaunchedEffect(talk.id, talk.stage) {
@@ -309,7 +325,7 @@ private fun Listening(talk: TalkUi) {
                 style = text(40.sp, FontWeight.Bold, Nova.Teal),
             )
             Spacer(Modifier.height(Space.xs))
-            Say("Just say it, or tap below.", maxLines = 1)
+            Say(if (talkHints) "Just say it, or tap below." else "Tap below.", maxLines = 1)
         }
     }
 }

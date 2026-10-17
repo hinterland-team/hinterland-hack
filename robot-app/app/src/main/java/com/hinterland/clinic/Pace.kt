@@ -37,14 +37,15 @@ object PaceTable {
     const val MIN_ANGULAR = 0.4
     const val MAX_ANGULAR = 1.4
 
-    fun linear(pace: Pace): Double = when (pace) {
+    // the speeds are live settings (walk.speedNormal / speedSlow / speedVerySlow); these are the defaults
+    fun linear(pace: Pace, settings: Settings? = null): Double = settings?.speed(pace) ?: when (pace) {
         Pace.NORMAL -> 0.6
         Pace.SLOW -> 0.4
         Pace.VERY_SLOW -> 0.25
     }
 
-    fun speed(pace: Pace): Speed {
-        val v = linear(pace).coerceIn(MIN_LINEAR, MAX_LINEAR)
+    fun speed(pace: Pace, settings: Settings? = null): Speed {
+        val v = linear(pace, settings).coerceIn(MIN_LINEAR, MAX_LINEAR)
         return Speed(v, angularFor(v))
     }
 

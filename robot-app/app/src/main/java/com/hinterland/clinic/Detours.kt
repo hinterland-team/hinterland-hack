@@ -31,11 +31,12 @@ interface WayBlock {
 // the blocked count of one leg. each attempt (the way as it is, then every detour step) has a budget:
 // ask people to step aside up to `asks` times, give up graceMs after the last ask or when the attempt was
 // blocked longer than limitMs in total. a stop in between (check-back, pace change) keeps the count.
+// limitMs = way.blockedS (a live setting): blocked this long on one try, then the next detour step
 class LegBlock(
     private val askEveryMs: Long = BlockedWatch.ASK_EVERY_MS,
     private val graceMs: Long = BlockedWatch.GRACE_AFTER_LAST_ASK_MS,
-    limitMs: Long = BlockedWatch.TOTAL_LIMIT_MS,
-    maxAsks: Int = BlockedWatch.MAX_ASKS,
+    private val limitMs: Long = BlockedWatch.TOTAL_LIMIT_MS,
+    private val maxAsks: Int = BlockedWatch.MAX_ASKS,
 ) : WayBlock {
     private val clock = BlockedClock()
     private var asks = 0
@@ -118,7 +119,7 @@ class LegBlock(
         val closer = ref != null && remainingM != null && ref - remainingM >= PROGRESS_M
         val drove = drivenM - (refDriven ?: drivenM) >= DRIVEN_M
         if (!closer && !drove) return false
-        fresh(now, BlockedWatch.TOTAL_LIMIT_MS, BlockedWatch.MAX_ASKS)
+        fresh(now, limitMs, maxAsks)
         refRemaining = remainingM
         refDriven = drivenM
         return true
@@ -132,8 +133,9 @@ class LegBlock(
 
 enum class DetourStep { BACK_OFF, WAYPOINT, HELP }
 
-// which detour step comes next in this leg: A once, then up to maxWaypoints waypoints, then help
-class DetourSteps(private val maxWaypoints: Int = MAX_WAYPOINTS) {
+// which detour step comes next in this leg: A once, then up to maxWaypoints waypoints, then help.
+// backOff = way.backOff, maxWaypoints = way.maxWaypoints (live settings)
+class DetourSteps(private val maxWaypoints: Int = MAX_WAYPOINTS, private val backOff: Boolean = true) {
     var backedOff = false
         private set
     var waypointsTried = 0
@@ -141,7 +143,7 @@ class DetourSteps(private val maxWaypoints: Int = MAX_WAYPOINTS) {
 
     // waypointsLeft = candidates not tried yet
     fun next(waypointsLeft: Int): DetourStep = when {
-        !backedOff -> {
+        backOff && !backedOff -> {
             backedOff = true
             DetourStep.BACK_OFF
         }

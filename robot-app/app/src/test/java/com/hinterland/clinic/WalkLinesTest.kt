@@ -21,9 +21,17 @@ class WalkLinesTest {
         assertTrue(LineSet.english(LineKey.START, ctx).contains("on my left side"))
         assertTrue(LineSet.english(LineKey.START, ctx.copy(side = WalkSide.RIGHT)).contains("on my right side"))
         assertTrue(LineSet.english(LineKey.START, ctx).contains("Room B204"))
-        // asked at the robot: the start line tells the ticket too
+        // the start line never says the ticket: asked at the robot, TICKET_IS is said in one line with the
+        // pace question or the start (SpeechTurns, field test 17.10: no line twice)
         assertFalse(LineSet.english(LineKey.START, ctx).contains("A17"))
-        assertTrue(LineSet.english(LineKey.START, ctx.copy(ownRequest = true)).startsWith("Your ticket is A17."))
+        assertFalse(LineSet.english(LineKey.START, ctx.copy(ownRequest = true)).contains("A17"))
+        assertEquals("Your ticket is A17.", LineSet.english(LineKey.TICKET_IS, ctx.copy(ownRequest = true)))
+        assertEquals("You're checked in. Your ticket is A17.", LineSet.english(LineKey.TICKET_IS, ctx.copy(ownRequest = true, checkIn = true)))
+        assertTrue(LineSet.task(LineKey.TICKET_IS, ctx.copy(checkIn = true)).contains("checked in"))
+        assertTrue(LineSet.task(LineKey.START, ctx).contains("Do not mention the ticket"))
+        // the dashboard's style note goes into the walk lines' prompt
+        assertEquals(LineSet.SYSTEM, LineSet.system(""))
+        assertTrue(LineSet.system("Speak a little slower.").endsWith("Speak a little slower."))
         assertTrue(LineSet.english(LineKey.CALL_OUT, ctx).contains("A17"))
         // the arrival line fits the place
         assertTrue(LineSet.english(LineKey.ARRIVED, ctx).contains("This is Room B204"))

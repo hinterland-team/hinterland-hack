@@ -45,13 +45,15 @@ data class Journey(
     val leg: Leg? get() = legs.lastOrNull()
 }
 
-// a stop of a guide command (from / to). viaSpot = optional waypoint when the way is blocked (6.6)
+// a stop of a guide command (from / to). viaSpot = optional waypoint when the way is blocked (6.6).
+// mapName = the floor map the place is on, when the server sends it (docs/robot-setup.md 2)
 data class Stop(
     val name: String,
     val spot: String,
     val room: String? = null,
     val kind: String? = null,
     val viaSpot: String? = null,
+    val mapName: String? = null,
 ) {
     val label: String get() = room?.let { "Room $it" } ?: name
 }
@@ -74,6 +76,10 @@ data class RobotCommand(
     // guide: the phone companion link (walkUrl from the server, or walkCode to build it)
     val walkCode: String? = null,
     val walkUrl: String? = null,
+    // switch_map: the map to switch to (spot = where otto stands on it, in `spot`)
+    val mapName: String? = null,
+    // set_mode: normal | show | calm
+    val mode: String? = null,
 ) {
     companion object {
         const val GUIDE = "guide"
@@ -81,8 +87,17 @@ data class RobotCommand(
         const val SAY = "say"
         const val ASK = "ask"
         const val WALK_CONTROL = "walk_control"
+        // docs/robot-setup.md
+        const val SWITCH_MAP = "switch_map"
+        const val CONFIG_CHANGED = "config_changed"
+        const val RECHECK = "recheck"
+        // the modes (RobotModes.kt)
+        const val SET_MODE = "set_mode"
     }
 }
+
+// the answer in POST /api/robot/commands/:id/done for commands that can be refused or fail
+data class CommandResult(val ok: Boolean, val detail: String)
 
 // walk_control actions from the phone page or the dashboard (docs/journeys.md 6.4)
 enum class WalkControl(val wire: String) {
@@ -110,6 +125,18 @@ data class JourneyCreated(val journey: Journey?, val command: RobotCommand?)
 
 // battery from the robot's status listener; either part can be missing
 data class PowerReading(val level: Int?, val charging: Boolean?)
+
+// the heartbeat's setup part (docs/robot-setup.md): the map otto is on, localised yes/no, the settings version
+// he runs (null = only the built-in ones), the mode and a mode that waits for the walk to end
+data class SetupState(
+    val mapName: String? = null,
+    val localised: Boolean? = null,
+    val configVersion: Int? = null,
+    val mode: RobotMode = RobotMode.NORMAL,
+    val modePending: RobotMode? = null,
+    // the robot's maps (floors), also in the live map frame
+    val maps: List<FloorMap> = emptyList(),
+)
 
 // the live mirror of the robot screen for the dashboard (heartbeat `screen`)
 data class ScreenMirror(
@@ -176,6 +203,7 @@ object Json {
             selfCheckIn = o.bool("selfCheckIn") ?: false,
             waitingPlaceId = o.str("waitingPlaceId"),
             viaSpot = o.str("viaSpot"),
+            mapName = o.str("mapName"),
         )
     }
 
@@ -243,13 +271,26 @@ object Json {
             action = o.str("action")?.lowercase(Locale.ROOT),
             walkCode = o.str("walkCode"),
             walkUrl = o.str("walkUrl"),
+            mapName = o.str("mapName"),
+            mode = o.str("mode")?.lowercase(Locale.ROOT),
         )
     }
 
     private fun stop(o: JSONObject): Stop? {
         val name = o.str("name")
         val spot = o.str("spot") ?: name ?: return null
-        return Stop(name = name ?: spot, spot = spot, room = o.str("room"), kind = o.str("kind"), viaSpot = o.str("viaSpot"))
+        return Stop(
+            name = name ?: spot, spot = spot, room = o.str("room"), kind = o.str("kind"), viaSpot = o.str("viaSpot"),
+            mapName = o.str("mapName"),
+        )
+    }
+
+    // POST /api/robot/commands/:id/done: { ok, detail } for commands that may be refused (switch_map, set_mode,
+    // a walk in show mode). an empty object for the rest, as before
+    fun commandDone(result: CommandResult?): JSONObject {
+        val o = JSONObject()
+        result?.let { o.put("ok", it.ok).put("detail", it.detail.take(200)) }
+        return o
     }
 
     // PATCH /api/journeys/:id body
@@ -274,6 +315,7 @@ object Json {
         server: String? = null,
         version: String? = null,
         pose: RobotPose? = null,
+        setup: SetupState? = null,
     ): JSONObject {
         val o = JSONObject()
             .put("robot", robot)
@@ -288,7 +330,45 @@ object Json {
         version?.takeIf { it.isNotBlank() }?.let { o.put("version", it) }
         // map coordinates from getPosition, also while driving (field test: position was empty then)
         pose?.let { o.put("pose", JSONObject().put("x", round(it.x, 2)).put("y", round(it.y, 2)).put("theta", round(ScanMath.wrap(it.theta), 2))) }
+        // docs/robot-setup.md: the map otto is on, localised yes/no, the settings version he runs; the mode
+        setup?.let { st ->
+            o.put("mapName", st.mapName?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+            o.put("localised", st.localised ?: JSONObject.NULL)
+            o.put("configVersion", st.configVersion ?: JSONObject.NULL)
+            o.put("mode", st.mode.wire)
+            st.modePending?.let { o.put("modePending", it.wire) }
+            if (st.maps.isNotEmpty()) o.put("maps", floors(st.maps))
+        }
         return o
+    }
+
+    private fun floors(maps: List<FloorMap>): JSONArray {
+        val arr = JSONArray()
+        maps.forEach { m -> arr.put(JSONObject().put("name", m.name).also { j -> m.floor?.let { j.put("floor", it) } }) }
+        return arr
+    }
+
+    // POST /api/robot/map/image (docs/robot-setup.md 1): the floor plan as a grayscale png, base64
+    fun mapImage(robot: String, m: MapImageMeta, pngBase64: String): JSONObject = JSONObject()
+        .put("robot", robot)
+        .put("mapName", m.mapName)
+        .put("width", m.width)
+        .put("height", m.height)
+        .put("resolution", m.resolution)
+        .put("originX", m.originX)
+        .put("originY", m.originY)
+        .put("png", pngBase64)
+        .put("hash", m.hash)
+
+    // Definition.STATUS_POSE_ESTIMATE ({"isPoseEstimate": true}, OrionStar RobotSample) or a bare true / false
+    fun localised(data: String?): Boolean? {
+        val t = data?.trim().orEmpty()
+        when (t.lowercase(Locale.ROOT)) {
+            "true", "1" -> return true
+            "false", "0" -> return false
+        }
+        val o = runCatching { JSONObject(t) }.getOrNull() ?: return null
+        return listOf("isPoseEstimate", "poseEstimate", "isEstimate", "estimate").firstNotNullOfOrNull { o.bool(it) }
     }
 
     // POST /api/robot/logs body
@@ -330,6 +410,8 @@ object Json {
         }
         r.target?.let { t -> o.put("target", JSONObject().put("name", t.name).put("x", round(t.point.x, 2)).put("y", round(t.point.y, 2))) }
         r.remainingMeters?.let { o.put("remainingMeters", round(it, 1)) }
+        // the floors (docs/robot-setup.md 2): only when they are due, like places
+        r.maps?.let { o.put("maps", floors(it)) }
         return o
     }
 
@@ -438,14 +520,23 @@ object Json {
     // RobotApi getPosition: {"px":..,"py":..,"theta":..} (Definition.JSON_NAVI_POSITION_X/Y), x/y also accepted
     fun pose(message: String?): Point? = robotPose(message)?.point
 
-    // RobotApi getPlaceList: [{"name":..,"x":..,"y":..}, ...]
+    // RobotApi getPlaceList: [{"name":..,"x":..,"y":..,"theta":..}, ...]. getPlaceListByMapName may answer with
+    // PlaceBean fields (javap: pointX, pointY, pointTheta, placeNameList, alias), so those are read too
     fun mapPlaces(message: String?): List<MapPlace> {
-        val arr = runCatching { JSONArray(message.orEmpty()) }.getOrNull() ?: return emptyList()
+        val t = message?.trim().orEmpty()
+        val arr = when {
+            t.startsWith("[") -> runCatching { JSONArray(t) }.getOrNull()
+            t.startsWith("{") -> runCatching { JSONObject(t).let { it.optJSONArray("data") ?: it.optJSONArray("list") ?: it.optJSONArray("places") } }.getOrNull()
+            else -> null
+        } ?: return emptyList()
         return arr.objects().mapNotNull { o ->
-            val name = o.str("name") ?: return@mapNotNull null
-            val x = o.number("x") ?: o.number("px") ?: return@mapNotNull null
-            val y = o.number("y") ?: o.number("py") ?: return@mapNotNull null
-            MapPlace(name, Point(x, y))
+            val name = o.str("name") ?: o.str("placeName") ?: o.str("place_name")
+                ?: o.optJSONObject("placeNameList")?.let { names -> names.keys().asSequence().firstNotNullOfOrNull { names.str(it) } }
+                ?: o.str("alias") ?: return@mapNotNull null
+            val x = o.number("x") ?: o.number("px") ?: o.number("pointX") ?: return@mapNotNull null
+            val y = o.number("y") ?: o.number("py") ?: o.number("pointY") ?: return@mapNotNull null
+            val theta = o.number("theta") ?: o.number("pointTheta") ?: o.number("t")
+            MapPlace(name, Point(x, y), theta)
         }
     }
 

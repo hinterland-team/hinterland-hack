@@ -82,11 +82,14 @@ import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import com.hinterland.clinic.BrainStatus
 import com.hinterland.clinic.Health
+import com.hinterland.clinic.Mood
 import com.hinterland.clinic.Pace
 import com.hinterland.clinic.Place
+import com.hinterland.clinic.RobotMode
 import com.hinterland.clinic.RobotState
 import com.hinterland.clinic.UiState
 import kotlin.math.min
+import kotlin.random.Random
 import kotlinx.coroutines.delay
 
 // what the screen buttons do (Clinic in the app, nothing in previews)
@@ -106,11 +109,12 @@ class ScreenActions(
     val allGood: () -> Unit = {},
     val talkSlower: () -> Unit = {},
     val talkWait: () -> Unit = {},
-    // staff menu: long-press the logo, close, any touch keeps it open, check the servers now
+    // staff menu: long-press the logo, close, any touch keeps it open, check the servers now, the mode
     val openStaff: () -> Unit = {},
     val closeStaff: () -> Unit = {},
     val staffTouched: () -> Unit = {},
     val recheckServers: () -> Unit = {},
+    val setMode: (RobotMode) -> Unit = {},
 )
 
 private enum class View { IDLE, CHECK_IN, GUIDE, HELP, OUT_OF_SERVICE }
@@ -182,6 +186,11 @@ private val BUBBLE_LEFT = 752.dp
 
 @Composable
 private fun Stage(state: UiState, actions: ScreenActions, reduced: Boolean) {
+    // show / calm: the face alone, silent, nothing for patients to tap
+    if (state.mode.silent) {
+        QuietStage(state, actions)
+        return
+    }
     val focus = state.focus()
     var info by remember { mutableStateOf(false) }
     // every touch on the screen counts as reading, so the info stays while someone uses it
@@ -286,6 +295,45 @@ private fun Stage(state: UiState, actions: ScreenActions, reduced: Boolean) {
 
 private fun lerp(a: DpRect, b: DpRect, t: Float) =
     DpRect(lerp(a.left, b.left, t), lerp(a.top, b.top, t), lerp(a.right, b.right, t), lerp(a.bottom, b.bottom, t))
+
+// ---- show and calm mode: only otto's face (RobotModes.kt) ----
+
+// show: a lively face (smiles now and then, blinks, looks around, "sings" without a sound, Mascot show = true).
+// calm: the plain face as it is (sleepy while charging). no reaction to taps; the logo still opens the staff menu
+@Composable
+private fun QuietStage(state: UiState, actions: ScreenActions) {
+    val show = state.mode == RobotMode.SHOW
+    val mood = if (show) rememberShowMood() else state.mood()
+    Box(Modifier.size(DESIGN_WIDTH, DESIGN_HEIGHT)) {
+        Box(
+            Modifier
+                .offset(HeroFace.left, HeroFace.top)
+                .size(HeroFace.right - HeroFace.left, HeroFace.bottom - HeroFace.top),
+        ) {
+            Mascot(mood, Modifier.fillMaxSize(), talking = false, show = show)
+        }
+        NovaLogo(onLongPress = actions.openStaff, modifier = Modifier.offset(Space.page, Space.page))
+    }
+}
+
+// mostly the idle face, every 9-16 s a few seconds of a happy one
+@Composable
+private fun rememberShowMood(): Mood {
+    val reduced = LocalReducedMotion.current
+    var mood by remember { mutableStateOf(Mood.IDLE) }
+    LaunchedEffect(reduced) {
+        if (reduced) return@LaunchedEffect
+        while (true) {
+            delay(Random.nextLong(9_000, 16_000))
+            mood = SHOW_MOODS.random()
+            delay(Random.nextLong(2_600, 4_200))
+            mood = Mood.IDLE
+        }
+    }
+    return mood
+}
+
+private val SHOW_MOODS = listOf(Mood.HAPPY, Mood.HAPPY, Mood.GREETING, Mood.LOVE, Mood.EXCITED)
 
 @Composable
 private fun InfoContent(state: UiState, actions: ScreenActions, reduced: Boolean) {
@@ -434,8 +482,11 @@ private fun IdleContent(state: UiState, actions: ScreenActions) {
                     Say("The desk will call your ticket.", color = Nova.Ink)
                 }
             }
-            Spacer(Modifier.height(Space.l))
-            TalkHint()
+            // screen.talkHints (a live setting)
+            if (state.screen.talkHints) {
+                Spacer(Modifier.height(Space.l))
+                TalkHint()
+            }
             Spacer(Modifier.weight(1f))
         }
     }

@@ -20,9 +20,13 @@ object Voice {
             "answer with a question or an offer of more help. Hardly any exclamation marks. No lists, no emojis, no technical " +
             "words. Say ticket numbers character by character, for example 'A, 1, 7'."
 
-    private const val SYSTEM =
+    // otto's style plus the dashboard's extra note (voice.styleNote, a live setting)
+    fun style(note: String = Config.current.styleNote): String =
+        note.trim().let { if (it.isEmpty()) STYLE else "$STYLE Also: $it" }
+
+    private fun system(): String =
         "You are Otto, the guide robot of a doctor's practice. You walk patients to the room the team chose, at their pace. " +
-            "Write exactly what Otto says out loud right now. $STYLE " +
+            "Write exactly what Otto says out loud right now. ${style()} " +
             "No quotation marks, no stage directions. " +
             "Never say or ask for a person's name: a patient is only a ticket number. " +
             "Never give medical advice and never talk about symptoms."
@@ -51,7 +55,7 @@ object Voice {
 
     suspend fun speakTimed(task: String, lang: Lang): Line {
         val messages = listOf(
-            LLMMessage(Role.SYSTEM, SYSTEM),
+            LLMMessage(Role.SYSTEM, system()),
             LLMMessage(Role.USER, "${lang.instruction()}\nWhat Otto has to say: $task"),
         )
         val t0 = System.currentTimeMillis()

@@ -151,10 +151,13 @@ enum class CheckReason(val detail: String) {
 // field test 17.10: a 34 s walk had no check at all (25 s of "driving" never added up). so the time
 // counts all navigation time (a blocked flag that never clears can't stop it), and otto builds trust
 // step by step: the second check comes at most 15 s after the first, then 20 s, 25 s, 30 s.
+// firstMs / minMs / maxMs are live settings (walk.firstCheckS, checkMinS, checkMaxS)
 class CheckSchedule(
     private val firstMs: Long = FIRST_MS,
     private val turnDeg: Double = TURN_DEG,
     private val minGapMs: Long = MIN_GAP_MS,
+    private val minMs: Long = MIN_MS,
+    private val maxMs: Long = MAX_MS,
 ) {
     // only for "otto had to wait for an obstacle"; its own time count is not used
     private val obstacles = CheckBackClock(Long.MAX_VALUE)
@@ -226,7 +229,7 @@ class CheckSchedule(
         if (d == null || d <= 0.0) return false
         lastDistance = d
         if (checks == 0) return false
-        val next = intervalAfter(checks, d)
+        val next = intervalAfter(checks, d, minMs, maxMs)
         val moved = abs(next - intervalMs) >= LOG_CHANGE_MS
         intervalMs = next
         return moved
@@ -246,7 +249,7 @@ class CheckSchedule(
     fun done(distance: Double?, heading: Double?, turnedAround: Boolean = false) {
         checks++
         distance?.takeIf { it > 0.0 }?.let { lastDistance = it }
-        intervalMs = intervalAfter(checks, lastDistance)
+        intervalMs = intervalAfter(checks, lastDistance, minMs, maxMs)
         restart(heading)
         if (turnedAround) armMs = TURN_ARM_AFTER_STOP_MS
     }
@@ -289,19 +292,20 @@ class CheckSchedule(
         private const val MAX_STEP_MS = 2_000L
         private const val LOG_CHANGE_MS = 5_000L
 
-        // 1.5 m or closer -> 30 s, 3 m or further -> 10 s, in between linear; unknown -> 20 s
-        fun intervalFor(distance: Double?): Long {
-            val d = distance?.takeIf { it > 0.0 } ?: return UNKNOWN_MS
-            if (d <= NEAR_M) return MAX_MS
-            if (d >= FAR_M) return MIN_MS
+        // 1.5 m or closer -> max (30 s), 3 m or further -> min (10 s), in between linear; unknown -> half way (20 s)
+        fun intervalFor(distance: Double?, minMs: Long = MIN_MS, maxMs: Long = MAX_MS): Long {
+            val d = distance?.takeIf { it > 0.0 } ?: return (minMs + maxMs) / 2
+            if (d <= NEAR_M) return maxMs
+            if (d >= FAR_M) return minMs
             val f = (d - NEAR_M) / (FAR_M - NEAR_M)
-            return (MAX_MS - f * (MAX_MS - MIN_MS)).toLong()
+            return (maxMs - f * (maxMs - minMs)).toLong()
         }
 
         // the interval after the n-th check: by distance, but never more than the trust ramp allows
-        fun intervalAfter(checks: Int, distance: Double?): Long {
+        // (the ramp never goes below the shortest interval)
+        fun intervalAfter(checks: Int, distance: Double?, minMs: Long = MIN_MS, maxMs: Long = MAX_MS): Long {
             val ramp = RAMP_FIRST_MS + RAMP_STEP_MS * (checks - 1).coerceAtLeast(0)
-            return minOf(intervalFor(distance), ramp, MAX_MS)
+            return minOf(intervalFor(distance, minMs, maxMs), maxOf(ramp, minMs), maxMs)
         }
     }
 }
@@ -458,7 +462,16 @@ data class Point(val x: Double, val y: Double) {
 }
 
 // a spot on the robot map with its coordinates (RobotApi getPlaceList)
-data class MapPlace(val name: String, val point: Point)
+data class MapPlace(val name: String, val point: Point) {
+    // the direction the robot faces at the spot (radians), when the robot said. not part of equals: the same
+    // spot is the same spot (live map, waypoints); only setPoseEstimate needs it
+    var theta: Double? = null
+        private set
+
+    constructor(name: String, point: Point, theta: Double?) : this(name, point) {
+        this.theta = theta
+    }
+}
 
 object WalkMath {
 

@@ -34,16 +34,17 @@ object StopRules {
     // the patient was further than this at the last check: ask, they may want a slower pace
     const val ASK_FROM_M = 2.0
 
-    // a real question only every 2nd check, or when the patient was further away or fell back. the side
-    // watch fired (nobody beside for a while): they mostly just walk behind otto, where the radar is blind,
-    // so a stop with a short reminder to walk beside (the question waits for the next check)
-    fun kind(i: StopInput): StopKind {
+    // a real question only every Nth check (walk.askEvery, 2 by default; 0 = never on the schedule), or when
+    // the patient was further away or fell back. the side watch fired (nobody beside for a while): they mostly
+    // just walk behind otto, where the radar is blind, so a stop with a short reminder to walk beside (the
+    // question waits for the next check). rolling = false: every check is a stop (sensors.radarWatch off)
+    fun kind(i: StopInput, askEvery: Int = 2, rolling: Boolean = true): StopKind {
         if (i.reason == CheckReason.FOLLOWER_LOST && !i.fellBack) return StopKind.QUICK
         val ask = i.fellBack ||
             (i.lastM ?: 0.0) > ASK_FROM_M ||
-            i.checkNo % 2 == 0
+            (askEvery > 0 && i.checkNo % askEvery == 0)
         if (ask) return StopKind.ASK
-        val beside = i.besideM != null && i.besideM > 0.0 && i.besideM <= BESIDE_M
+        val beside = rolling && i.besideM != null && i.besideM > 0.0 && i.besideM <= BESIDE_M
         return if (beside) StopKind.ROLLING else StopKind.QUICK
     }
 }

@@ -5,10 +5,12 @@ import com.ainirobot.coreservice.client.ApiListener
 import com.ainirobot.coreservice.client.Definition
 import com.ainirobot.coreservice.client.RobotApi
 import com.ainirobot.coreservice.client.StatusListener
+import com.ainirobot.coreservice.client.ashmem.ShareMemoryApi
 import com.ainirobot.coreservice.client.listener.ActionListener
 import com.ainirobot.coreservice.client.listener.CommandListener
 import com.ainirobot.coreservice.client.module.ModuleCallbackApi
 import com.ainirobot.coreservice.client.person.PersonApi
+import java.io.FileInputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,6 +53,14 @@ sealed interface ChargeOutcome {
     data class Failed(val why: String) : ChargeOutcome
 }
 
+// what a RobotApi command answered (CommandListener): the result code and the message as it came
+data class CmdAnswer(val code: Int, val message: String?, val error: Boolean = false) {
+    // the docs: "succeed" for switchMap / setPoseEstimate, RESULT_OK as the code
+    val ok: Boolean get() = !error && (message?.trim()?.equals(Definition.SUCCEED, ignoreCase = true) == true || code == Definition.RESULT_OK)
+
+    fun show(): String = "${if (error) "error " else ""}$code \"${message.orEmpty().replace(Regex("\\s+"), " ").take(120)}\""
+}
+
 enum class NavEvent { BLOCKED, CLEAR }
 
 // chassis, vision, radar and battery side (RobotAPI). voice is off in RobotApi on agentos, everything
@@ -84,6 +94,13 @@ object Robot {
     // doc: charging status updates take some time after undocking, ignore "charging" for a while
     private const val UNDOCK_SETTLE_MS = 30_000L
     private const val HOME_RANGE_M = 1.0
+    // push events in the log, at most (calm mode field test)
+    private const val PUSH_LOG_MAX = 40
+    // map commands: loading another map may take a while
+    private const val SWITCH_MAP_TIMEOUT_MS = 30_000L
+    private const val MAP_CALL_TIMEOUT_MS = 6_000L
+    // moved by hand: more than this while otto did not drive himself
+    private const val MOVED_M = 0.3
 
     private val api get() = RobotApi.getInstance()
     private val people get() = PersonApi.getInstance()
@@ -253,6 +270,47 @@ object Robot {
         }
     }
 
+    // someone pushes the robot. the docs list STATUS_ROBOT_BEING_PUSHED for another model only (Caizhao); the
+    // jar also has STATUS_ROBOT_HAS_BEING_PUSHED and STATUS_PUSH_EXCEED_DISTANCE. we only log what comes, so the
+    // field test shows what this robot reports (calm mode, the user's spec 17.10)
+    @Volatile private var pushLogs = 0
+    private val pushListener = object : StatusListener() {
+        override fun onStatusUpdate(type: String?, data: String?) {
+            if (pushLogs >= PUSH_LOG_MAX) return
+            pushLogs++
+            RobotLog.i(LogSource.NAV, "Robot reports ${type ?: "push"}: \"${data?.trim()?.take(80)}\" (mode ${Modes.current.wire})")
+        }
+    }
+
+    // localised or not (OrionStar RobotSample NavFragment: {"isPoseEstimate": true|false}) and map switches,
+    // also when the team switches the map on the robot itself
+    @Volatile var localised: Boolean? = null
+        private set
+    @Volatile private var estimateRaw: String? = null
+    private val estimateListener = object : StatusListener() {
+        override fun onStatusUpdate(type: String?, data: String?) {
+            val raw = data?.trim()?.take(80)
+            if (raw != estimateRaw) {
+                estimateRaw = raw
+                RobotLog.i(LogSource.NAV, "Localisation status: \"$raw\"")
+            }
+            Json.localised(data)?.let { localised = it }
+        }
+    }
+    @Volatile var mapEvents = 0
+        private set
+    private val switchMapListener = object : StatusListener() {
+        override fun onStatusUpdate(type: String?, data: String?) {
+            mapEvents++
+            RobotLog.i(LogSource.NAV, "Robot reports a map switch: \"${data?.trim()?.take(80)}\"")
+        }
+    }
+
+    // the system's own "please don't push me" warning: off in calm mode (RobotApi.disablePushWarning, in the
+    // jar but not in the docs), back on when calm mode ends
+    @Volatile private var pushWarningOff = false
+    @Volatile private var pushWarningWanted = true
+
     // has to happen while our activity is in the foreground, otherwise no chassis rights
     fun connect(context: Context) {
         if (connected) return
@@ -274,6 +332,21 @@ object Robot {
             .onFailure { RobotLog.w(LogSource.NAV, "Pose listener not registered: ${it.message}") }
         runCatching { api.unregisterStatusListener(emergencyListener) }
         runCatching { api.registerStatusListener(Definition.STATUS_EMERGENCY, emergencyListener) }
+        // docs/robot-setup.md: localisation and map switches; calm mode: what the robot says about pushes
+        runCatching { api.unregisterStatusListener(estimateListener) }
+        runCatching { api.registerStatusListener(Definition.STATUS_POSE_ESTIMATE, estimateListener) }
+        runCatching { api.unregisterStatusListener(switchMapListener) }
+        runCatching { api.registerStatusListener(Definition.STATUS_SWITCH_MAP, switchMapListener) }
+        runCatching { api.unregisterStatusListener(pushListener) }
+        for (status in listOf(Definition.STATUS_ROBOT_BEING_PUSHED, Definition.STATUS_ROBOT_HAS_BEING_PUSHED, Definition.STATUS_PUSH_EXCEED_DISTANCE)) {
+            runCatching { api.registerStatusListener(status, pushListener) }
+                .onFailure { RobotLog.w(LogSource.NAV, "No listener for $status: ${it.message}") }
+        }
+        // after a reconnect the system forgot it
+        if (!pushWarningWanted) {
+            pushWarningOff = false
+            pushWarning(false)
+        }
         // sync binder call (RobotAPI "Get System Version"); we are on a worker thread here
         runCatching { api.version }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let {
             systemVersion = it
@@ -636,39 +709,47 @@ object Robot {
     // angle deg, listener), stopped with stopMove). never while navigating: the guide stops that first. ----
 
     // true when the robot took the command. waits until the turn had its time, the result may come early.
-    suspend fun turn(degrees: Float, left: Boolean): Boolean {
+    // speed in degrees per second (0-50, the show turns are gentle)
+    suspend fun turn(degrees: Float, left: Boolean, speed: Float = TURN_DEG_PER_S): Boolean {
         if (!ready) return false
         if (stopFollow()) delay(FOLLOW_RELEASE_MS)
         val angle = degrees.coerceIn(1f, 360f)
-        val expectedMs = (angle / TURN_DEG_PER_S * 1000f).toLong()
+        val degPerS = speed.coerceIn(5f, 50f)
+        val expectedMs = (angle / degPerS * 1000f).toLong()
         val startedAt = now()
-        val ok = withTimeoutOrNull(expectedMs + 6_000) {
-            suspendCancellableCoroutine<Boolean> { cont ->
-                val finished = AtomicBoolean(false)
-                fun finish(v: Boolean) {
-                    if (finished.compareAndSet(false, true)) cont.resume(v)
-                }
-                val listener = object : CommandListener() {
-                    override fun onResult(result: Int, message: String?) =
-                        finish(result == Definition.RESULT_OK || message?.contains("succeed") == true)
-
-                    override fun onError(errorCode: Int, errorString: String?) {
-                        RobotLog.w(LogSource.NAV, "Turn error $errorCode")
-                        finish(false)
+        selfMoving++
+        try {
+            val ok = withTimeoutOrNull(expectedMs + 6_000) {
+                suspendCancellableCoroutine<Boolean> { cont ->
+                    val finished = AtomicBoolean(false)
+                    fun finish(v: Boolean) {
+                        if (finished.compareAndSet(false, true)) cont.resume(v)
                     }
+                    val listener = object : CommandListener() {
+                        override fun onResult(result: Int, message: String?) =
+                            finish(result == Definition.RESULT_OK || message?.contains("succeed") == true)
+
+                        override fun onError(errorCode: Int, errorString: String?) {
+                            RobotLog.w(LogSource.NAV, "Turn error $errorCode")
+                            finish(false)
+                        }
+                    }
+                    val id = reqIds.getAndIncrement()
+                    val started = runCatching {
+                        if (left) api.turnLeft(id, degPerS, angle, listener) else api.turnRight(id, degPerS, angle, listener)
+                    }.getOrDefault(-1)
+                    if (started < 0) finish(false)
+                    cont.invokeOnCancellation { stopMove() }
                 }
-                val id = reqIds.getAndIncrement()
-                val started = runCatching {
-                    if (left) api.turnLeft(id, TURN_DEG_PER_S, angle, listener) else api.turnRight(id, TURN_DEG_PER_S, angle, listener)
-                }.getOrDefault(-1)
-                if (started < 0) finish(false)
-                cont.invokeOnCancellation { stopMove() }
             }
+            if (ok == null) stopMove()
+            val rest = expectedMs - (now() - startedAt)
+            if (ok == true && rest > 0) delay(rest + 200)
+            return ok == true
+        } finally {
+            selfMoving--
+            movedRef = null
         }
-        if (ok == null) stopMove()
-        val rest = expectedMs - (now() - startedAt)
-        if (ok == true && rest > 0) delay(rest + 200)
-        return ok == true
     }
 
     fun stopMove() {
@@ -684,6 +765,7 @@ object Robot {
         val d = distanceM.coerceIn(0.05f, 1.0f)
         val expectedMs = (d / speed * 1000f).toLong()
         val startedAt = now()
+        movedRef = null
         val ok = withTimeoutOrNull(expectedMs + 4_000) {
             suspendCancellableCoroutine<Boolean> { cont ->
                 val finished = AtomicBoolean(false)
@@ -770,6 +852,152 @@ object Robot {
         }
     }
 
+    // ---- maps and floors (docs/robot-setup.md 1 and 2). every call checked with javap on core
+    // 1.0.20250821-SNAPSHOT; the answers that RobotAPI_en.md does not show are logged on first use ----
+
+    // a RobotApi command with a CommandListener (only the 2-arg callbacks: the dispatcher calls both
+    // overloads, ActionMessage, javap). null when it did not start or took longer than timeoutMs
+    private suspend fun command(timeoutMs: Long, start: (Int, CommandListener) -> Int): CmdAnswer? {
+        if (!ready) return null
+        return withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine<CmdAnswer?> { cont ->
+                val finished = AtomicBoolean(false)
+                fun finish(v: CmdAnswer?) {
+                    if (finished.compareAndSet(false, true)) cont.resume(v)
+                }
+                val listener = object : CommandListener() {
+                    override fun onResult(result: Int, message: String?) = finish(CmdAnswer(result, message))
+
+                    override fun onError(errorCode: Int, errorString: String?) = finish(CmdAnswer(errorCode, errorString, error = true))
+                }
+                val started = runCatching { start(reqIds.getAndIncrement(), listener) }.getOrElse {
+                    RobotLog.w(LogSource.NAV, "Robot call threw: ${it.javaClass.simpleName} ${it.message.orEmpty().take(80)}")
+                    -1
+                }
+                if (started < 0) finish(null)
+            }
+        }
+    }
+
+    // RobotAPI "Switch Map": switchMap(reqId, mapName, listener), "succeed" when it worked. re-localise after it
+    suspend fun switchMap(mapName: String): CmdAnswer? {
+        movedRef = null
+        position = null
+        atHome = null
+        localised = null
+        return command(SWITCH_MAP_TIMEOUT_MS) { id, l -> api.switchMap(id, mapName, l) }
+    }
+
+    // RobotAPI "Localization": setPoseEstimate(reqId, {"px","py","theta"} (Definition.JSON_NAVI_POSITION_*), listener)
+    suspend fun setPoseEstimate(x: Double, y: Double, theta: Double): CmdAnswer? {
+        val params = JSONObject()
+            .put(Definition.JSON_NAVI_POSITION_X, x)
+            .put(Definition.JSON_NAVI_POSITION_Y, y)
+            .put(Definition.JSON_NAVI_POSITION_THETA, theta)
+            .toString()
+        movedRef = null
+        return command(MAP_CALL_TIMEOUT_MS) { id, l -> api.setPoseEstimate(id, params, l) }
+    }
+
+    // RobotAPI "Check if Currently Localized": isRobotEstimate(reqId, listener), message "true" when it is
+    @Volatile private var estimateLogged = false
+
+    suspend fun isLocalised(): Boolean? {
+        val a = command(3_000) { id, l -> api.isRobotEstimate(id, l) } ?: return null
+        if (!estimateLogged) {
+            estimateLogged = true
+            RobotLog.i(LogSource.NAV, "First isRobotEstimate answer: ${a.show()}")
+        }
+        if (a.error) return null
+        val v = when (a.message?.trim()?.lowercase(java.util.Locale.ROOT)) {
+            "true" -> true
+            "false" -> false
+            else -> Json.localised(a.message)
+        }
+        if (v != null) localised = v
+        return v
+    }
+
+    // the team switched the map and said where otto stands: he is at that spot now
+    fun relocated(spot: String) {
+        position = spot
+        atHome = isHome(spot)
+        movedRef = null
+    }
+
+    // RobotApi.getMultiFloorConfigAndPose: the raw answer (a MultiFloorInfo list, Floors.fromMultiFloor)
+    suspend fun multiFloorRaw(): CmdAnswer? = command(MAP_CALL_TIMEOUT_MS) { id, l -> api.getMultiFloorConfigAndPose(id, l) }
+
+    // RobotApi.getLocalMapInfoList: the raw answer (not documented, Floors.fromMapList)
+    suspend fun localMapsRaw(): CmdAnswer? = command(MAP_CALL_TIMEOUT_MS) { id, l -> api.getLocalMapInfoList(id, l) }
+
+    // RobotApi.getPlaceListByMapName: the spots of a map otto is not on yet (null = no usable answer)
+    suspend fun placesOf(mapName: String): Pair<CmdAnswer?, List<MapPlace>?> {
+        val a = command(MAP_CALL_TIMEOUT_MS) { id, l -> api.getPlaceListByMapName(id, mapName, l) }
+        val list = a?.takeIf { !it.error }?.message?.let { m -> Json.mapPlaces(m).takeIf { it.isNotEmpty() } }
+        return a to list
+    }
+
+    // RobotAPI "Read and Display Map PGM File": ShareMemoryApi.getMapPgmPFD(mapName), read as OrionStar's
+    // RoverMap data (MapImage.kt), releaseGetMapPgmPFD() after. the stream is not closed by us: the
+    // ParcelFileDescriptor owns the descriptor and the release closes it. blocking - never on the main thread
+    fun readMap(mapName: String): Result<PgmMap> {
+        if (!ready) return Result.failure(IllegalStateException("robot api not connected"))
+        val share = ShareMemoryApi.getInstance()
+        return try {
+            val pfd = share.getMapPgmPFD(mapName) ?: return Result.failure(IllegalStateException("no map file from the robot for \"$mapName\""))
+            Result.success(Pgm.read(FileInputStream(pfd.fileDescriptor)))
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            runCatching { share.releaseGetMapPgmPFD() }
+        }
+    }
+
+    // ---- calm mode: pushes ----
+
+    fun pushWarning(enabled: Boolean) {
+        pushWarningWanted = enabled
+        if (!connected) return
+        if (!enabled && !pushWarningOff) {
+            runCatching { api.disablePushWarning() }
+                .onSuccess {
+                    pushWarningOff = true
+                    RobotLog.i(LogSource.NAV, "Robot push warning switched off (calm mode)")
+                }
+                .onFailure { RobotLog.w(LogSource.NAV, "Push warning not switched off: ${it.message}") }
+        } else if (enabled && pushWarningOff) {
+            runCatching { api.enablePushWarning() }
+            pushWarningOff = false
+            RobotLog.i(LogSource.NAV, "Robot push warning back on")
+        }
+    }
+
+    // otto moves himself (a turn, a drive): no "moved by hand" then
+    @Volatile private var selfMoving = 0
+    @Volatile private var movedRef: Point? = null
+
+    // called every second by the brain: meters someone moved otto while he did not drive, once per push
+    // (the log learns what happens when someone pushes him). null = nothing to report
+    fun movedByHand(): Double? {
+        if (driving != null || selfMoving > 0) {
+            movedRef = null
+            return null
+        }
+        val p = latestPose()?.point ?: return null
+        val ref = movedRef
+        if (ref == null) {
+            movedRef = p
+            return null
+        }
+        val d = ref.distanceTo(p)
+        if (d < MOVED_M) return null
+        movedRef = p
+        position = null
+        atHome = null
+        return d
+    }
+
     // ---- radar (RobotAPI "Enable/Disable Radar Data Reporting" + "Radar Data Listener"):
     // setNavigationLineData(reqId, enabled) and Definition.STATUS_LINE_DATA. off again after use. ----
 
@@ -810,6 +1038,16 @@ object Robot {
         if (stopFollow()) delay(FOLLOW_RELEASE_MS)
         position = null
         atHome = false
+        selfMoving++
+        try {
+            return charge(onEvent)
+        } finally {
+            selfMoving--
+            movedRef = null
+        }
+    }
+
+    private suspend fun charge(onEvent: (NavEvent) -> Unit): ChargeOutcome {
         val id = reqIds.getAndIncrement()
         val outcome: ChargeOutcome = withTimeoutOrNull(CHARGE_TIMEOUT_MS + 30_000) {
             suspendCancellableCoroutine<ChargeOutcome> { cont ->
@@ -853,7 +1091,24 @@ object Robot {
     suspend fun leavePile(): Boolean {
         if (!ready) return false
         runCatching { api.disableBattery() }
-        val ok = withTimeoutOrNull(LEAVE_TIMEOUT_MS) {
+        selfMoving++
+        val ok = try {
+            leave()
+        } finally {
+            selfMoving--
+            movedRef = null
+        }
+        if (ok) {
+            docked = false
+            undockedAt = now()
+            position = null
+            atHome = false
+        }
+        return ok
+    }
+
+    private suspend fun leave(): Boolean {
+        return withTimeoutOrNull(LEAVE_TIMEOUT_MS) {
             suspendCancellableCoroutine<Boolean> { cont ->
                 val finished = AtomicBoolean(false)
                 fun finish(v: Boolean) {
@@ -872,13 +1127,6 @@ object Robot {
                 if (started < 0) finish(false)
             }
         } ?: false
-        if (ok) {
-            docked = false
-            undockedAt = now()
-            position = null
-            atHome = false
-        }
-        return ok
     }
 
     // all spots on the current map with coordinates (RobotAPI "Get All Position Points on Current Map")

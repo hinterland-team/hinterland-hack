@@ -97,4 +97,7 @@ val SCREENS: Map<String, UiState> = linkedMapOf(
     "out-of-service" to UiState(chassis = ChassisIssue.NOT_STARTED),
     "returning" to UiState(brain = BrainStatus(goal = "Going back to my spot", state = RobotState.RETURNING)),
     "charging" to UiState(brain = BrainStatus(goal = "Charging", state = RobotState.CHARGING, battery = 40, charging = true)),
+    // the modes (RobotModes.kt): the face alone
+    "show-mode" to UiState(mode = RobotMode.SHOW, places = ROOMS),
+    "calm-mode" to UiState(mode = RobotMode.CALM, places = ROOMS),
 )

@@ -134,6 +134,21 @@ data class StaffUi(
     // how smoothly the app runs (6.7): one line, and whether it looks fine
     val perf: String = "",
     val perfOk: Boolean = true,
+    // the mode switch at the top (RobotModes.kt); pending = asked for during a walk
+    val mode: RobotMode = RobotMode.NORMAL,
+    val modePending: RobotMode? = null,
+    // docs/robot-setup.md: "Settings v4, applied 18:42" and "Map Hinterland 2, floor 1, localised"
+    val settings: String = "",
+    val settingsOk: Boolean = true,
+    val map: String = "",
+    val mapOk: Boolean = true,
+)
+
+// screen settings from the dashboard (screen.privacyLine, screen.talkHints)
+data class ScreenPrefs(
+    // empty = no privacy line
+    val privacyLine: String = Settings.PRIVACY_LINE,
+    val talkHints: Boolean = true,
 )
 
 enum class CheckInStep { WHO, ASK_DESK, PACE, CONFIRM, SENDING, FAILED }
@@ -196,7 +211,15 @@ data class UiState(
     val chassis: ChassisIssue? = null,
     // the staff menu is open
     val staff: StaffUi? = null,
+    // normal / show / calm (RobotModes.kt): show and calm are the face only, silent
+    val mode: RobotMode = RobotMode.NORMAL,
+    // the map otto is on: only places of this floor are offered (docs/robot-setup.md 2)
+    val mapName: String? = null,
+    val screen: ScreenPrefs = ScreenPrefs(),
 ) {
+    // the places on otto's floor
+    val placesHere: List<Place> get() = Places.onMap(places, mapName)
+
     // the face follows the walk: attentive while checking, worried when someone is missing.
     // talking doesn't change the mood, the mouth moves on top of it.
     fun mood(): Mood = when {
@@ -217,10 +240,11 @@ data class UiState(
         else -> Mood.IDLE
     }
 
-    val canSelfCheckIn get() = chassis == null && Places.selfCheckIn(places).isNotEmpty()
+    val canSelfCheckIn get() = chassis == null && ModeRules.selfCheckIn(mode) && Places.selfCheckIn(placesHere).isNotEmpty()
 
-    // null = nothing going on, the face fills the screen
+    // null = nothing going on, the face fills the screen. show and calm: always the face
     fun focus(): Focus? {
+        if (mode.silent) return null
         if (help != null) return Focus("help", holds = true)
         guide?.let { g ->
             // the check-back question ("all good?") waits for an answer or a tap on Slower / Wait
@@ -243,6 +267,7 @@ data class UiState(
 
     // heartbeat `screen` for the dashboard's live mirror. ticket, never a name.
     fun mirror(): ScreenMirror {
+        if (mode.silent) return ScreenMirror(view = "idle", title = "${mode.label} mode", step = ModeRules.describe(mode))
         help?.let {
             return ScreenMirror(
                 view = "help",
@@ -272,8 +297,9 @@ data class UiState(
     // what the planner should know about the screen (uploadInterfaceInfo replaces it every time)
     fun screenInfo(): String = buildString {
         appendLine("Nova Clinic robot screen. Otto right now: ${brain.goal}.")
-        val public = Places.public(places)
-        val rooms = Places.selfCheckIn(places)
+        // only the places on otto's floor: he cannot take the elevator
+        val public = Places.public(placesHere)
+        val rooms = if (ModeRules.selfCheckIn(mode)) Places.selfCheckIn(placesHere) else emptyList()
         when {
             help != null -> appendLine(
                 if (help.urgent) "Urgent help was called. Otto stays with the person; the team is on the way."

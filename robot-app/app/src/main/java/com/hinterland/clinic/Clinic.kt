@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 // the screen state, what the actions and the screen buttons do, and the team's small commands.
 // a guide itself runs in Guide; what otto does on his own is decided by OttoBrain.
+// everything otto says goes through Speech (SpeechTurns: one line at a time, questions wait for the answer).
 // network on Dispatchers.IO, never on the main thread. no patient names anywhere: tickets only.
 object Clinic {
 
@@ -33,6 +34,8 @@ object Clinic {
     // the mouth stops this long after a ready line is over
     private const val SAID_LINGER_MS = 400L
     private const val LOG_TASK_CHARS = 40
+    // the robot system's own voice while otto is silent goes to the log at most this often
+    private const val SYSTEM_VOICE_LOG_MS = 5_000L
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -51,11 +54,13 @@ object Clinic {
     @Volatile private var guideCardJob: Job? = null
     @Volatile private var staffJob: Job? = null
     @Volatile private var staffTouchedAt = 0L
+    @Volatile private var systemVoiceAt = 0L
 
     private fun now() = System.currentTimeMillis()
 
     fun start() {
         if (!started.compareAndSet(false, true)) return
+        Speech.start()
         // goal, battery and robot state on the screen
         scope.launch {
             OttoBrain.status.collect { b -> _ui.update { it.copy(brain = b) } }
@@ -65,6 +70,13 @@ object Clinic {
             ui.map { it.screenInfo() }.distinctUntilChanged().collect { info ->
                 runCatching { AgentCore.uploadInterfaceInfo(info) }
             }
+        }
+        // the screen settings (screen.privacyLine, screen.talkHints) and the mode
+        scope.launch {
+            Config.flow.collect { s -> _ui.update { it.copy(screen = ScreenPrefs(s.privacyLine, s.talkHints)) } }
+        }
+        scope.launch {
+            Modes.flow.collect { m -> _ui.update { it.copy(mode = m) } }
         }
     }
 
@@ -81,7 +93,10 @@ object Clinic {
 
     fun onUserSpeech(text: String, final: Boolean) {
         if (text.isBlank()) return
+        // show / calm: the mic is off; anything that still comes in gets no reaction
+        if (Modes.current.silent) return
         voiceAt = now()
+        Speech.userSpeech(final)
         OttoBrain.heardUser()
         if (final) {
             lastUserText = text
@@ -95,6 +110,15 @@ object Clinic {
 
     fun onRobotSpeech(text: String, final: Boolean) {
         if (text.isBlank()) return
+        val ours = Speech.robotSpeech(final)
+        if (Modes.current.silent) {
+            // not from this app: the robot system talks by itself (the calm / show mode field test wants to know)
+            if (!ours && now() - systemVoiceAt >= SYSTEM_VOICE_LOG_MS) {
+                systemVoiceAt = now()
+                RobotLog.w(LogSource.VOICE, "Robot system voice in ${Modes.current.label} mode, not from Otto's app: \"${text.trim().take(80)}\"")
+            }
+            return
+        }
         OttoBrain.heardRobot()
         Voice.heardRobot(now())
         if (final) feed.ottoSaid(now(), text)
@@ -137,6 +161,22 @@ object Clinic {
         _ui.update { it.copy(chassis = issue) }
     }
 
+    // ---- modes (RobotModes.kt) ----
+
+    // show / calm: the face only, nothing to tap, nothing said. normal again: everything as before
+    fun modeChanged(old: RobotMode, new: RobotMode) {
+        if (new.silent) {
+            speakingJob?.cancel()
+            _ui.update { it.copy(checkIn = null, subtitle = "", subtitleFromUser = false, speaking = false, task = null, mode = new) }
+            feed.ottoDid(now(), "${new.label} mode: Otto is silent")
+        } else {
+            _ui.update { it.copy(mode = new) }
+            feed.ottoDid(now(), "Normal mode again")
+            if (old.silent) refreshScreenInfo()
+        }
+        refreshStaff()
+    }
+
     // ---- staff menu (long-press the Nova Clinic logo 3 s) ----
 
     fun openStaff() {
@@ -151,7 +191,7 @@ object Clinic {
                     _ui.update { it.copy(staff = null) }
                     break
                 }
-                _ui.update { s -> if (s.staff != null) s.copy(staff = staffSnapshot()) else s }
+                refreshStaff()
             }
         }
     }
@@ -169,14 +209,31 @@ object Clinic {
         staffTouched()
         scope.launch {
             Servers.checkAll()
-            _ui.update { s -> if (s.staff != null) s.copy(staff = staffSnapshot()) else s }
+            Config.requestNow("staff menu")
+            MapSync.resend()
+            refreshStaff()
         }
+    }
+
+    // the mode switch at the top of the staff menu
+    fun staffSetMode(mode: RobotMode) {
+        staffTouched()
+        val r = Modes.request(mode, "staff menu")
+        RobotLog.i(LogSource.APP, "Staff menu: ${r.detail}")
+        refreshStaff()
+    }
+
+    private fun refreshStaff() {
+        _ui.update { s -> if (s.staff != null) s.copy(staff = staffSnapshot()) else s }
     }
 
     private fun staffSnapshot(): StaffUi {
         val b = _ui.value.brain
         val issue = Robot.chassisIssue()
         val perf = PerfMonitor.live()
+        val map = MapSync.current
+        val loc = MapSync.localised
+        val floor = map?.let { m -> MapSync.maps.firstOrNull { Floors.same(it.name, m) }?.floor }
         return StaffUi(
             robotName = Backend.robot,
             version = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
@@ -198,6 +255,19 @@ object Clinic {
             logsPending = RobotLog.pending(),
             perf = perf?.short() ?: "Screen: measuring, the first numbers come after a few seconds",
             perfOk = perf?.smooth ?: true,
+            mode = Modes.current,
+            modePending = Modes.pending,
+            settings = Config.summary(),
+            settingsOk = Config.ok,
+            map = when {
+                map == null -> "Map: not known yet"
+                else -> "Map $map" + (floor?.let { ", floor $it" } ?: "") + when (loc) {
+                    true -> ", localised"
+                    false -> ", NOT localised"
+                    null -> ""
+                } + if (MapSync.maps.size > 1) " · ${MapSync.maps.size} maps" else ""
+            },
+            mapOk = map != null && loc != false,
         )
     }
 
@@ -206,11 +276,21 @@ object Clinic {
     suspend fun refreshPlaces(): List<Place>? {
         val list = net(quiet = true) { Backend.places() }.getOrNull() ?: return null
         _ui.update { it.copy(places = list) }
-        Robot.homeFromPlaces = Places.homeSpot(list, BuildConfig.HOME_SPOT).ifBlank { null }
+        Robot.homeFromPlaces = Places.homeSpot(placesHere(list), BuildConfig.HOME_SPOT).ifBlank { null }
         return list
     }
 
-    private suspend fun loadPlaces(): List<Place> = refreshPlaces() ?: _ui.value.places
+    // only the places on otto's floor (docs/robot-setup.md 2): he cannot take the elevator
+    fun placesHere(all: List<Place> = _ui.value.places): List<Place> = Places.onMap(all, MapSync.current)
+
+    private suspend fun loadPlaces(): List<Place> = placesHere(refreshPlaces() ?: _ui.value.places)
+
+    // MapSync: otto is on another map now
+    fun mapChanged() {
+        _ui.update { it.copy(mapName = MapSync.current) }
+        Robot.homeFromPlaces = Places.homeSpot(placesHere(), BuildConfig.HOME_SPOT).ifBlank { null }
+        refreshStaff()
+    }
 
     fun placeForSpot(spot: String?): Place? {
         val s = spot?.trim().orEmpty()
@@ -222,9 +302,9 @@ object Clinic {
 
     fun guideStarted() {
         guideCardJob?.cancel()
-        // the patient walks behind otto: the mic has to hear them without facing the robot.
+        // the patient walks beside otto: the mic has to hear them without facing the robot (voice.openMicOnWalks).
         // barge-in stays on (speaking over otto stops his tts, AgentOS default).
-        setWakeFree(false)
+        setWakeFree(!Config.current.openMicOnWalks)
         _ui.update { it.copy(checkIn = null) }
     }
 
@@ -236,6 +316,13 @@ object Clinic {
             delay(GUIDE_CARD_KEEP_MS)
             if (Guide.current == null) _ui.update { it.copy(guide = null) }
         }
+        // a mode asked for during the walk starts now
+        Modes.guideEnded()
+    }
+
+    // voice.openMicOnWalks changed: a walk under way gets it at once
+    fun walkMicChanged() {
+        if (Guide.current != null) setWakeFree(!Config.current.openMicOnWalks)
     }
 
     fun showGuide(g: GuideUi?) {
@@ -251,6 +338,14 @@ object Clinic {
         runCatching { AgentCore.isEnableWakeFree = on }.onFailure { RobotLog.w(LogSource.VOICE, "Wake-free not set: ${it.message}") }
     }
 
+    // a walk this mode does not take: its leg fails with the reason, so the dashboard shows it
+    suspend fun refuseGuide(cmd: RobotCommand, why: String) {
+        val journey = cmd.journeyId?.takeIf { it.isNotBlank() } ?: return
+        net(quiet = true) { Backend.patchJourney(journey, cmd.legId, LegStatus.FAILED, JourneyEvent.FAILED, why) }
+            .onFailure { RobotLog.w(LogSource.NET, "Journey update failed: ${Backend.friendly(it)}") }
+        feed.ottoDid(now(), "Walk for ticket ${cmd.ticket ?: "?"} refused: $why")
+    }
+
     // ---- actions (ClinicActions). sample = what the person said, for the language ----
 
     // CONFIRM_TICKET: the person says the ticket otto calls
@@ -261,10 +356,11 @@ object Clinic {
         feed.patientIntent(now(), if (t != null) "Said ticket $t" else "Said it is them")
         if (g != null && g.waitingForPickup) {
             if (t == null) {
-                speak("Ask them kindly to say their ticket number or tap That's me on the screen.", lang, "Please tap \"That's me\".")
+                speak("Ask them kindly to say their ticket number or tap That's me on the screen.", lang, "Please tap \"That's me\".", question = true)
                 return true
             }
             g.heard(sample.orEmpty())
+            // the guide's next line (the pace question or the start) is the answer: nothing else said here
             if (g.confirm(t, Guide.HOW_VOICE)) return true
             speak(
                 "Tell them kindly that you are calling ticket ${g.ticket} right now, not $t, and that the team will send you for them soon.",
@@ -274,7 +370,7 @@ object Clinic {
             return true
         }
         if (t != null) return waitingStatus(t, sample)
-        speak("Ask them kindly for their ticket number: one letter and two digits.", lang, "What is your ticket number?")
+        speak("Ask them kindly for their ticket number: one letter and two digits.", lang, "What is your ticket number?", question = true)
         return true
     }
 
@@ -290,7 +386,7 @@ object Clinic {
             val line = g.paceLine(pace)
             g.choosePace(pace)
             // during the pace question the guide's next line already answers
-            if (!asked) sayLine(line)
+            if (!asked) sayLine(line, SpeechKind.PACE, fits = { Guide.current === g })
             return true
         }
         speak("Say in a few words that you will walk at that pace when you walk together.", lang, pace.label)
@@ -304,7 +400,7 @@ object Clinic {
         val g = Guide.current
         if (g != null && g.pause()) {
             g.heard(sample.orEmpty())
-            sayLine(g.line(LineKey.PAUSE_OK))
+            sayLine(g.line(LineKey.PAUSE_OK), SpeechKind.PACE, fits = { Guide.current === g })
             return true
         }
         speak("Say kindly that you are not walking right now.", lang, "I'm not walking right now.")
@@ -321,6 +417,7 @@ object Clinic {
                 "Answer the patient's question about the walk in one or two short sentences, using only these facts. ${g.statusFacts()}",
                 lang,
                 g.destination,
+                fits = { Guide.current === g },
             )
             return true
         }
@@ -336,16 +433,20 @@ object Clinic {
         val public = Places.public(places)
         val match = Places.find(place, public)
         if (match == null) {
-            val known = Places.find(place, places)
+            val known = Places.find(place, places) ?: Places.find(place, _ui.value.places)
+            val elsewhere = known != null && !Floors.onMap(known.mapName, MapSync.current)
             speak(
                 buildString {
-                    if (known != null) append("Explain kindly that the reception desk assigns treatment rooms, so you cannot take them to ${known.label} yourself. ")
-                    else append("Say kindly that you do not know this place. ")
+                    when {
+                        elsewhere -> append("Explain kindly that ${known!!.label} is on another floor and you cannot take the elevator, so the team at the reception desk helps. ")
+                        known != null -> append("Explain kindly that the reception desk assigns treatment rooms, so you cannot take them to ${known.label} yourself. ")
+                        else -> append("Say kindly that you do not know this place. ")
+                    }
                     if (public.isNotEmpty()) append("Offer to take them to one of these places: ${Places.spoken(public)}. ")
                     append("Short.")
                 },
                 lang,
-                "The reception desk assigns rooms.",
+                if (elsewhere) "That is on another floor. The desk will help you." else "The reception desk assigns rooms.",
             )
             return true
         }
@@ -356,6 +457,7 @@ object Clinic {
     suspend fun checkInFor(place: String?, sample: String?): Boolean {
         val lang = Lang(null, sample)
         if (busyWalking(lang)) return false
+        if (!ModeRules.selfCheckIn(Modes.current)) return false
         val places = loadPlaces()
         val rooms = Places.selfCheckIn(places)
         val reception = Places.reception(places)
@@ -366,17 +468,19 @@ object Clinic {
                 else "Ask kindly which of these they are here for: ${Places.spoken(rooms)}. If they are not sure, the team at the reception desk helps.",
                 lang,
                 "Who are you here to see?",
+                question = rooms.isNotEmpty(),
             )
             return true
         }
         if (room.kind == PlaceKind.RECEPTION) return notSure(lang)
         val target = Places.checkInTarget(room, places)
-        return startOwnJourney(target.to, room.id, null, null, OwnRequest(paceChosen = false, sample = sample), "Checked in for ${room.label}", lang)
+        // the check-in itself is said by the guide, together with the ticket and its first question (SpeechTurns)
+        return startOwnJourney(target.to, room.id, null, null, OwnRequest(paceChosen = false, sample = sample, checkIn = true), "Checked in for ${room.label}", lang)
     }
 
     // "I'm not sure": at the reception the desk helps, elsewhere otto walks them there
     private suspend fun notSure(lang: Lang): Boolean {
-        val reception = Places.reception(_ui.value.places)
+        val reception = Places.reception(placesHere())
         if (reception == null || Robot.atHome == true) {
             speak("Say kindly that the team at the reception desk will help them, right here.", lang, "The team at the desk will help you.")
             return true
@@ -437,7 +541,7 @@ object Clinic {
         val lang = Lang(null, sample)
         val t = Tickets.normalize(ticket)
         if (t == null) {
-            speak("Ask kindly for their ticket number: one letter and two digits, it is on the robot screen or the staff gave it to them.", lang, "What is your ticket number?")
+            speak("Ask kindly for their ticket number: one letter and two digits, it is on the robot screen or the staff gave it to them.", lang, "What is your ticket number?", question = true)
             return true
         }
         feed.patientIntent(now(), "Asked about the wait for ticket $t")
@@ -500,6 +604,7 @@ object Clinic {
         }
         val sent = result.isSuccess
         setTask(null)
+        val kind = if (urgent) SpeechKind.ALERT else SpeechKind.REPLY
         if (sent) {
             // no happy face in an emergency: he stays concerned with the person
             if (!urgent) flash(Mood.RELIEVED)
@@ -508,6 +613,7 @@ object Clinic {
                     if (urgent) " Because it is urgent, also tell them clearly to call the emergency number 112 right away, and that you stay with them." else "",
                 lang,
                 if (urgent) "The team is informed. Please call 112 now." else "The team is informed and will come to you.",
+                kind = kind, urgent = urgent,
             )
         } else {
             flash(Mood.SORRY)
@@ -516,6 +622,7 @@ object Clinic {
                     if (urgent) " Tell them clearly to call the emergency number 112 right away." else " Ask them to wait a moment.",
                 lang,
                 if (urgent) "Please call 112 now." else "Sorry, I couldn't reach the team.",
+                kind = kind, urgent = urgent,
             )
         }
         return sent
@@ -536,6 +643,7 @@ object Clinic {
 
     fun tapPace(pace: Pace) {
         touched()
+        Speech.answered("tapped ${pace.label.lowercase()}")
         Guide.current?.choosePace(pace)
         feed.patientIntent(now(), "Chose ${pace.label.lowercase()} on the screen")
     }
@@ -548,6 +656,7 @@ object Clinic {
 
     fun tapGoOn() {
         touched()
+        Speech.answered("tapped go on")
         Guide.current?.goOn()
         feed.patientIntent(now(), "Ready to go on")
     }
@@ -555,12 +664,14 @@ object Clinic {
     // the talk at a check-back: "All good", "Slower", "Wait"
     fun tapAllGood() {
         touched()
+        Speech.answered("tapped all good")
         Guide.current?.allGood()
         feed.patientIntent(now(), "Tapped all good")
     }
 
     fun tapTalkSlower() {
         touched()
+        Speech.answered("tapped slower")
         val g = Guide.current ?: return
         g.choosePace(g.pace.slower())
         feed.patientIntent(now(), "Tapped slower")
@@ -568,6 +679,7 @@ object Clinic {
 
     fun tapTalkWait() {
         touched()
+        Speech.answered("tapped wait")
         Guide.current?.pause()
         feed.patientIntent(now(), "Tapped wait")
     }
@@ -583,21 +695,22 @@ object Clinic {
     // self check-in: who -> pace -> confirm
     fun tapCheckIn() {
         touched()
-        if (Guide.current != null) return
-        val rooms = Places.selfCheckIn(_ui.value.places)
+        if (Guide.current != null || !ModeRules.selfCheckIn(Modes.current)) return
+        val rooms = Places.selfCheckIn(placesHere())
         _ui.update { it.copy(checkIn = CheckInUi(step = CheckInStep.WHO, rooms = rooms)) }
         flash(Mood.SURPRISED, 900)
         feed.patientIntent(now(), "Started the self check-in")
         scope.launch {
             val fresh = refreshPlaces() ?: return@launch
-            _ui.update { s -> s.checkIn?.let { c -> s.copy(checkIn = c.copy(rooms = Places.selfCheckIn(fresh))) } ?: s }
+            _ui.update { s -> s.checkIn?.let { c -> s.copy(checkIn = c.copy(rooms = Places.selfCheckIn(placesHere(fresh)))) } ?: s }
         }
     }
 
     // null = "I'm not sure"
     fun tapRoom(room: Place?) {
         touched()
-        val reception = Places.reception(_ui.value.places)
+        Speech.answered("tapped a room")
+        val reception = Places.reception(placesHere())
         _ui.update { s ->
             val c = s.checkIn ?: return@update s
             when {
@@ -642,7 +755,7 @@ object Clinic {
             feed.patientIntent(now(), "Checked in for ${room.label} on the screen")
             val r = net { Backend.createJourney(target.to.id, forId, c.pace, c.wheelchair) }
             r.onSuccess { created ->
-                val own = OwnRequest(paceChosen = true, sample = lastUserText)
+                val own = OwnRequest(paceChosen = true, sample = lastUserText, checkIn = room.kind != PlaceKind.RECEPTION)
                 created.journey?.id?.let { OttoBrain.expectOwn(it, own) }
                 // the guide screen takes over as soon as the guide starts (guideStarted closes this one)
                 created.command?.let { OttoBrain.addOwnCommand(it, own) }
@@ -671,8 +784,8 @@ object Clinic {
 
     suspend fun pollCommand(): RobotCommand? = net(quiet = true) { Backend.nextCommand() }.getOrNull()
 
-    suspend fun commandDone(id: String) {
-        withContext(NonCancellable) { net(quiet = true) { Backend.commandDone(id) } }
+    suspend fun commandDone(id: String, result: CommandResult? = null) {
+        withContext(NonCancellable) { net(quiet = true) { Backend.commandDone(id, result) } }
     }
 
     // go_to: drive to the spot and stay there. true when he got there.
@@ -704,8 +817,7 @@ object Clinic {
         try {
             val text = cmd.text?.trim().orEmpty()
             if (text.isEmpty()) return
-            _ui.update { it.copy(subtitle = text, subtitleFromUser = false) }
-            Voice.say(text)
+            Speech.say(SpeechKind.TEAM, text)
         } finally {
             commandDone(cmd.id)
         }
@@ -715,7 +827,7 @@ object Clinic {
     suspend fun askFromTeam(cmd: RobotCommand) {
         try {
             val text = cmd.text?.trim().orEmpty()
-            if (text.isEmpty()) return
+            if (text.isEmpty() || Modes.current.silent) return
             feed.ottoDid(now(), "Message from the team: $text")
             Voice.ask(text)
         } finally {
@@ -759,7 +871,7 @@ object Clinic {
                     WalkControl.FASTER -> "Asked to walk faster (phone)"
                 },
             )
-            if (applied) sayLineLater(line)
+            if (applied) Speech.sayLater(SpeechKind.PACE, line) { Guide.current === g }
         } finally {
             commandDone(cmd.id)
         }
@@ -770,7 +882,7 @@ object Clinic {
     suspend fun askDuringWalk(cmd: RobotCommand) {
         try {
             val text = cmd.text?.trim().orEmpty()
-            if (text.isEmpty()) return
+            if (text.isEmpty() || Modes.current.silent) return
             // with a journey it comes from the walk page on the patient's phone
             if (cmd.journeyId != null) {
                 Guide.current?.takeIf { it.journeyId == cmd.journeyId }?.heard(text)
@@ -794,22 +906,32 @@ object Clinic {
                 "and that you will be back in a moment.",
             Lang(null, lastUserText),
             "Sorry, I have to go. I'll be right back.",
+            kind = SpeechKind.INFO,
         )
     }
 
     // ---- things otto says on his own (brain tasks) ----
 
     suspend fun greet() {
+        val since = now()
         speak(
             "Greet a visitor who just walked up to you at the reception of a doctor's practice. " +
                 "In one or two short sentences offer to check them in or show them the way.",
             Lang(null),
             "Hello! I can check you in or show you the way.",
+            kind = SpeechKind.GREETING,
+            // the person already started talking, or a walk began: no greeting any more
+            fits = { lastVoiceAt() < since && Guide.current == null },
         )
     }
 
     suspend fun sayGoingToCharge() {
-        Voice.speak("Tell the people around you in one short sentence that your battery is low and you are going to your charger now.", Lang(null))
+        Speech.speak(
+            SpeechKind.INFO,
+            "Tell the people around you in one short sentence that your battery is low and you are going to your charger now.",
+            Lang(null),
+            "My battery is low. I'm going to my charger.",
+        )
     }
 
     fun setWalking(on: Boolean) {
@@ -817,7 +939,7 @@ object Clinic {
     }
 
     // blocked: ask people to let otto pass, at most every OBSTACLE_TALK_EVERY_MS. ready = a walk's own
-    // line for it (6.7), said at once; without one the llm writes it
+    // line for it (6.7), said at once; without one the llm writes it. dropped when otto drives on before it is said
     fun onNavEvent(ev: NavEvent, lang: Lang = Lang(null), ready: String? = null) {
         when (ev) {
             NavEvent.BLOCKED -> {
@@ -825,8 +947,9 @@ object Clinic {
                 val now = now()
                 if (now - lastObstacleTalk >= OBSTACLE_TALK_EVERY_MS) {
                     lastObstacleTalk = now
-                    if (ready != null) sayLineLater(ready)
-                    else scope.launch { Voice.speak("Politely ask the people in your way to let you pass.", lang) }
+                    val stillThere = { Robot.driving != null }
+                    if (ready != null) Speech.sayLater(SpeechKind.WAY, ready, stillThere)
+                    else scope.launch { Speech.speak(SpeechKind.WAY, "Politely ask the people in your way to let you pass.", lang, "Excuse me, may I pass, please?", fits = stillThere) }
                 }
             }
             NavEvent.CLEAR -> setTask(null)
@@ -842,37 +965,45 @@ object Clinic {
         if (Guide.current != null) return
         _ui.update { it.copy(subtitle = "", task = null, checkIn = null, guide = null) }
         lastUserText = null
+        Speech.clear("back to the welcome screen")
         runCatching { AgentCore.clearContext() }
     }
 
-    // ---- helpers ----
+    // ---- speech (everything goes through Speech, SpeechTurns) ----
 
-    // english instruction -> a spoken line in the person's language. when the llm does not deliver, the
-    // ready line is said instead (a walk's line in the patient's language, else the english screen text),
-    // so there is no silent gap (6.7). a line the patient talked over is not said again. every llm line
-    // logs how long it took
-    suspend fun speak(task: String, lang: Lang, screen: String, ready: String? = null) {
-        val r = working { Voice.speakTimed(task, lang) }
-        val what = task.take(LOG_TASK_CHARS).trimEnd()
-        when {
-            r.ok -> RobotLog.i(
-                LogSource.VOICE,
-                "Llm line (\"$what...\"): " + (r.firstWordsMs?.let { "first words after ${secs(it)}, " } ?: "") +
-                    "done after ${secs(r.totalMs)}" + if (r.tries > 1) ", 2nd try" else "",
-            )
-            r.interrupted -> RobotLog.i(LogSource.VOICE, "Llm line (\"$what...\") stopped after ${secs(r.totalMs)}: the patient spoke, the agent answers")
-            else -> {
-                RobotLog.w(LogSource.VOICE, "Speech failed after ${secs(r.totalMs)} (${r.tries} tries), said the ready line instead")
-                sayLine(ready ?: screen)
-            }
-        }
+    // english instruction -> a spoken line in the person's language, when it is its turn. when the llm does not
+    // deliver, the ready line is said instead (a walk's line in the patient's language, else the english screen
+    // text), so there is no silent gap (6.7). true when it was said
+    suspend fun speak(
+        task: String,
+        lang: Lang,
+        screen: String,
+        ready: String? = null,
+        kind: SpeechKind = SpeechKind.REPLY,
+        question: Boolean = false,
+        urgent: Boolean = false,
+        fits: () -> Boolean = { true },
+    ): Boolean = Speech.speak(kind, task, lang, ready ?: screen, question, urgent, fits) == TurnOutcome.SAID
+
+    // a ready line (the walk's line set, a fallback): text-to-speech only, no llm, when it is its turn.
+    // false when it was not said (talked over, dropped, silent mode)
+    suspend fun sayLine(
+        text: String,
+        kind: SpeechKind = SpeechKind.WALK,
+        question: Boolean = false,
+        topic: String? = null,
+        fits: () -> Boolean = { true },
+    ): Boolean = Speech.say(kind, text, question = question, topic = topic, fits = fits) == TurnOutcome.SAID
+
+    fun sayLineLater(text: String, kind: SpeechKind = SpeechKind.WALK, fits: () -> Boolean = { true }) {
+        Speech.sayLater(kind, text, fits)
     }
 
-    // a ready line (the walk's line set, a fallback): text-to-speech only, no llm, so it starts at once.
-    // on the screen like otto's other words. false when the tts did not play it (talked over, failed)
-    suspend fun sayLine(text: String): Boolean {
+    // Speech plays a ready line: on the screen like otto's other words, then text-to-speech
+    suspend fun playText(text: String): TurnOutcome {
         val t = text.trim()
-        if (t.isEmpty()) return true
+        if (t.isEmpty()) return TurnOutcome.SAID
+        val startedAt = now()
         _ui.update { it.copy(subtitle = t, subtitleFromUser = false, speaking = true) }
         speakingJob?.cancel()
         feed.ottoSaid(now(), t)
@@ -881,11 +1012,36 @@ object Clinic {
             delay(SAID_LINGER_MS)
             _ui.update { it.copy(speaking = false) }
         }
-        return ok
+        return when {
+            ok -> TurnOutcome.SAID
+            lastVoiceAt() >= startedAt -> TurnOutcome.INTERRUPTED
+            else -> TurnOutcome.FAILED
+        }
     }
 
-    fun sayLineLater(text: String) {
-        scope.launch { sayLine(text) }
+    // Speech plays an llm line: written and spoken by AgentOS in the person's language. every llm line logs how
+    // long it took; a line the patient talked over is not said again
+    suspend fun playTask(task: String, lang: Lang, fallback: String): TurnOutcome {
+        val r = working { Voice.speakTimed(task, lang) }
+        val what = task.take(LOG_TASK_CHARS).trimEnd()
+        return when {
+            r.ok -> {
+                RobotLog.i(
+                    LogSource.VOICE,
+                    "Llm line (\"$what...\"): " + (r.firstWordsMs?.let { "first words after ${secs(it)}, " } ?: "") +
+                        "done after ${secs(r.totalMs)}" + if (r.tries > 1) ", 2nd try" else "",
+                )
+                TurnOutcome.SAID
+            }
+            r.interrupted -> {
+                RobotLog.i(LogSource.VOICE, "Llm line (\"$what...\") stopped after ${secs(r.totalMs)}: the patient spoke, the agent answers")
+                TurnOutcome.INTERRUPTED
+            }
+            else -> {
+                RobotLog.w(LogSource.VOICE, "Speech failed after ${secs(r.totalMs)} (${r.tries} tries), said the ready line instead")
+                playText(fallback)
+            }
+        }
     }
 
     private fun secs(ms: Long) = String.format(java.util.Locale.ROOT, "%.1f s", ms / 1000.0)

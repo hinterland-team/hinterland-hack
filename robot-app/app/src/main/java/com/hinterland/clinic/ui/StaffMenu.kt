@@ -20,7 +20,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -42,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinterland.clinic.LogLevel
 import com.hinterland.clinic.LogLine
+import com.hinterland.clinic.ModeRules
+import com.hinterland.clinic.RobotMode
 import com.hinterland.clinic.ServerState
 import com.hinterland.clinic.StaffUi
 import java.time.Instant
@@ -69,19 +73,40 @@ fun StaffMenu(staff: StaffUi, actions: ScreenActions, modifier: Modifier = Modif
             NovaLogo()
             Spacer(Modifier.width(Space.s))
             Pill("Staff", Nova.BlueDeep, Nova.SkySoft)
+            Spacer(Modifier.width(Space.m))
+            // the mode, at the top: normal / show / calm (RobotModes.kt)
+            ModeSwitch(staff, actions)
             Spacer(Modifier.width(Space.s))
             Text(
-                "${staff.robotName} · app ${staff.version}" + (staff.system?.let { " · robot $it" } ?: ""),
-                style = text(Type.caption, FontWeight.Medium, Nova.InkSoft),
-                maxLines = 1,
+                staff.modePending?.let { "${it.label} mode starts when this walk is over." } ?: ModeRules.describe(staff.mode),
+                style = text(16.sp, FontWeight.Medium, if (staff.modePending != null) Nova.Amber else Nova.InkSoft, lineHeight = 20.sp),
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            BigButton("Close", GlyphKind.CLOSE, onClick = actions.closeStaff, modifier = Modifier.width(200.dp), primary = false, height = 72.dp)
+            Spacer(Modifier.width(Space.s))
+            BigButton("Close", GlyphKind.CLOSE, onClick = actions.closeStaff, modifier = Modifier.width(180.dp), primary = false, height = 72.dp)
         }
         Spacer(Modifier.height(Space.m))
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Space.m)) {
-            Column(Modifier.width(430.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(Space.s)) {
+            // more cards than room: the column scrolls
+            Column(
+                Modifier.width(430.dp).fillMaxHeight().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(Space.s),
+            ) {
+                // docs/robot-setup.md: the settings version and the map / floor
+                StatusCard("Setup") {
+                    StatusRow(if (staff.settingsOk) Nova.Done else Nova.Amber, staff.settings.ifBlank { "Settings: not known" })
+                    Spacer(Modifier.height(10.dp))
+                    StatusRow(if (staff.mapOk) Nova.Done else Nova.Amber, staff.map.ifBlank { "Map: not known" })
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "${staff.robotName} · app ${staff.version}" + (staff.system?.let { " · robot $it" } ?: ""),
+                        style = text(15.sp, FontWeight.Normal, Nova.InkFaint),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 ServersCard(staff, actions)
                 StatusCard("Robot") {
                     StatusRow(if (staff.chassisOk) Nova.Done else Nova.Fail, staff.chassis)
@@ -116,6 +141,40 @@ fun StaffMenu(staff: StaffUi, actions: ScreenActions, modifier: Modifier = Modif
 }
 
 private val SMALL = 20.sp
+
+// three segments: the mode otto is in is filled; a mode asked for during a walk has an amber ring
+@Composable
+private fun ModeSwitch(staff: StaffUi, actions: ScreenActions) {
+    val shape = RoundedCornerShape(36.dp)
+    Row(
+        Modifier
+            .height(72.dp)
+            .clip(shape)
+            .background(Nova.Card)
+            .border(1.5.dp, Nova.Line, shape)
+            .padding(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RobotMode.entries.forEach { m ->
+            val on = m == staff.mode
+            val waiting = m == staff.modePending
+            val seg = RoundedCornerShape(30.dp)
+            Box(
+                Modifier
+                    .width(116.dp)
+                    .fillMaxHeight()
+                    .clip(seg)
+                    .background(if (on) Nova.Blue else Nova.Card)
+                    .then(if (waiting) Modifier.border(2.dp, Nova.Amber, seg) else Modifier)
+                    .clickable(role = Role.Button) { actions.setMode(m) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(m.label, style = text(20.sp, FontWeight.Bold, if (on) Color.White else if (waiting) Nova.Amber else Nova.BlueDeep), maxLines = 1)
+            }
+        }
+    }
+}
 
 @Composable
 private fun ServersCard(staff: StaffUi, actions: ScreenActions) {

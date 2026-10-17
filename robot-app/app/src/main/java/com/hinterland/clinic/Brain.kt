@@ -65,9 +65,17 @@ data class Snapshot(
     val returnFailedAt: Long = 0,
     val chargeFailedAt: Long = 0,
     val leaveFailedAt: Long = 0,
+    // the mode (RobotModes.kt): show and calm are silent, calm does not drive on its own
+    val mode: RobotMode = RobotMode.NORMAL,
+    // show mode: a small turn that is due now (ShowMoves decided it), null = none
+    val showTurn: ShowTurn? = null,
 )
 
 sealed interface Plan {
+    // a command this mode does not take (a walk in show mode): answered as refused
+    data class Refuse(val command: RobotCommand, val why: String) : Plan
+    // show mode: a small turn on the spot
+    data class Turn(val turn: ShowTurn) : Plan
     // urgent help was called: stay put and keep talking
     data object StayWithPerson : Plan
     // a command is waiting until the person talking to otto is done (at most QUIET_WAIT_MS)
@@ -103,10 +111,13 @@ object Brain {
     const val RETRY_CHARGE_MS = 5 * 60_000L
     const val RETRY_LEAVE_MS = 2 * 60_000L
 
-    // highest priority first, see the list in the comments
+    // highest priority first, see the list in the comments. the mode gates what otto does on his own
     fun decide(s: Snapshot): Plan {
         // 1. someone needs urgent help: stay, keep talking, start nothing else
         if (s.helpActive) return Plan.StayWithPerson
+
+        // a command this mode does not take is answered at once (a walk in show / calm mode)
+        s.commands.firstNotNullOfOrNull { c -> ModeRules.refuses(s.mode, c.type)?.let { Plan.Refuse(c, it) } }?.let { return it }
 
         // 2. the person in front asked otto to walk them somewhere: go now
         s.commands.firstOrNull { it.id in s.ownCommandIds }?.let { return Plan.RunCommand(it, excuse = false) }
@@ -118,29 +129,43 @@ object Brain {
             return Plan.RunCommand(cmd, excuse = talking && moves(cmd))
         }
 
-        // never cut into a conversation. a bare "listening" status may just be a face in front
-        // of the mic, so a visitor who walks up still gets greeted
-        val visitor = greetable(s)
-        if (s.talk == TalkLevel.ACTIVE || (s.talk == TalkLevel.LISTENING && visitor == null)) return Plan.Talk
+        if (ModeRules.greets(s.mode)) {
+            // never cut into a conversation. a bare "listening" status may just be a face in front
+            // of the mic, so a visitor who walks up still gets greeted
+            val visitor = greetable(s)
+            if (s.talk == TalkLevel.ACTIVE || (s.talk == TalkLevel.LISTENING && visitor == null)) return Plan.Talk
 
-        // 4. someone walked up
-        if (visitor != null) return Plan.Greet(visitor.id)
+            // 4. someone walked up
+            if (visitor != null) return Plan.Greet(visitor.id)
+        }
 
-        // 5. battery
+        // 5. battery (calm: no driving on his own, the low battery is only reported)
         if (s.charging || s.dockedByOtto) {
             val full = s.battery != null && s.battery >= CHARGED_BATTERY
             val retry = s.now - s.leaveFailedAt >= RETRY_LEAVE_MS
             // only leave a charger otto drove to himself; if the team docked him, he stays
-            return if (s.dockedByOtto && full && s.robotReady && retry) Plan.LeaveCharger else Plan.Charge
+            val leave = s.dockedByOtto && full && s.robotReady && retry && ModeRules.leavesCharger(s.mode)
+            return if (leave) Plan.LeaveCharger else Plan.Charge
         }
-        if (needsCharge(s)) return Plan.GoCharge
+        if (needsCharge(s) && ModeRules.drivesToCharger(s.mode)) return Plan.GoCharge
 
         // 6. back to the home spot (reception)
-        if (shouldReturn(s)) return Plan.ReturnHome
+        if (ModeRules.drivesHome(s.mode) && shouldReturn(s)) return Plan.ReturnHome
 
-        // 7. nothing to do
+        // 7. show mode: a small turn now and then
+        if (ModeRules.idleTurns(s.mode) && s.robotReady) s.showTurn?.let { return Plan.Turn(it) }
+
+        // 8. nothing to do
         return Plan.Wait
     }
+
+    // calm mode at a low battery: no drive to the charger, the board says it
+    fun lowBatteryNote(s: Snapshot): String? =
+        if (needsCharge(s) && !ModeRules.drivesToCharger(s.mode) && !s.charging) {
+            "Battery low (${s.battery} %), ${s.mode.label} mode: Otto does not drive to the charger by himself"
+        } else {
+            null
+        }
 
     // guide first, then go_to, then say / ask; oldest first within a type
     fun nextCommand(commands: List<RobotCommand>): RobotCommand? =
@@ -150,12 +175,15 @@ object Brain {
 
     private fun rank(type: String) = when (type) {
         RobotCommand.GUIDE -> 0
-        RobotCommand.GO_TO -> 1
+        RobotCommand.GO_TO, RobotCommand.SWITCH_MAP -> 1
         RobotCommand.SAY, RobotCommand.ASK -> 2
         else -> 3
     }
 
     private fun moves(cmd: RobotCommand) = cmd.type == RobotCommand.GUIDE || cmd.type == RobotCommand.GO_TO
+
+    // a drive home or to the charger stops for these: they need the chassis (a map switch too)
+    private fun needsBody(cmd: RobotCommand) = moves(cmd) || cmd.type == RobotCommand.SWITCH_MAP
 
     fun greetable(s: Snapshot): Visitor? {
         val v = s.visitor ?: return null
@@ -176,9 +204,18 @@ object Brain {
             (s.returnHomeNow || s.now - s.quietSince >= AWAY_IDLE_MS) &&
             s.now - s.returnFailedAt >= RETRY_RETURN_MS
 
-    // a running ReturnHome or GoCharge gives way to these (a guide, the person's own request, go_to, urgent help)
+    // a running ReturnHome, GoCharge or show turn gives way to these (a guide, the person's own request, go_to,
+    // a map switch, urgent help). a mode change stops the drives the new mode does not allow (stopsFor)
     fun shouldPreempt(s: Snapshot): Boolean =
-        s.helpActive || s.commands.any { moves(it) }
+        s.helpActive || s.commands.any { needsBody(it) }
+
+    // the task of this plan stops when otto changes to this mode (calm: no drive home, no drive to the charger)
+    fun stopsFor(plan: Plan, mode: RobotMode): Boolean = when (plan) {
+        Plan.ReturnHome -> !ModeRules.drivesHome(mode)
+        Plan.GoCharge -> !ModeRules.drivesToCharger(mode)
+        is Plan.Turn -> !ModeRules.idleTurns(mode)
+        else -> false
+    }
 
     fun talkLevel(now: Long, agent: AgentMode, agentAt: Long, userAt: Long, robotAt: Long, actions: Int): TalkLevel =
         when {
@@ -197,6 +234,13 @@ object Brain {
     // ---- words for the screen and the board (english, not speech) ----
 
     fun goal(plan: Plan, s: Snapshot): String = when (plan) {
+        is Plan.Refuse -> "Saying no to a task (${s.mode.label} mode)"
+        is Plan.Turn -> "Show mode"
+        Plan.Wait -> when (s.mode) {
+            RobotMode.NORMAL -> "Waiting for patients"
+            RobotMode.SHOW -> "Show mode"
+            RobotMode.CALM -> "Calm mode"
+        }
         Plan.StayWithPerson -> "Staying with someone who needs help"
         is Plan.WaitForQuiet -> "Finishing this talk, then " + commandGoal(plan.command, s.homeSpot).replaceFirstChar { it.lowercase() }
         is Plan.RunCommand -> commandGoal(plan.command, s.homeSpot)
@@ -206,10 +250,10 @@ object Brain {
         Plan.Charge -> s.battery?.let { "Charging ($it %)" } ?: "Charging"
         Plan.GoCharge -> "Driving to the charger"
         Plan.ReturnHome -> "Driving back to ${s.homeSpot}"
-        Plan.Wait -> "Waiting for patients"
     }
 
     fun state(plan: Plan, homeSpot: String): RobotState = when (plan) {
+        is Plan.Refuse, is Plan.Turn -> RobotState.IDLE
         Plan.StayWithPerson, is Plan.WaitForQuiet, Plan.Talk -> RobotState.TALKING
         is Plan.RunCommand -> commandState(plan.command, homeSpot)
         is Plan.Greet -> RobotState.GREETING
@@ -228,6 +272,7 @@ object Brain {
         }
         RobotCommand.SAY -> "Passing on a message from the team"
         RobotCommand.ASK -> "Thinking about a message from the team"
+        RobotCommand.SWITCH_MAP -> "Switching to map ${c.mapName ?: "?"}"
         else -> "Checking a task from the team"
     }
 
@@ -237,6 +282,7 @@ object Brain {
     fun commandState(c: RobotCommand, homeSpot: String): RobotState = when (c.type) {
         RobotCommand.GUIDE -> RobotState.FETCHING
         RobotCommand.GO_TO -> if (isHome(c.spot, homeSpot)) RobotState.RETURNING else RobotState.WALKING
+        RobotCommand.SWITCH_MAP -> RobotState.IDLE
         else -> RobotState.TALKING
     }
 

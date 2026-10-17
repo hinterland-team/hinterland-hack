@@ -20,8 +20,10 @@ data class LogLine(val at: Long, val level: LogLevel, val source: LogSource, val
 class LogQueue(
     private val keep: Int = KEEP,
     private val queueMax: Int = QUEUE_MAX,
-    private val shipFrom: LogLevel = LogLevel.INFO,
+    shipFrom: LogLevel = LogLevel.INFO,
 ) {
+    // debug lines go to the server too when this is DEBUG (sensors.debugLogs, a live setting)
+    @Volatile var shipFrom: LogLevel = shipFrom
     private val recent = ArrayDeque<LogLine>()
     private val queue = ArrayDeque<LogLine>()
     private var dropped = 0
@@ -133,6 +135,14 @@ object RobotLog {
     }
 
     fun pending(): Int = lines.pending()
+
+    // sensors.debugLogs: debug lines to the dashboard too, from now on
+    fun shipDebug(on: Boolean) {
+        val want = if (on) LogLevel.DEBUG else LogLevel.INFO
+        if (lines.shipFrom == want) return
+        lines.shipFrom = want
+        i(LogSource.APP, if (on) "Debug log lines go to the dashboard too" else "Debug log lines stay on the robot")
+    }
 
     // runs with the brain: one batch every 5 s, slower while the server does not answer
     suspend fun ship() {
