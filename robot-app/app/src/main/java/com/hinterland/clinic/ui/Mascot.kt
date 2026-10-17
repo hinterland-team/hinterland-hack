@@ -1,217 +1,214 @@
 package com.hinterland.clinic.ui
 
-import androidx.compose.animation.core.Animatable
+import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.res.imageResource
 import com.hinterland.clinic.Mood
+import com.hinterland.clinic.R
 import kotlinx.coroutines.delay
 import kotlin.math.cos
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.random.Random
 
-// nova's face: two big round eyes that blink, look up while thinking and smile when done.
+// nova's face is cut from the doctor artwork (res/drawable-nodpi/doctor_*): the bust from the idle frame,
+// and the eyes and mouth of the other frames as patches laid over it. all numbers below are in sprite pixels.
 // with reduced motion the face stays still and only changes its expression.
+private object Sprite {
+    const val WIDTH = 818f
+    const val HEIGHT = 712f
+    val EyesAt = Offset(180f, 240f)
+    val MouthAt = Offset(326f, 402f)
+    // the light blue circle behind the doctor
+    val Backdrop = Offset(408.5f, 412f)
+    const val BACKDROP_R = 404f
+    val Glow = Color(0xFF2E9BFF)
+}
+
+private enum class Eyes(@DrawableRes val res: Int) {
+    SMILE(R.drawable.doctor_eyes_smile),
+    GLANCE(R.drawable.doctor_eyes_glance),
+    LOOK(R.drawable.doctor_eyes_look),
+    SQUINT(R.drawable.doctor_eyes_squint),
+    LAUGH(R.drawable.doctor_eyes_laugh),
+}
+
+private enum class Mouth(@DrawableRes val res: Int) {
+    SMILE(R.drawable.doctor_mouth_smile),
+    O(R.drawable.doctor_mouth_o),
+    LAUGH(R.drawable.doctor_mouth_laugh),
+    FROWN(R.drawable.doctor_mouth_frown),
+}
+
+// mouth shapes nova flaps through while talking, the open ones more often
+private val TALK = listOf(Mouth.O, Mouth.LAUGH, Mouth.O, Mouth.SMILE, Mouth.LAUGH, Mouth.O)
+
 @Composable
 fun Mascot(mood: Mood, modifier: Modifier = Modifier) {
+    val base = ImageBitmap.imageResource(R.drawable.doctor_base)
+    val eyeImages = Eyes.entries.map { ImageBitmap.imageResource(it.res) }
+    val mouthImages = Mouth.entries.map { ImageBitmap.imageResource(it.res) }
     val reduced = LocalReducedMotion.current
-    val blink = remember { Animatable(1f) }
+
+    var blinking by remember { mutableStateOf(false) }
     LaunchedEffect(reduced) {
+        blinking = false
         while (!reduced) {
             delay(Random.nextLong(2_200, 5_200))
-            blink.animateTo(0.08f, tween(70))
-            blink.animateTo(1f, tween(120))
-            // sometimes a double blink
+            blinking = true
+            delay(130)
+            blinking = false
             if (Random.nextInt(4) == 0) {
-                delay(140)
-                blink.animateTo(0.08f, tween(70))
-                blink.animateTo(1f, tween(120))
+                delay(160)
+                blinking = true
+                delay(130)
+                blinking = false
             }
         }
+    }
+
+    // while idle she looks around now and then
+    var glance by remember { mutableStateOf<Eyes?>(null) }
+    LaunchedEffect(mood, reduced) {
+        glance = null
+        if (mood != Mood.IDLE || reduced) return@LaunchedEffect
+        while (true) {
+            delay(Random.nextLong(6_000, 12_000))
+            glance = if (Random.nextBoolean()) Eyes.GLANCE else Eyes.LOOK
+            delay(Random.nextLong(900, 1_600))
+            glance = null
+        }
+    }
+
+    var talkMouth by remember { mutableStateOf(Mouth.SMILE) }
+    LaunchedEffect(mood, reduced) {
+        talkMouth = Mouth.SMILE
+        if (mood != Mood.SPEAKING) return@LaunchedEffect
+        // reduced motion: one still, half-open "talking" mouth
+        if (reduced) {
+            talkMouth = Mouth.O
+            return@LaunchedEffect
+        }
+        var last = Mouth.SMILE
+        while (true) {
+            last = TALK.filter { it != last }.random()
+            talkMouth = last
+            delay(Random.nextLong(110, 190))
+        }
+    }
+
+    val moodEyes = when (mood) {
+        Mood.LISTENING -> Eyes.GLANCE
+        Mood.THINKING -> Eyes.LOOK
+        Mood.HAPPY -> Eyes.LAUGH
+        Mood.SORRY -> Eyes.SQUINT
+        else -> glance ?: Eyes.SMILE
+    }
+    val eyes = if (blinking && mood != Mood.SORRY) Eyes.SQUINT else moodEyes
+    val mouth = when (mood) {
+        Mood.SPEAKING -> talkMouth
+        Mood.HAPPY -> Mouth.LAUGH
+        Mood.SORRY -> Mouth.FROWN
+        else -> Mouth.SMILE
+    }
+
+    // every patch fades in and out on its own, so switching between them is a short crossfade
+    val eyeAlpha = Eyes.entries.map {
+        animateFloatAsState(if (it == eyes) 1f else 0f, calm(if (blinking) 60 else 180, reduced), label = "eyes$it").value
+    }
+    val mouthAlpha = Mouth.entries.map {
+        animateFloatAsState(if (it == mouth) 1f else 0f, calm(if (mood == Mood.SPEAKING) 60 else 200, reduced), label = "mouth$it").value
     }
 
     val loop = rememberInfiniteTransition(label = "mascot")
     val spin by loop.animateFloat(0f, 360f, infiniteRepeatable(tween(1_400, easing = LinearEasing)), label = "spin")
     val pulse by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1_600, easing = LinearEasing)), label = "pulse")
-    val talk by loop.animateFloat(0.15f, 1f, infiniteRepeatable(tween(170), RepeatMode.Reverse), label = "talk")
     val bob by loop.animateFloat(-1f, 1f, infiniteRepeatable(tween(650, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bob")
     val sway by loop.animateFloat(-1f, 1f, infiniteRepeatable(tween(2_400, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "sway")
     val breathe by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(3_200, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe")
     // 0 = no movement at all
     val m = if (reduced) 0f else 1f
 
-    val lookX by animateFloatAsState(if (mood == Mood.THINKING) 0.20f else 0f, tween(450), label = "lookX")
-    val lookY by animateFloatAsState(if (mood == Mood.THINKING) -0.20f else 0f, tween(450), label = "lookY")
-    val open by animateFloatAsState(
-        when (mood) {
-            Mood.LISTENING -> 1.12f
-            Mood.THINKING -> 0.86f
-            Mood.SORRY -> 0.62f
-            else -> 1f
+    val tilt by animateFloatAsState(
+        m * when (mood) {
+            Mood.THINKING -> 4f
+            Mood.SORRY -> -3f
+            Mood.LISTENING -> -2f
+            else -> 0f
         },
-        tween(300), label = "open",
+        calm(500, reduced),
+        label = "tilt",
     )
+    val sink by animateFloatAsState(m * if (mood == Mood.SORRY) 10f else 0f, calm(500, reduced), label = "sink")
 
     Canvas(modifier) {
-        val s = size.minDimension
-        val bounce = m * if (mood == Mood.WALKING) bob * s * 0.008f else (breathe - 0.5f) * s * 0.006f
-        val c = Offset(size.width / 2f, size.height / 2f + bounce)
-        val r = s * 0.40f
+        val k = min(size.width / Sprite.WIDTH, size.height / Sprite.HEIGHT)
+        val walking = mood == Mood.WALKING
+        val dx = m * if (walking) sway * 8f else 0f
+        val dy = sink + m * if (walking) bob * 9f else (breathe - 0.5f) * 6f
 
-        // listening: soft rings going out
-        if (mood == Mood.LISTENING) {
-            for (i in 0..1) {
-                val p = ((if (reduced) 0.3f else pulse) + i * 0.5f) % 1f
-                drawCircle(
-                    color = Nova.Sky.copy(alpha = (1f - p) * 0.5f),
-                    radius = r * (1.04f + 0.18f * p),
-                    center = c,
-                    style = Stroke(width = s * 0.010f),
-                )
-            }
-        }
-
-        // calm blue aura, shadow, face
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(Nova.Sky.copy(alpha = 0.30f), Nova.Sky.copy(alpha = 0f)),
-                center = c,
-                radius = r * 1.30f,
-            ),
-            radius = r * 1.30f,
-            center = c,
-        )
-        drawCircle(Nova.BlueDeep.copy(alpha = 0.10f), radius = r * 1.01f, center = c + Offset(0f, s * 0.03f))
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(Color.White, Nova.SkySoft),
-                center = c + Offset(-r * 0.35f, -r * 0.45f),
-                radius = r * 1.7f,
-            ),
-            radius = r,
-            center = c,
-        )
-        drawCircle(Nova.Line, radius = r, center = c, style = Stroke(width = s * 0.006f))
-
-        // eyes
-        val eyeW = s * 0.105f
-        val eyeH = s * 0.165f * open * blink.value
-        val dx = r * 0.36f
-        val lookOffset = Offset(
-            (lookX + if (mood == Mood.WALKING) sway * 0.10f * m else 0f) * r * 0.5f,
-            lookY * r * 0.5f,
-        )
-        for (side in listOf(-1f, 1f)) {
-            val ec = Offset(c.x + side * dx, c.y - r * 0.10f) + lookOffset
-            if (mood == Mood.HAPPY) {
-                // closed happy eyes ^ ^
-                drawArc(
-                    color = Nova.Ink,
-                    startAngle = 200f,
-                    sweepAngle = 140f,
-                    useCenter = false,
-                    topLeft = Offset(ec.x - eyeW * 0.7f, ec.y - eyeW * 0.35f),
-                    size = Size(eyeW * 1.4f, eyeW * 1.2f),
-                    style = Stroke(width = eyeW * 0.32f, cap = StrokeCap.Round),
-                )
-            } else {
-                val h = eyeH.coerceAtLeast(s * 0.012f)
-                drawRoundRect(
-                    color = Nova.Ink,
-                    topLeft = Offset(ec.x - eyeW / 2f, ec.y - h / 2f),
-                    size = Size(eyeW, h),
-                    cornerRadius = CornerRadius(eyeW / 2f, eyeW / 2f),
-                )
-                if (blink.value > 0.5f) {
-                    drawCircle(
-                        Color.White.copy(alpha = 0.92f),
-                        radius = eyeW * 0.17f,
-                        center = Offset(ec.x + eyeW * 0.16f, ec.y - h * 0.22f),
-                    )
+        translate((size.width - Sprite.WIDTH * k) / 2f, (size.height - Sprite.HEIGHT * k) / 2f) {
+            scale(k, k, pivot = Offset.Zero) {
+                if (mood == Mood.LISTENING) {
+                    for (i in 0..1) {
+                        val p = ((if (reduced) 0.3f else pulse) + i * 0.5f) % 1f
+                        drawCircle(
+                            color = Sprite.Glow.copy(alpha = (1f - p) * 0.35f),
+                            radius = Sprite.BACKDROP_R * (1.0f + 0.14f * p),
+                            center = Sprite.Backdrop,
+                            style = Stroke(width = 6f),
+                        )
+                    }
                 }
-            }
-        }
 
-        // cheeks
-        for (side in listOf(-1f, 1f)) {
-            drawCircle(
-                Nova.Blush.copy(alpha = 0.35f),
-                radius = s * 0.045f,
-                center = Offset(c.x + side * r * 0.62f, c.y + r * 0.20f),
-            )
-        }
+                translate(dx, dy) {
+                    rotate(tilt, pivot = Offset(Sprite.WIDTH / 2f, Sprite.HEIGHT)) {
+                        drawImage(base)
+                        Eyes.entries.forEach { e ->
+                            if (eyeAlpha[e.ordinal] > 0.01f) drawImage(eyeImages[e.ordinal], Sprite.EyesAt, alpha = eyeAlpha[e.ordinal])
+                        }
+                        Mouth.entries.forEach { m ->
+                            if (mouthAlpha[m.ordinal] > 0.01f) drawImage(mouthImages[m.ordinal], Sprite.MouthAt, alpha = mouthAlpha[m.ordinal])
+                        }
+                    }
+                }
 
-        // mouth
-        val mouthY = c.y + r * 0.30f
-        when (mood) {
-            Mood.SPEAKING -> {
-                val w = s * 0.10f
-                val h = s * (0.022f + 0.050f * (if (reduced) 0.5f else talk))
-                drawRoundRect(
-                    color = Nova.Ink,
-                    topLeft = Offset(c.x - w / 2f, mouthY - h / 2f),
-                    size = Size(w, h),
-                    cornerRadius = CornerRadius(w / 2f, w / 2f),
-                )
-            }
-            Mood.SORRY -> drawArc(
-                color = Nova.Ink,
-                startAngle = 200f,
-                sweepAngle = 140f,
-                useCenter = false,
-                topLeft = Offset(c.x - s * 0.07f, mouthY - s * 0.005f),
-                size = Size(s * 0.14f, s * 0.08f),
-                style = Stroke(width = s * 0.018f, cap = StrokeCap.Round),
-            )
-            Mood.THINKING -> drawLine(
-                color = Nova.Ink,
-                start = Offset(c.x - s * 0.035f, mouthY + s * 0.01f),
-                end = Offset(c.x + s * 0.045f, mouthY - s * 0.002f),
-                strokeWidth = s * 0.018f,
-                cap = StrokeCap.Round,
-            )
-            else -> {
-                val w = if (mood == Mood.HAPPY) s * 0.18f else s * 0.14f
-                drawArc(
-                    color = Nova.Ink,
-                    startAngle = 20f,
-                    sweepAngle = 140f,
-                    useCenter = false,
-                    topLeft = Offset(c.x - w / 2f, mouthY - w * 0.42f),
-                    size = Size(w, w * 0.62f),
-                    style = Stroke(width = s * 0.018f, cap = StrokeCap.Round),
-                )
-            }
-        }
-
-        // thinking: three dots orbiting above the head
-        if (mood == Mood.THINKING) {
-            for (i in 0 until 3) {
-                val a = Math.toRadians((spin * m + i * 26f - 90f).toDouble())
-                val orbit = r * 1.16f
-                drawCircle(
-                    color = Nova.Blue.copy(alpha = 0.35f + 0.25f * i),
-                    radius = s * (0.015f + 0.005f * i),
-                    center = Offset(c.x + (orbit * cos(a)).toFloat(), c.y + (orbit * sin(a)).toFloat()),
-                )
+                if (mood == Mood.THINKING) {
+                    val c = Sprite.Backdrop + Offset(Sprite.BACKDROP_R * 0.78f, -Sprite.BACKDROP_R * 0.82f)
+                    for (i in 0 until 3) {
+                        val a = Math.toRadians((spin * m + i * 22f - 100f).toDouble())
+                        drawCircle(
+                            color = Sprite.Glow.copy(alpha = 0.45f + 0.18f * i),
+                            radius = 10f + 3.5f * i,
+                            center = Offset(
+                                c.x + (Sprite.BACKDROP_R * 0.22f * cos(a)).toFloat(),
+                                c.y + (Sprite.BACKDROP_R * 0.07f * sin(a)).toFloat(),
+                            ),
+                        )
+                    }
+                }
             }
         }
     }

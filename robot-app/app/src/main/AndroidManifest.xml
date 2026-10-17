@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- RobotApi (navigation) - list from the RobotAPI doc -->
     <uses-permission android:name="com.ainirobot.coreservice.robotSettingProvider" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
@@ -36,6 +37,10 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name="com.ainirobot.agent.service.AgentClientService"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>
