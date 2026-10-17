@@ -2,6 +2,17 @@
 
 Our entry for the Terra Robotics Challenge (Smart Receptionist). The robot (OrionStar Nova on AgentOS) does the reception of a doctor's practice: the patient just talks to it, Otto checks them in, the doctor gets a Teams card, and when the doctor is ready Otto walks the patient to the room and drives back.
 
+## Meet Otto
+
+| | |
+|---|---|
+| ![Otto talking, his words in a speech bubble](docs/images/otto-talking.png) | ![Otto walking a patient to Room B204](docs/images/otto-walking.png) |
+| Otto greets a patient. What he says shows in a speech bubble next to his face. | On the way to Room B204: the route from A to B, Otto on it, arrows towards the pin. |
+| ![Otto excited, with confetti](docs/images/otto-excited.png) | ![Otto with heart eyes](docs/images/otto-heart-eyes.png) |
+| Arrived with a patient. | After a thumbs up from the patient. |
+
+Most of the time the face fills the screen. When something happens (a walk, a check-in step, help), the face moves to the side and the info shows next to it.
+
 ## What's in here
 
 - `robot-app/` - Android app for the robot (Kotlin, Jetpack Compose, AgentOS SDK 0.4.5). "Nova Clinic": Otto picks a patient up by ticket, walks with them at their pace to the room the team chose, checks they still follow, and brings them to the exit. See [Robot app](#robot-app).
