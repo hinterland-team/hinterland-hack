@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- themed icon (android 13+): the head as one shape with eyes and smile cut out, plus the badge -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF000000"
+        android:fillType="evenOdd"
+        android:pathData="M54,54m-24,0a24,24 0,1 1,48 0a24,24 0,1 1,-48 0
+            M45.6,45.25a3.47,3.47 0,0 0,-3.47 3.47v5.6a3.47,3.47 0,0 0,6.94 0v-5.6a3.47,3.47 0,0 0,-3.47 -3.47z
+            M62.4,45.25a3.47,3.47 0,0 0,-3.47 3.47v5.6a3.47,3.47 0,0 0,6.94 0v-5.6a3.47,3.47 0,0 0,-3.47 -3.47z
+            M47.3,59.5Q54,64.6 60.7,59.5a1.2,1.2 0,0 1,1.5 1.9Q54,68.4 45.8,61.4a1.2,1.2 0,0 1,1.5 -1.9z" />
+    <path
+        android:fillColor="#FF000000"
+        android:fillType="evenOdd"
+        android:pathData="M70,70m-6.5,0a6.5,6.5 0,1 1,13 0a6.5,6.5 0,1 1,-13 0
+            M68.8,66.2h2.4v2.6h2.6v2.4h-2.6v2.6h-2.4v-2.6h-2.6v-2.4h2.6z" />
+</vector>

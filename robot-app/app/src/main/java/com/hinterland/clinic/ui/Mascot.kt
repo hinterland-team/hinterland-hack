@@ -28,12 +28,14 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
 
-// nova's face: two big round eyes that blink, look up while thinking and smile when done
+// nova's face: two big round eyes that blink, look up while thinking and smile when done.
+// with reduced motion the face stays still and only changes its expression.
 @Composable
 fun Mascot(mood: Mood, modifier: Modifier = Modifier) {
+    val reduced = LocalReducedMotion.current
     val blink = remember { Animatable(1f) }
-    LaunchedEffect(Unit) {
-        while (true) {
+    LaunchedEffect(reduced) {
+        while (!reduced) {
             delay(Random.nextLong(2_200, 5_200))
             blink.animateTo(0.08f, tween(70))
             blink.animateTo(1f, tween(120))
@@ -53,6 +55,8 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier) {
     val bob by loop.animateFloat(-1f, 1f, infiniteRepeatable(tween(650, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bob")
     val sway by loop.animateFloat(-1f, 1f, infiniteRepeatable(tween(2_400, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "sway")
     val breathe by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(3_200, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe")
+    // 0 = no movement at all
+    val m = if (reduced) 0f else 1f
 
     val lookX by animateFloatAsState(if (mood == Mood.THINKING) 0.20f else 0f, tween(450), label = "lookX")
     val lookY by animateFloatAsState(if (mood == Mood.THINKING) -0.20f else 0f, tween(450), label = "lookY")
@@ -68,14 +72,14 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier) {
 
     Canvas(modifier) {
         val s = size.minDimension
-        val bounce = if (mood == Mood.WALKING) bob * s * 0.008f else (breathe - 0.5f) * s * 0.006f
+        val bounce = m * if (mood == Mood.WALKING) bob * s * 0.008f else (breathe - 0.5f) * s * 0.006f
         val c = Offset(size.width / 2f, size.height / 2f + bounce)
         val r = s * 0.40f
 
         // listening: soft rings going out
         if (mood == Mood.LISTENING) {
             for (i in 0..1) {
-                val p = (pulse + i * 0.5f) % 1f
+                val p = ((if (reduced) 0.3f else pulse) + i * 0.5f) % 1f
                 drawCircle(
                     color = Nova.Sky.copy(alpha = (1f - p) * 0.5f),
                     radius = r * (1.04f + 0.18f * p),
@@ -112,7 +116,7 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier) {
         val eyeH = s * 0.165f * open * blink.value
         val dx = r * 0.36f
         val lookOffset = Offset(
-            (lookX + if (mood == Mood.WALKING) sway * 0.10f else 0f) * r * 0.5f,
+            (lookX + if (mood == Mood.WALKING) sway * 0.10f * m else 0f) * r * 0.5f,
             lookY * r * 0.5f,
         )
         for (side in listOf(-1f, 1f)) {
@@ -160,7 +164,7 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier) {
         when (mood) {
             Mood.SPEAKING -> {
                 val w = s * 0.10f
-                val h = s * (0.022f + 0.050f * talk)
+                val h = s * (0.022f + 0.050f * (if (reduced) 0.5f else talk))
                 drawRoundRect(
                     color = Nova.Ink,
                     topLeft = Offset(c.x - w / 2f, mouthY - h / 2f),
@@ -201,7 +205,7 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier) {
         // thinking: three dots orbiting above the head
         if (mood == Mood.THINKING) {
             for (i in 0 until 3) {
-                val a = Math.toRadians((spin + i * 26f - 90f).toDouble())
+                val a = Math.toRadians((spin * m + i * 26f - 90f).toDouble())
                 val orbit = r * 1.16f
                 drawCircle(
                     color = Nova.Blue.copy(alpha = 0.35f + 0.25f * i),

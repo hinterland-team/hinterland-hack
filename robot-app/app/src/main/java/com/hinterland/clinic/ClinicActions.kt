@@ -13,74 +13,122 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 // page actions. the llm picks them by desc and fills the params from the conversation.
+// one job per action, at most two params, closed sets as ENUM (agentos-nova skill, section 3).
 object ClinicActions {
 
     private const val NS = "com.hinterland.clinic"
 
-    fun all(): List<Action> = listOf(checkIn(), guideToDoctor(), callStaff(), waitingStatus())
+    fun all(): List<Action> = listOf(
+        confirmTicket(), setPace(), pauseWalk(), walkStatus(),
+        guideToPlace(), checkInFor(), waitingStatus(), callStaff(),
+    )
 
-    private fun checkIn() = Action(
-        name = "$NS.CHECK_IN",
-        displayName = "Check in",
-        desc = "Check a patient in at the reception of the doctor's practice: saves the visit and informs their doctor. " +
-            "Use it only after the patient confirmed their name, their doctor and, if they know it, the appointment time.",
+    private fun confirmTicket() = Action(
+        name = "$NS.CONFIRM_TICKET",
+        displayName = "That's me",
+        desc = "Confirms that the person in front of Nova is the patient Nova is calling. Use it when Nova calls a ticket " +
+            "number and the person says it is them or says their ticket number (one letter and two digits, like A17).",
         parameters = listOf(
-            Parameter("patient_name", ParameterType.STRING, "Full name of the patient, as the patient said it", true),
-            Parameter("doctor", ParameterType.STRING, "Name of the doctor the patient has come to see, as the patient said it", true),
             Parameter(
-                "appointment_time", ParameterType.STRING,
-                "Appointment time in 24-hour HH:mm format, only if the patient said one", false,
-            ),
-            Parameter(
-                "language", ParameterType.STRING,
-                "BCP-47 language tag of the language the patient is speaking, lowercase", false,
-            ),
-            Parameter(
-                "reply", ParameterType.STRING,
-                "Short sentence in the patient's language that confirms they are checked in, says their doctor will be told " +
-                    "and that Nova will walk them to the doctor's room when the doctor is ready.",
+                "ticket", ParameterType.STRING,
+                "The ticket number the person said: one letter followed by two digits, written without spaces, for example A17",
                 true,
             ),
         ),
+        executor = executor { action, p -> Clinic.confirmTicket(p.text("ticket"), action.userQuery) },
+    )
+
+    private fun setPace() = Action(
+        name = "$NS.SET_PACE",
+        displayName = "Walking pace",
+        desc = "Changes how fast Nova walks with the patient. Use it when the patient answers Nova's question about the pace, " +
+            "asks Nova to walk slower or faster, or says they are ready to go on after Nova waited for them.",
+        parameters = listOf(
+            Parameter(
+                "pace", ParameterType.ENUM,
+                "normal for the usual walking speed, slow for a bit slower, very_slow for much slower or when walking is hard. " +
+                    "For faster, take the next quicker pace than the current one on the screen.",
+                true, listOf("normal", "slow", "very_slow"),
+            ),
+        ),
         executor = executor { action, p ->
-            val name = p.text("patient_name") ?: return@executor false
-            val doctor = p.text("doctor") ?: return@executor false
-            Clinic.checkIn(
-                patient = name,
-                doctor = doctor,
-                time = Clock.normalizeTime(p.text("appointment_time")),
-                language = Lang.cleanTag(p.text("language")),
-                reply = p.text("reply"),
-                sample = action.userQuery,
-            )
+            val pace = Pace.of(p.text("pace")) ?: return@executor false
+            Clinic.setPace(pace, action.userQuery)
         },
     )
 
-    private fun guideToDoctor() = Action(
-        name = "$NS.GUIDE_TO_DOCTOR",
-        displayName = "Walk to the doctor",
-        desc = "Nova physically walks ahead of the patient to their doctor's treatment room, says goodbye at the door " +
-            "and drives back to reception. Use when the patient wants to be taken or shown the way to their doctor's room.",
+    private fun pauseWalk() = Action(
+        name = "$NS.PAUSE_WALK",
+        displayName = "Wait",
+        desc = "Nova stops walking and waits right where it is. Use it when the patient says wait, stop, one moment " +
+            "or that they need a short break while Nova walks with them.",
+        parameters = emptyList(),
+        executor = executor { action, _ -> Clinic.pauseWalk(action.userQuery) },
+    )
+
+    private fun walkStatus() = Action(
+        name = "$NS.WALK_STATUS",
+        displayName = "How far is it",
+        desc = "Tells the patient during a walk how far it still is to the destination, about how long it takes and where " +
+            "they are right now. Use it when the patient asks how far it is, how long it takes or where they are.",
+        parameters = emptyList(),
+        executor = executor { action, _ -> Clinic.walkStatus(action.userQuery) },
+    )
+
+    private fun guideToPlace() = Action(
+        name = "$NS.GUIDE_TO_PLACE",
+        displayName = "Show the way",
+        desc = "Nova walks a visitor to a public place of the practice, for example the exit or the reception, when they ask " +
+            "to be taken or shown the way there. Only the public places from the screen info. Treatment rooms are " +
+            "assigned by the reception desk, Nova does not take people there on request.",
         parameters = listOf(
-            Parameter("doctor", ParameterType.STRING, "Name of the doctor whose room the patient should be taken to", true),
-            Parameter("patient_name", ParameterType.STRING, "Name of the patient who is being taken there, if known", false),
+            Parameter("place", ParameterType.STRING, "Name of the place the visitor wants to go to, as they said it", true),
         ),
-        executor = executor { action, p ->
-            val doctor = p.text("doctor") ?: return@executor false
-            Clinic.guide(doctor, p.text("patient_name"), action.userQuery)
-        },
+        executor = executor { action, p -> Clinic.guideToPlace(p.text("place"), action.userQuery) },
+    )
+
+    private fun checkInFor() = Action(
+        name = "$NS.CHECK_IN_FOR",
+        displayName = "Check in",
+        desc = "Self check-in: a visitor who has an appointment tells Nova which room or which practice member they are " +
+            "here to see. Nova gives them a ticket, lets the team know and walks them to the waiting area. Use it only " +
+            "for the rooms listed for self check-in in the screen info. If they are not sure, use the reception.",
+        parameters = listOf(
+            Parameter(
+                "place", ParameterType.STRING,
+                "The room, room number or practice member they are here to see, as they said it. Never the visitor's own name.",
+                true,
+            ),
+        ),
+        executor = executor { action, p -> Clinic.checkInFor(p.text("place"), action.userQuery) },
+    )
+
+    private fun waitingStatus() = Action(
+        name = "$NS.WAITING_STATUS",
+        displayName = "Waiting status",
+        desc = "Looks up a ticket and tells the person where it stands: whether Nova picks them up soon, walks them, " +
+            "their place in line and about how long the wait still is. Use it when someone asks how long they have to " +
+            "wait or what happens next. Ask for the ticket number first if you do not know it.",
+        parameters = listOf(
+            Parameter(
+                "ticket", ParameterType.STRING,
+                "The person's ticket number: one letter followed by two digits, written without spaces, for example A17",
+                true,
+            ),
+        ),
+        executor = executor { action, p -> Clinic.waitingStatus(p.text("ticket"), action.userQuery) },
     )
 
     private fun callStaff() = Action(
         name = "$NS.CALL_STAFF",
         displayName = "Call the team",
-        desc = "Sends a message to the practice team in Microsoft Teams that a person at reception needs a human, " +
-            "for example a question Nova cannot answer, a problem with an appointment, or an emergency.",
+        desc = "Sends a message to the practice team that a person needs a human, for example a question Nova cannot " +
+            "answer, a problem, someone who feels unwell, or an emergency.",
         parameters = listOf(
             Parameter(
                 "summary", ParameterType.STRING,
-                "One short sentence for the team about what kind of help is needed. " +
-                    "No symptoms, no diagnosis and no other medical details.",
+                "One short sentence for the team about what kind of help is needed. No names, no symptoms, " +
+                    "no diagnosis and no other health details.",
                 true,
             ),
             Parameter(
@@ -93,20 +141,6 @@ object ClinicActions {
             val summary = p.text("summary") ?: return@executor false
             val urgency = if (p.text("urgency") == "urgent") "urgent" else "normal"
             Clinic.callStaff(summary, urgency, action.userQuery)
-        },
-    )
-
-    private fun waitingStatus() = Action(
-        name = "$NS.WAITING_STATUS",
-        displayName = "Waiting status",
-        desc = "Looks up a checked-in patient's visit and tells them where they stand: their place in the doctor's queue, " +
-            "about how long the wait still is, whether their doctor has been informed and whether the doctor is ready.",
-        parameters = listOf(
-            Parameter("patient_name", ParameterType.STRING, "Name of the patient who asks about their visit", true),
-        ),
-        executor = executor { action, p ->
-            val name = p.text("patient_name") ?: return@executor false
-            Clinic.waitingStatus(name, action.userQuery)
         },
     )
 

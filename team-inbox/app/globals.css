@@ -1,59 +1,63 @@
 @import "tailwindcss";
 
-/* one palette, light and dark. spacing 4/8/12/16/24/32/48/64, type 12/14/16/18/24/40 */
+/* one palette, light and dark. one accent (nova blue), stage colors only for state.
+   radius: panels 16px, controls 12px, pills round. spacing 4/8/12/16/24/32/48 */
 :root {
-  --canvas: #f3f6fb;
-  --surface: #ffffff;
-  --subtle: #eaf0f8;
-  --line: #dbe3ee;
-  --line-strong: #c3d0e2;
-  --ink: #0e1a2b;
-  --muted: #56667d;
-  --primary: #2a63d4;
-  --primary-hover: #1f52b8;
-  --primary-soft: #e2ecfd;
-  --primary-ink: #1a4aa8;
+  --canvas: #f3f6fa;
+  --surface: #fcfdff;
+  --subtle: #edf1f7;
+  --line: #dde4ee;
+  --line-strong: #c5d0de;
+  --ink: #0f1b2d;
+  --muted: #56667c;
+  --primary: #2361d4;
+  --primary-hover: #1a50b5;
+  --primary-soft: #e5edfc;
+  --primary-ink: #18459f;
   --on-primary: #ffffff;
-  --ok: #0f8a5f;
-  --ok-soft: #dff4ea;
-  --warn: #a85a06;
-  --warn-soft: #fcefdc;
-  --danger: #c0353d;
-  --danger-soft: #fce6e7;
-  --st-checked: #7186a3;
-  --st-notified: #0b93d1;
-  --st-called: #2a63d4;
-  --st-escorting: #6a5ae0;
-  --st-with: #0e8f86;
-  --st-done: #3b9a5e;
+  --ok: #0b8457;
+  --ok-soft: #dff3ea;
+  --warn: #9a5500;
+  --warn-soft: #fcefd9;
+  --danger: #c0303a;
+  --danger-soft: #fce7e8;
+  --st-pickup: #66758b;
+  --st-walking: #2361d4;
+  --st-waiting: #0d7f86;
+  --st-staff: #0b8457;
+  --screen: #0c1a31;
+  --screen-ink: #eaf2ff;
+  --screen-muted: #9fb3d1;
+  --screen-accent: #7cc4ff;
+  --shadow: 0 1px 2px rgb(15 27 45 / 0.05), 0 8px 24px -12px rgb(15 27 45 / 0.12);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --canvas: #0a101c;
-    --surface: #111a2b;
-    --subtle: #16213a;
-    --line: #1f2c45;
-    --line-strong: #2c3d5e;
+    --canvas: #0a111d;
+    --surface: #111a2a;
+    --subtle: #172237;
+    --line: #213048;
+    --line-strong: #2e4060;
     --ink: #e6edf7;
-    --muted: #93a3bb;
-    --primary: #5c9bff;
-    --primary-hover: #7fb1ff;
-    --primary-soft: #182b4c;
-    --primary-ink: #a8c8ff;
-    --on-primary: #08101e;
-    --ok: #4ccb98;
-    --ok-soft: #10302a;
-    --warn: #f2a54a;
-    --warn-soft: #33240f;
-    --danger: #ff7b82;
+    --muted: #97a7bf;
+    --primary: #6aa3ff;
+    --primary-hover: #8cb8ff;
+    --primary-soft: #18294a;
+    --primary-ink: #b0cdff;
+    --on-primary: #071022;
+    --ok: #4fcf9b;
+    --ok-soft: #0f2f27;
+    --warn: #f3ac55;
+    --warn-soft: #33250f;
+    --danger: #ff8189;
     --danger-soft: #3a1820;
-    --st-checked: #8396b3;
-    --st-notified: #3bb4ea;
-    --st-called: #5c9bff;
-    --st-escorting: #9a8cff;
-    --st-with: #34c4b7;
-    --st-done: #5fc483;
+    --st-pickup: #93a3ba;
+    --st-walking: #6aa3ff;
+    --st-waiting: #3cc7c9;
+    --st-staff: #4fcf9b;
+    --screen: #060e1c;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -12px rgb(0 0 0 / 0.5);
   }
 }
 
@@ -76,36 +80,38 @@
   --color-warn-soft: var(--warn-soft);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
-  --color-st-checked: var(--st-checked);
-  --color-st-notified: var(--st-notified);
-  --color-st-called: var(--st-called);
-  --color-st-escorting: var(--st-escorting);
-  --color-st-with: var(--st-with);
-  --color-st-done: var(--st-done);
+  --color-st-pickup: var(--st-pickup);
+  --color-st-walking: var(--st-walking);
+  --color-st-waiting: var(--st-waiting);
+  --color-st-staff: var(--st-staff);
+  --color-screen: var(--screen);
+  --color-screen-ink: var(--screen-ink);
+  --color-screen-muted: var(--screen-muted);
+  --color-screen-accent: var(--screen-accent);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@theme {
-  --text-display: 40px;
-  --text-display--line-height: 48px;
-  /* rem like the built-in breakpoints, so it sorts after sm/md/lg */
-  --breakpoint-board: 96rem;
+  --shadow-panel: var(--shadow);
 }
 
 html {
   color-scheme: light dark;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-feature-settings: "tnum" 0;
 }
 
 :focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 3px solid var(--primary);
   outline-offset: 2px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
 .mascot svg {
@@ -114,6 +120,7 @@ body {
   height: 100%;
 }
 
+/* motion: only to show that something changed or is alive. all of it stops for reduced motion */
 .nova-eyes {
   transform-box: fill-box;
   transform-origin: center;
@@ -131,9 +138,23 @@ body {
   }
 }
 
-/* a card that just moved to a new column */
+.live-dot {
+  animation: live 2s ease-in-out infinite;
+}
+
+@keyframes live {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* a row that just appeared or changed */
 .arrive {
-  animation: arrive 1.8s ease-out;
+  animation: arrive 1.6s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes arrive {
@@ -145,24 +166,63 @@ body {
   }
 }
 
-.pulse {
-  animation: pulse 1.6s ease-in-out infinite;
+.rise {
+  animation: rise 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-@keyframes pulse {
-  0%,
-  100% {
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
     opacity: 1;
+    transform: none;
   }
-  50% {
-    opacity: 0.35;
+}
+
+.pop {
+  animation: pop 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
   }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* nova walking along the progress line */
+.walk-line {
+  transition: width 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.press {
+  transition:
+    transform 0.12s ease,
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.press:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .nova-eyes,
+  .live-dot,
   .arrive,
-  .pulse {
+  .rise,
+  .pop {
     animation: none;
+  }
+  .walk-line,
+  .press {
+    transition: none;
   }
 }

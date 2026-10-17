@@ -6,62 +6,86 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+// shapes from docs/journeys.md. place names are test data only.
 class JsonTest {
 
-    private val visitJson = """
-        {"id":"v1","patientName":"Ada Test","doctorId":"d1","doctorName":"Dr. One","appointmentTime":"10:00",
-         "language":"de","robot":"nova","status":"notified","createdAt":"2026-10-16T08:00:00.000Z",
-         "updatedAt":"2026-10-16T08:01:00.000Z",
-         "events":[{"at":"2026-10-16T08:00:00.000Z","type":"checked_in"},
-                   {"at":"2026-10-16T08:01:00.000Z","type":"notified","detail":null}]}
+    private val journeyJson = """
+        {"id":"j1","ticket":"A17","robot":"nova","pace":"slow","wheelchair":true,"status":"walking",
+         "legs":[{"id":"l1","fromPlaceId":"p1","toPlaceId":"p4","toName":"Dr. One","toSpot":"Room One","status":"arrived"},
+                 {"id":"l2","fromPlaceId":"p4","toPlaceId":"p2","toName":"Way Out","toSpot":"Door Spot","status":"walking"}],
+         "createdBy":"staff","createdAt":"2026-10-17T08:00:00Z","updatedAt":"2026-10-17T08:05:00Z",
+         "events":[{"at":"2026-10-17T08:00:00Z","type":"created"}],
+         "queuePosition":2,"estimatedWaitMinutes":10}
     """.trimIndent()
 
     @Test
-    fun parsesCheckInResponse() {
-        val r = Json.checkIn("""{"visit":$visitJson,"notified":true,"doctorKnown":true,"spot":"Room One"}""")
-        assertEquals("v1", r.visit.id)
-        assertEquals("Ada Test", r.visit.patientName)
-        assertEquals("Dr. One", r.visit.doctorName)
-        assertEquals("de", r.visit.language)
-        assertEquals(2, r.visit.events.size)
-        assertNull(r.visit.events[1].detail)
-        assertTrue(r.notified)
-        assertTrue(r.doctorKnown)
-        assertEquals("Room One", r.spot)
+    fun parsesAJourneyRawOrWrapped() {
+        val j = Json.journey(journeyJson)
+        assertEquals("j1", j.id)
+        assertEquals("A17", j.ticket)
+        assertEquals(Pace.SLOW, j.pace)
+        assertTrue(j.wheelchair)
+        assertEquals(JourneyStatus.WALKING, j.status)
+        assertEquals(2, j.legs.size)
+        // the current leg is the last one
+        assertEquals("l2", j.leg?.id)
+        assertEquals("Way Out", j.leg?.toName)
+        assertEquals(2, j.queuePosition)
+        assertEquals(10, j.estimatedWaitMinutes)
+        assertEquals("j1", Json.journey("""{"journey":$journeyJson}""").id)
     }
 
     @Test
-    fun checkInWithUnknownDoctorAndNoSpot() {
-        val r = Json.checkIn("""{"visit":$visitJson,"notified":false,"doctorKnown":false,"spot":null}""")
-        assertFalse(r.notified)
-        assertFalse(r.doctorKnown)
-        assertNull(r.spot)
+    fun journeyDefaultsAndNonsense() {
+        val j = Json.journey("""{"id":"j2","ticket":"B03","pace":"fast","queuePosition":0,"estimatedWaitMinutes":-1}""")
+        assertEquals(Pace.NORMAL, j.pace)
+        assertFalse(j.wheelchair)
+        assertEquals(JourneyStatus.WAITING_PICKUP, j.status)
+        assertNull(j.leg)
+        assertNull(j.queuePosition)
+        assertNull(j.estimatedWaitMinutes)
+        assertTrue(JourneyStatus.closed("done"))
+        assertTrue(JourneyStatus.closed("cancelled"))
+        assertFalse(JourneyStatus.closed("arrived"))
     }
 
     @Test
-    fun parsesVisitRawOrWrapped() {
-        assertEquals("v1", Json.visit(visitJson).id)
-        assertEquals("notified", Json.visit("""{"visit":$visitJson}""").status)
-    }
-
-    @Test
-    fun jsonNullIsNotTheWordNull() {
-        val v = Json.visit("""{"id":"v2","patientName":"B","doctorName":"Dr. Two","appointmentTime":null,"language":null,"status":"checked_in"}""")
-        assertNull(v.appointmentTime)
-        assertNull(v.language)
-        assertTrue(v.events.isEmpty())
-    }
-
-    @Test
-    fun parsesCommand() {
-        val body = """{"id":"c1","robot":"nova","type":"call_patient","visitId":"v1","patientName":"Ada Test",
-            "doctorName":"Dr. One","spot":"Room One","createdAt":"2026-10-16T08:05:00.000Z"}"""
+    fun parsesAGuideCommand() {
+        val body = """{"id":"c1","robot":"nova","type":"guide","journeyId":"j1","legId":"l1","ticket":"a17","pace":"very_slow",
+            "wheelchair":false,"from":{"name":"Front Desk","spot":"Desk Spot"},"to":{"name":"Dr. One","spot":"Room One","room":"A101"},
+            "createdAt":"2026-10-17T08:00:00Z"}"""
         val c = Json.command(body)!!
-        assertEquals("c1", c.id)
-        assertEquals(RobotCommand.CALL_PATIENT, c.type)
-        assertEquals("v1", c.visitId)
-        assertEquals("Room One", c.spot)
+        assertEquals(RobotCommand.GUIDE, c.type)
+        assertEquals("j1", c.journeyId)
+        assertEquals("l1", c.legId)
+        assertEquals("A17", c.ticket)
+        assertEquals(Pace.VERY_SLOW, c.pace)
+        assertFalse(c.wheelchair)
+        assertEquals(Stop("Front Desk", "Desk Spot"), c.from)
+        assertEquals("Room One", c.to?.spot)
+        assertEquals("Room A101", c.to?.label)
         assertEquals("c1", Json.command("""{"command":$body}""")!!.id)
+    }
+
+    @Test
+    fun stopWithoutSpotUsesItsName() {
+        val c = Json.command("""{"id":"c2","type":"guide","to":{"name":"Way Out"},"from":{}}""")!!
+        assertEquals(Stop("Way Out", "Way Out"), c.to)
+        assertNull(c.from)
+        assertNull(c.pace)
+    }
+
+    @Test
+    fun parsesSayGoToAndAsk() {
+        val say = Json.command("""{"id":"c3","robot":"nova","type":"say","text":"The practice closes at six"}""")!!
+        assertEquals(RobotCommand.SAY, say.type)
+        assertEquals("The practice closes at six", say.text)
+        val goTo = Json.command("""{"id":"c4","robot":"nova","type":"go_to","spot":"Room Two"}""")!!
+        assertEquals("Room Two", goTo.spot)
+        assertNull(goTo.journeyId)
+        val ask = Json.command("""{"id":"c5","robot":"nova","type":"ask","text":"Please greet the next visitor in Turkish"}""")!!
+        assertEquals(RobotCommand.ASK, ask.type)
+        assertEquals("Please greet the next visitor in Turkish", ask.text)
     }
 
     @Test
@@ -73,114 +97,108 @@ class JsonTest {
     }
 
     @Test
-    fun parsesDoctorsArrayOrWrapped() {
-        val arr = """[{"id":"d1","name":"Dr. One","spot":"Room One","active":true},{"id":"d2","name":"Dr. Two","active":false}]"""
-        val list = Json.doctors(arr)
+    fun parsesJourneyCreated() {
+        val r = Json.journeyCreated("""{"journey":$journeyJson,"command":{"id":"c9","type":"guide","journeyId":"j1","legId":"l2","ticket":"A17","to":{"name":"Way Out","spot":"Door Spot"}}}""")
+        assertEquals("j1", r.journey?.id)
+        assertEquals("c9", r.command?.id)
+        val noCommand = Json.journeyCreated("""{"journey":$journeyJson}""")
+        assertNull(noCommand.command)
+    }
+
+    @Test
+    fun parsesPlacesArrayOrWrapped() {
+        val arr = """[{"id":"p1","name":"Front Desk","spot":"Desk Spot","kind":"reception","public":true,"avgMinutes":5,"active":true},
+            {"id":"p4","name":"Dr. One","room":"A101","kind":"room","selfCheckIn":true,"waitingPlaceId":"p3"},
+            {"id":"p9","kind":"room"}]"""
+        val list = Json.places(arr)
+        // a place without a name is skipped
         assertEquals(2, list.size)
-        assertEquals("Room One", list[0].spot)
-        assertNull(list[1].spot)
-        assertFalse(list[1].active)
-        assertEquals(2, Json.doctors("""{"doctors":$arr}""").size)
+        assertEquals(PlaceKind.RECEPTION, list[0].kind)
+        assertTrue(list[0].public)
+        assertEquals(5, list[0].avgMinutes)
+        // spot defaults to the name
+        assertEquals("Dr. One", list[1].spot)
+        assertTrue(list[1].selfCheckIn)
+        assertEquals("p3", list[1].waitingPlaceId)
+        assertTrue(list[1].active)
+        assertFalse(list[1].public)
+        assertEquals(2, Json.places("""{"places":$arr}""").size)
+        assertTrue(Json.places("").isEmpty())
     }
 
     @Test
-    fun parsesVisitList() {
-        assertEquals(1, Json.visits("[$visitJson]").size)
-        assertEquals(1, Json.visits("""{"visits":[$visitJson]}""").size)
-        assertTrue(Json.visits("").isEmpty())
+    fun patchBody() {
+        val full = Json.journeyPatch("l1", "walking", "walking", "Walking at slow pace")
+        assertEquals("l1", full.getString("legId"))
+        assertEquals("walking", full.getString("status"))
+        assertEquals("walking", full.getJSONObject("event").getString("type"))
+        assertEquals("Walking at slow pace", full.getJSONObject("event").getString("detail"))
+        val eventOnly = Json.journeyPatch(null, null, "feedback", "up")
+        assertEquals(setOf("event"), eventOnly.keys().asSequence().toSet())
+        val noDetail = Json.journeyPatch("l1", "failed", "failed", " ")
+        assertFalse(noDetail.getJSONObject("event").has("detail"))
     }
 
     @Test
-    fun readsBackendError() {
-        assertEquals("unauthorized", Json.errorMessage("""{"error":"unauthorized"}"""))
-        assertNull(Json.errorMessage("<html>"))
-    }
-
-    // ---- v2: queue, more commands, heartbeat, battery, help ----
-
-    @Test
-    fun parsesQueueFields() {
-        val v = Json.visit(
-            """{"id":"v3","patientName":"A","doctorName":"Dr. One","status":"notified","queuePosition":3,"estimatedWaitMinutes":20}""",
-        )
-        assertEquals(3, v.queuePosition)
-        assertEquals(20, v.estimatedWaitMinutes)
-
-        val notWaiting = Json.visit(
-            """{"id":"v4","patientName":"A","doctorName":"Dr. One","status":"called","queuePosition":null,"estimatedWaitMinutes":null}""",
-        )
-        assertNull(notWaiting.queuePosition)
-        assertNull(notWaiting.estimatedWaitMinutes)
-
-        // a backend without the fields
-        assertNull(Json.visit(visitJson).queuePosition)
-        assertNull(Json.visit(visitJson).estimatedWaitMinutes)
-
-        // numbers as strings or floats still work, nonsense does not
-        val loose = Json.visit("""{"id":"v5","queuePosition":"2","estimatedWaitMinutes":5.0}""")
-        assertEquals(2, loose.queuePosition)
-        assertEquals(5, loose.estimatedWaitMinutes)
-        assertNull(Json.visit("""{"id":"v6","queuePosition":0,"estimatedWaitMinutes":-3}""").queuePosition)
-        assertNull(Json.visit("""{"id":"v6","queuePosition":"soon"}""").queuePosition)
-    }
-
-    @Test
-    fun checkInResponseCarriesTheQueue() {
-        val r = Json.checkIn(
-            """{"visit":{"id":"v7","patientName":"A","doctorName":"Dr. One","status":"checked_in",
-               "queuePosition":1,"estimatedWaitMinutes":0},"notified":true,"doctorKnown":true,"spot":"Room One"}""",
-        )
-        assertEquals(1, r.visit.queuePosition)
-        assertEquals(0, r.visit.estimatedWaitMinutes)
-    }
-
-    @Test
-    fun parsesSayAndGoToCommands() {
-        val say = Json.command("""{"id":"c2","robot":"nova","type":"say","text":"The practice closes at six","createdAt":"2026-10-17T08:00:00Z"}""")!!
-        assertEquals(RobotCommand.SAY, say.type)
-        assertEquals("The practice closes at six", say.text)
-        assertNull(say.spot)
-        assertNull(say.visitId)
-
-        val goTo = Json.command("""{"id":"c3","robot":"nova","type":"go_to","spot":"Room Two","createdAt":"2026-10-17T08:00:00Z"}""")!!
-        assertEquals(RobotCommand.GO_TO, goTo.type)
-        assertEquals("Room Two", goTo.spot)
-        assertNull(goTo.text)
-        assertNull(goTo.patientName)
-    }
-
-    @Test
-    fun buildsTheHeartbeat() {
+    fun buildsTheHeartbeatWithTheScreen() {
         val walking = Json.heartbeat(
             "nova",
-            BrainStatus(goal = "Walking Ada Test to Dr. One", state = RobotState.WALKING, battery = 64, charging = false),
+            BrainStatus(goal = "Guiding A17 to Room B204", state = RobotState.WALKING, battery = 64, charging = false),
+            ScreenMirror(view = "walking", title = "A17 to Room B204", ticket = "A17", step = "Walking with you", progress = 0.456f),
         )
         assertEquals("nova", walking.getString("robot"))
         assertEquals(64, walking.getInt("battery"))
-        assertFalse(walking.getBoolean("charging"))
         assertEquals("walking", walking.getString("state"))
         assertTrue(walking.isNull("position"))
-        assertEquals("Walking Ada Test to Dr. One", walking.getString("goal"))
-        // exactly the keys from docs/api.md; detail only when there is one
-        assertEquals(setOf("robot", "battery", "charging", "state", "position", "goal"), walking.keys().asSequence().toSet())
+        assertEquals("Guiding A17 to Room B204", walking.getString("goal"))
+        val screen = walking.getJSONObject("screen")
+        assertEquals("walking", screen.getString("view"))
+        assertEquals("A17", screen.getString("ticket"))
+        assertEquals("Walking with you", screen.getString("step"))
+        assertEquals(0.45, screen.getDouble("progress"), 1e-9)
 
-        val docked = Json.heartbeat(
-            "nova",
-            BrainStatus(goal = "", state = RobotState.CHARGING, battery = null, charging = true, position = "Room One", detail = "Could not get off the charger"),
-        )
-        assertTrue(docked.has("battery"))
-        assertTrue(docked.isNull("battery"))
-        assertTrue(docked.getBoolean("charging"))
-        assertEquals("charging", docked.getString("state"))
-        assertEquals("Room One", docked.getString("position"))
-        assertTrue(docked.isNull("goal"))
-        assertEquals("Could not get off the charger", docked.getString("detail"))
-
-        // every state has the wire name from the contract
+        val idle = Json.heartbeat("nova", BrainStatus(goal = "", battery = null, charging = true, detail = "Could not get off the charger"))
+        assertTrue(idle.isNull("battery"))
+        assertTrue(idle.isNull("goal"))
+        assertFalse(idle.has("screen"))
+        assertEquals("Could not get off the charger", idle.getString("detail"))
+        val bare = Json.screen(ScreenMirror(view = "idle", title = "Hello, I'm Nova"))
+        assertEquals(setOf("view", "title"), bare.keys().asSequence().toSet())
         assertEquals(
             listOf("idle", "greeting", "talking", "fetching", "walking", "returning", "charging", "error"),
             RobotState.values().map { it.wire },
         )
+    }
+
+    @Test
+    fun buildsTheFeed() {
+        val body = Json.feed(
+            "nova", "j1",
+            listOf(FeedItem(0L, FeedItem.NOVA, FeedItem.SAID, "Please follow me"), FeedItem(1_000L, FeedItem.PATIENT, FeedItem.INTENT, "Asked to walk slower")),
+        )
+        assertEquals("nova", body.getString("robot"))
+        assertEquals("j1", body.getString("journeyId"))
+        val items = body.getJSONArray("items")
+        assertEquals(2, items.length())
+        assertEquals("1970-01-01T00:00:00Z", items.getJSONObject(0).getString("at"))
+        assertEquals("patient", items.getJSONObject(1).getString("who"))
+        assertEquals("intent", items.getJSONObject(1).getString("kind"))
+        assertFalse(Json.feed("nova", null, emptyList()).has("journeyId"))
+        assertEquals(true, Json.showPatientText("""{"ok":true,"showPatientText":true}"""))
+        assertEquals(false, Json.showPatientText("""{"showPatientText":false}"""))
+        assertNull(Json.showPatientText("{}"))
+        assertNull(Json.showPatientText("<html>"))
+    }
+
+    @Test
+    fun parsesPoseAndMapPlaces() {
+        assertEquals(Point(1.5, -2.0), Json.pose("""{"px":1.5,"py":-2.0,"theta":0.3}"""))
+        assertEquals(Point(1.0, 2.0), Json.pose("""{"x":"1","y":2}"""))
+        assertNull(Json.pose("""{"theta":1}"""))
+        assertNull(Json.pose(null))
+        val map = Json.mapPlaces("""[{"name":"Lift","x":0.5,"y":1.0,"theta":0,"id":"a","status":0},{"name":"Bad"},{"x":1,"y":1}]""")
+        assertEquals(listOf(MapPlace("Lift", Point(0.5, 1.0))), map)
+        assertTrue(Json.mapPlaces("oops").isEmpty())
     }
 
     @Test
@@ -189,7 +207,6 @@ class JsonTest {
         assertEquals(PowerReading(15, true), Json.power("""{"level":"15","isCharging":"true"}"""))
         assertEquals(PowerReading(55, null), Json.power("55"))
         assertEquals(PowerReading(null, true), Json.power("""{"charging":true}"""))
-        // out of range is "unknown", the rest of the reading still counts
         assertEquals(PowerReading(null, false), Json.power("""{"level":140,"isCharging":false}"""))
         assertNull(Json.power("140"))
         assertNull(Json.power(""))
@@ -199,13 +216,24 @@ class JsonTest {
     }
 
     @Test
-    fun readsHelpIds() {
+    fun readsHelpIdsAndErrors() {
         assertEquals("h1", Json.helpId("""{"ok":true,"id":"h1","notified":false,"help":{"id":"h1"}}"""))
         assertNull(Json.helpId("{}"))
-        assertNull(Json.helpId("<html>"))
         val open = Json.openHelpIds("""[{"id":"h1","status":"open"},{"id":"h2","status":"done"},{"id":"h3"}]""")
         assertEquals(setOf("h1", "h3"), open)
         assertEquals(setOf("h1"), Json.openHelpIds("""{"help":[{"id":"h1","status":"open"}]}"""))
-        assertTrue(Json.openHelpIds("[]").isEmpty())
+        assertEquals("unauthorized", Json.errorMessage("""{"error":"unauthorized"}"""))
+        assertNull(Json.errorMessage("<html>"))
+    }
+
+    @Test
+    fun languages() {
+        assertEquals(listOf("de", "en"), Lang.tagList("de, en"))
+        assertEquals(listOf("de", "en-GB"), Lang.tagList("de;en_GB;de;German"))
+        assertTrue(Lang.tagList("").isEmpty())
+        assertTrue(Lang(null, tags = listOf("de", "en")).instruction().contains("de, en"))
+        assertTrue(Lang("tr").instruction().contains("\"tr\""))
+        assertTrue(Lang(null, "Wie weit ist es?").instruction().contains("Wie weit ist es?"))
+        assertNull(Lang.cleanTag("German"))
     }
 }

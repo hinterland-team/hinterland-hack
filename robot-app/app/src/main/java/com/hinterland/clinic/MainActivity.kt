@@ -15,6 +15,7 @@ import com.ainirobot.agent.PageAgent
 import com.ainirobot.agent.base.Transcription
 import com.hinterland.clinic.ui.ClinicScreen
 import com.hinterland.clinic.ui.NovaTheme
+import com.hinterland.clinic.ui.ScreenActions
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
@@ -47,15 +48,30 @@ class MainActivity : AppCompatActivity() {
 
         Robot.onHealth = Clinic::onRobotHealth
 
+        // the screen's buttons: "That's me", pace, "I'm here", feedback and the self check-in steps
+        val actions = ScreenActions(
+            thatsMe = Clinic::tapThatsMe,
+            pace = Clinic::tapPace,
+            imHere = Clinic::tapImHere,
+            goOn = Clinic::tapGoOn,
+            feedback = Clinic::tapFeedback,
+            checkIn = Clinic::tapCheckIn,
+            room = Clinic::tapRoom,
+            checkInPace = Clinic::tapCheckInPace,
+            checkInBack = Clinic::tapCheckInBack,
+            checkInClose = Clinic::tapCheckInClose,
+            checkInConfirm = Clinic::tapCheckInConfirm,
+        )
+
         setContent {
             NovaTheme {
                 val state by Clinic.ui.collectAsState()
-                ClinicScreen(state)
+                ClinicScreen(state, actions)
             }
         }
 
-        // nova's brain runs while this screen is in front: it greets, takes the team's commands,
-        // charges and goes home on its own, and sends the heartbeat
+        // nova's brain runs while this screen is in front: it greets, takes the team's guide commands,
+        // charges and goes home on its own, and sends the heartbeat and the live feed
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 Robot.connect(this@MainActivity)

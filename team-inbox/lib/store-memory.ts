@@ -1,110 +1,139 @@
-import type { DoctorPatch, Store, VisitPatch, VisitQuery } from "./store-types";
-import type { CallCommand, Doctor, HelpRequest, HelpStatus, RobotCommand, RobotHeartbeat, Visit, VisitEvent } from "./types";
-import { DEFAULT_CONSULT_MINUTES, QUEUE_STATUSES, isClosed } from "./types";
+// in-memory store for local demos. only type imports here so tests can load it directly
+import type { JourneyChange, NewJourney, PlacePatch, PurgeCutoffs, Store, StoredJourney } from "./store-types";
+import type { Counters, HelpRequest, Place, RobotCommand, RobotHeartbeat, StatsRow } from "./types";
 
 type Data = {
-  doctors: Doctor[];
-  visits: Visit[];
+  places: Place[];
+  journeys: (StoredJourney & { ticketDay: string })[];
   commands: RobotCommand[];
   help: HelpRequest[];
   robots: Record<string, string>;
   heartbeats: Record<string, RobotHeartbeat>;
+  stats: Record<string, StatsRow & { day: string }>;
+  settings: Record<string, string>;
+  logins: { key: string; at: string }[];
 };
 
-// lives on globalThis so it survives hot reload. gone on restart
-const g = globalThis as unknown as { __novaClinic?: Data };
-const data: Data = (g.__novaClinic ??= { doctors: [], visits: [], commands: [], help: [], robots: {}, heartbeats: {} });
-// a server that was already running keeps its older data object, so add what came later
-data.heartbeats ??= {};
+const fresh = (): Data => ({
+  places: [],
+  journeys: [],
+  commands: [],
+  help: [],
+  robots: {},
+  heartbeats: {},
+  stats: {},
+  settings: {},
+  logins: [],
+});
+
+// lives on globalThis so it survives hot reload. gone on restart.
+// the v1/v2 data (with patient names) is dropped
+const g = globalThis as unknown as { __novaClinic?: unknown; __novaClinicV3?: Data };
+delete g.__novaClinic;
+const data: Data = (g.__novaClinicV3 ??= fresh());
 
 const copy = <T>(value: T): T => structuredClone(value);
+const closed = (s: string) => s === "done" || s === "cancelled";
 
-// doctors added before avgConsultMinutes existed get the default
-const outDoctor = (d: Doctor): Doctor => copy({ ...d, avgConsultMinutes: d.avgConsultMinutes ?? DEFAULT_CONSULT_MINUTES });
+function outJourney(j: Data["journeys"][number]): StoredJourney {
+  const out: StoredJourney & { ticketDay?: string } = copy(j);
+  delete out.ticketDay;
+  return out;
+}
 
-function matches(v: Visit, q: VisitQuery) {
-  if (q.active && isClosed(v.status)) return false;
-  if (q.since && v.createdAt < q.since && isClosed(v.status)) return false;
-  return true;
+const KIND_ORDER = ["reception", "waiting", "room", "other", "exit"];
+
+// for tests: start from nothing
+export function resetMemoryStore() {
+  Object.assign(data, fresh());
 }
 
 export const memoryStore: Store = {
   kind: "memory",
 
-  async listDoctors() {
-    return [...data.doctors].sort((a, b) => a.name.localeCompare(b.name)).map(outDoctor);
-  },
-  async getDoctor(id) {
-    const d = data.doctors.find((x) => x.id === id);
-    return d ? outDoctor(d) : null;
-  },
-  async createDoctor(doctor) {
-    data.doctors.push(copy(doctor));
-    return outDoctor(doctor);
-  },
-  async updateDoctor(id, patch: DoctorPatch) {
-    const d = data.doctors.find((x) => x.id === id);
-    if (!d) return null;
-    if (patch.name !== undefined) d.name = patch.name;
-    if (patch.spot !== undefined) d.spot = patch.spot;
-    if (patch.active !== undefined) d.active = patch.active;
-    if (patch.avgConsultMinutes !== undefined) d.avgConsultMinutes = patch.avgConsultMinutes;
-    if (patch.teamsWebhookUrl !== undefined) {
-      if (patch.teamsWebhookUrl) d.teamsWebhookUrl = patch.teamsWebhookUrl;
-      else delete d.teamsWebhookUrl;
-    }
-    return outDoctor(d);
-  },
-
-  async createVisit(visit, event) {
-    const v: Visit = { ...copy(visit), events: [copy(event)] };
-    data.visits.push(v);
-    return copy(v);
-  },
-  async getVisit(id) {
-    const v = data.visits.find((x) => x.id === id);
-    return v ? copy(v) : null;
-  },
-  async listVisits(q) {
+  async listPlaces() {
     return copy(
-      data.visits
-        .filter((v) => matches(v, q))
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      [...data.places].sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || a.name.localeCompare(b.name)),
     );
   },
-  async updateVisit(id, patch: VisitPatch, event: VisitEvent) {
-    const v = data.visits.find((x) => x.id === id);
-    if (!v) return null;
-    if (patch.onlyIf && !patch.onlyIf.includes(v.status)) return null;
-    if (patch.status) v.status = patch.status;
-    if (patch.doctorId !== undefined) v.doctorId = patch.doctorId;
-    if (patch.doctorName !== undefined) v.doctorName = patch.doctorName;
-    v.updatedAt = event.at;
-    v.events.push(copy(event));
-    return copy(v);
+  async getPlace(id) {
+    const p = data.places.find((x) => x.id === id);
+    return p ? copy(p) : null;
   },
-  async addEvent(id, event) {
-    const v = data.visits.find((x) => x.id === id);
-    if (!v) return null;
-    v.events.push(copy(event));
-    v.updatedAt = event.at;
-    return copy(v);
+  async createPlace(place) {
+    data.places.push(copy(place));
+    return copy(place);
   },
-  async listQueue() {
-    return data.visits
-      .filter((v) => QUEUE_STATUSES.includes(v.status))
-      .map(({ id, doctorId, status, createdAt }) => ({ id, doctorId, status, createdAt }));
+  async updatePlace(id, patch: PlacePatch) {
+    const p = data.places.find((x) => x.id === id);
+    if (!p) return null;
+    for (const key of ["name", "spot", "kind", "public", "avgMinutes", "active", "selfCheckIn"] as const) {
+      if (patch[key] !== undefined) (p as Record<string, unknown>)[key] = patch[key];
+    }
+    for (const key of ["room", "teamsWebhookUrl", "waitingPlaceId"] as const) {
+      if (patch[key] === undefined) continue;
+      if (patch[key]) p[key] = patch[key] as string;
+      else delete p[key];
+    }
+    return copy(p);
+  },
+  async deletePlace(id) {
+    const before = data.places.length;
+    data.places = data.places.filter((p) => p.id !== id);
+    for (const p of data.places) if (p.waitingPlaceId === id) delete p.waitingPlaceId;
+    return data.places.length < before;
+  },
+
+  async createJourney(j: NewJourney, leg, events) {
+    if (data.journeys.some((x) => x.ticketDay === j.ticketDay && x.ticket === j.ticket)) return null;
+    const stored = { ...copy(j), legs: [copy(leg)], events: copy(events), version: 1 };
+    data.journeys.push(stored);
+    return outJourney(stored);
+  },
+  async usedTickets(day) {
+    return data.journeys.filter((j) => j.ticketDay === day).map((j) => j.ticket);
+  },
+  async getJourney(id) {
+    const j = data.journeys.find((x) => x.id === id);
+    return j ? outJourney(j) : null;
+  },
+  async findOpenByTicket(ticket) {
+    const j = data.journeys
+      .filter((x) => x.ticket === ticket && !closed(x.status))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    return j ? outJourney(j) : null;
+  },
+  async listJourneys(q) {
+    return data.journeys
+      .filter((j) => !q.active || !closed(j.status))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+      .map(outJourney);
+  },
+  async saveJourney(id, version, change: JourneyChange) {
+    const j = data.journeys.find((x) => x.id === id);
+    if (!j || j.version !== version) return null;
+    if (change.leg) {
+      const leg = j.legs.find((l) => l.id === change.leg!.id);
+      if (leg) {
+        if (change.leg.status) leg.status = change.leg.status;
+        if (change.leg.startedAt) leg.startedAt ??= change.leg.startedAt;
+        if (change.leg.arrivedAt) leg.arrivedAt ??= change.leg.arrivedAt;
+      }
+    }
+    if (change.newLeg) j.legs.push(copy(change.newLeg));
+    if (change.status) j.status = change.status;
+    if (change.endedAt) j.endedAt = change.endedAt;
+    if (change.forPlaceId === null) delete j.forPlaceId;
+    else if (change.forPlaceId) j.forPlaceId = change.forPlaceId;
+    j.events.push(...copy(change.events));
+    j.updatedAt = change.updatedAt;
+    j.version += 1;
+    return outJourney(j);
   },
 
   async createCommand(command) {
     data.commands.push(copy(command));
     return copy(command);
-  },
-  async openCommandForVisit(visitId) {
-    const c = data.commands.find(
-      (x): x is CallCommand => x.type === "call_patient" && x.visitId === visitId && !x.doneAt,
-    );
-    return c ? copy(c) : null;
   },
   async takeNextCommand(robot, now) {
     const c = data.commands
@@ -120,9 +149,11 @@ export const memoryStore: Store = {
     c.doneAt ??= now;
     return copy(c);
   },
-  async dropUndeliveredCommands(visitId, now) {
+  async closeJourneyCommands(journeyId, now, onlyUndelivered) {
     for (const c of data.commands) {
-      if (c.type === "call_patient" && c.visitId === visitId && !c.deliveredAt && !c.doneAt) c.doneAt = now;
+      if (c.type !== "guide" || c.journeyId !== journeyId || c.doneAt) continue;
+      if (onlyUndelivered && c.deliveredAt) continue;
+      c.doneAt = now;
     }
   },
   async listCommands(robot, limit) {
@@ -139,11 +170,6 @@ export const memoryStore: Store = {
   async touchRobot(name, now) {
     data.robots[name] = now;
   },
-  async listRobots() {
-    return Object.entries(data.robots)
-      .map(([name, lastSeenAt]) => ({ name, lastSeenAt }))
-      .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
-  },
   async saveHeartbeat(heartbeat) {
     data.heartbeats[heartbeat.robot] = copy(heartbeat);
     data.robots[heartbeat.robot] = heartbeat.at;
@@ -158,13 +184,9 @@ export const memoryStore: Store = {
     return copy(help);
   },
   async listHelp(q) {
-    return copy(
-      data.help
-        .filter((h) => !q.open || h.status === "open")
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    );
+    return copy(data.help.filter((h) => !q.open || h.status === "open").sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   },
-  async updateHelp(id, status: HelpStatus, now) {
+  async updateHelp(id, status, now) {
     const h = data.help.find((x) => x.id === id);
     if (!h) return null;
     h.status = status;
@@ -175,5 +197,62 @@ export const memoryStore: Store = {
   async setHelpNotified(id, notified) {
     const h = data.help.find((x) => x.id === id);
     if (h) h.notified = notified;
+  },
+
+  async bumpStats(day, placeId, delta: Partial<Counters>) {
+    const key = `${day}|${placeId}`;
+    const row = (data.stats[key] ??= {
+      day,
+      placeId,
+      journeys: 0,
+      guides: 0,
+      done: 0,
+      cancelled: 0,
+      walks: 0,
+      walkSeconds: 0,
+      lostPatients: 0,
+      feedbackUp: 0,
+      feedbackDown: 0,
+    });
+    for (const [k, v] of Object.entries(delta) as [keyof Counters, number | undefined][]) row[k] += v ?? 0;
+  },
+  async getStats(day) {
+    return Object.values(data.stats)
+      .filter((r) => r.day === day)
+      .map((r) => {
+        const row: StatsRow & { day?: string } = copy(r);
+        delete row.day;
+        return row;
+      });
+  },
+
+  async getSetting(key) {
+    return data.settings[key] ?? null;
+  },
+  async setSetting(key, value) {
+    data.settings[key] = value;
+  },
+
+  async countLoginFailures(key, since) {
+    return data.logins.filter((l) => l.key === key && l.at >= since).length;
+  },
+  async addLoginFailure(key, at) {
+    data.logins.push({ key, at });
+  },
+  async clearLoginFailures(key) {
+    data.logins = data.logins.filter((l) => l.key !== key);
+  },
+
+  async purge(c: PurgeCutoffs) {
+    const gone = data.journeys.filter((j) => (j.endedAt && j.endedAt < c.ended) || j.updatedAt < c.stale).map((j) => j.id);
+    if (gone.length) {
+      const set = new Set(gone);
+      data.journeys = data.journeys.filter((j) => !set.has(j.id));
+      data.commands = data.commands.filter((x) => x.type !== "guide" || !set.has(x.journeyId));
+    }
+    data.commands = data.commands.filter((x) => x.type === "guide" || (x.doneAt ?? x.createdAt) >= c.ended);
+    data.help = data.help.filter((h) => !(h.handledAt && h.handledAt < c.ended) && h.createdAt >= c.stale);
+    data.logins = data.logins.filter((l) => l.at >= c.logins);
+    return gone;
   },
 };

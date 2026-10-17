@@ -8,9 +8,10 @@ import java.net.URL
 import java.net.URLEncoder
 import java.net.UnknownHostException
 
-class BackendException(message: String) : Exception(message)
+class BackendException(message: String, val code: Int = 0) : Exception(message)
 
-// team-inbox api from docs/api.md. all calls block - run them off the main thread.
+// team-inbox api from docs/journeys.md. all calls block - run them off the main thread.
+// never sends a patient name: journeys only know a ticket.
 object Backend {
 
     private val base get() = BuildConfig.BACKEND_URL.trim().trimEnd('/')
@@ -19,24 +20,29 @@ object Backend {
 
     val configured get() = base.isNotEmpty()
 
-    fun checkIn(patientName: String, doctor: String, appointmentTime: String?, language: String?): CheckInResult {
-        val body = JSONObject()
-            .put("patientName", patientName)
-            .put("doctor", doctor)
-            .put("robot", robot)
-        appointmentTime?.let { body.put("appointmentTime", it) }
-        language?.let { body.put("language", it) }
-        return Json.checkIn(call("POST", "/api/visits", body).body)
+    fun places(): List<Place> = Json.places(call("GET", "/api/places").body)
+
+    // robot may only create journeys to public places and self check-in rooms (403 otherwise)
+    fun createJourney(to: String, forPlaceId: String? = null, pace: Pace? = null, wheelchair: Boolean? = null): JourneyCreated {
+        val body = JSONObject().put("to", to).put("robot", robot)
+        forPlaceId?.let { body.put("forPlaceId", it) }
+        pace?.let { body.put("pace", it.wire) }
+        wheelchair?.let { body.put("wheelchair", it) }
+        return Json.journeyCreated(call("POST", "/api/journeys", body).body)
     }
 
-    fun visit(id: String): Visit = Json.visit(call("GET", "/api/visits/${enc(id)}").body)
+    fun journey(id: String): Journey = Json.journey(call("GET", "/api/journeys/${enc(id)}").body)
 
-    fun activeVisits(): List<Visit> = Json.visits(call("GET", "/api/visits?active=1").body)
+    // today's open journey with that ticket, null on 404
+    fun journeyByTicket(ticket: String): Journey? = try {
+        Json.journey(call("GET", "/api/journeys/by-ticket/${enc(ticket)}").body)
+    } catch (e: BackendException) {
+        if (e.code == 404) null else throw e
+    }
 
-    fun updateVisit(id: String, status: String, detail: String? = null) {
-        val body = JSONObject().put("status", status)
-        detail?.let { body.put("detail", it) }
-        call("PATCH", "/api/visits/${enc(id)}", body)
+    // leg status and/or one event (detail = short english, never patient info)
+    fun patchJourney(id: String, legId: String?, status: String?, event: String?, detail: String? = null) {
+        call("PATCH", "/api/journeys/${enc(id)}", Json.journeyPatch(legId, status, event, detail))
     }
 
     // null when the backend answers 204 (nothing to do)
@@ -49,24 +55,27 @@ object Backend {
         call("POST", "/api/robot/commands/${enc(id)}/done", JSONObject())
     }
 
-    // returns the help request id (null if the backend did not send one)
-    fun help(summary: String, urgency: String): String? {
+    // returns the help request id (null if the backend did not send one). summary has no health details.
+    fun help(summary: String, urgency: String, journeyId: String? = null, ticket: String? = null): String? {
         val body = JSONObject()
             .put("robot", robot)
             .put("summary", summary)
             .put("urgency", urgency)
+        journeyId?.let { body.put("journeyId", it) }
+        ticket?.let { body.put("ticket", it) }
         return Json.helpId(call("POST", "/api/help", body).body)
     }
 
     // ids of help requests nobody took yet
     fun openHelpIds(): Set<String> = Json.openHelpIds(call("GET", "/api/help?open=1").body)
 
-    // battery, state, position and goal for the board (204)
+    // battery, state, position, goal and the screen mirror for the board (204)
     fun heartbeat(body: JSONObject) {
         call("POST", "/api/robot/heartbeat", body)
     }
 
-    fun doctors(): List<Doctor> = Json.doctors(call("GET", "/api/doctors").body)
+    // live conversation feed; the answer says if patient words may be sent
+    fun feed(body: JSONObject): Boolean? = Json.showPatientText(call("POST", "/api/robot/feed", body).body)
 
     // short text for the screen, never contains the token
     fun friendly(e: Throwable): String = when (e) {
@@ -88,6 +97,7 @@ object Backend {
 
         val conn = URL(base + path).openConnection() as HttpURLConnection
         try {
+            // android's HttpURLConnection (okhttp inside) accepts PATCH, the plain jvm one would not
             conn.requestMethod = method
             conn.connectTimeout = 5_000
             conn.readTimeout = 10_000
@@ -105,7 +115,7 @@ object Backend {
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
             if (code !in 200..299) {
                 val why = Json.errorMessage(text)?.let { ": ${it.take(120)}" }.orEmpty()
-                throw BackendException("server answered $code$why")
+                throw BackendException("server answered $code$why", code)
             }
             return Reply(code, text)
         } finally {

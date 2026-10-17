@@ -1,136 +1,54 @@
 # Nova Clinic - API between robot app and backend
 
+The contract is now `journeys.md` (v3 and v3.1: places, journeys, tickets, the `guide` command, Teams cards, retention). Read that first. The v1/v2 check-in flow (visits, doctors, patient names, `call_patient`) is gone.
+
+This file keeps what still holds from v2 and writes down the details `journeys.md` leaves open.
+
 Backend = `team-inbox/` (Next.js). Robot app = `robot-app/` (Android, AgentOS SDK 0.4.5).
-All robot calls send `Authorization: Bearer <ROBOT_TOKEN>` (env `TEAM_INBOX_TOKEN` on the backend, `teamInbox.token` in robot-app/local.properties).
 Base URL on the robot = `teamInbox.url` without the path, e.g. `http://192.168.2.214:3000`.
 
-## Data
+## Auth
 
-Doctor
-```
-{ id, name: "Dr. Blue", spot: "Dr. Blue", avgConsultMinutes: 10, teamsWebhookUrl?: string, active: boolean, createdAt }
-```
-`spot` = the exact map spot name the robot drives to. Doctors live in the db and are edited in the dashboard, not in code.
+- Robot calls send `Authorization: Bearer <TEAM_INBOX_TOKEN>` (`teamInbox.token` in robot-app/local.properties). Without `TEAM_INBOX_TOKEN` on the server the robot routes are open.
+- Robot-only routes check the token themselves and never ask for a staff login: `GET /api/robot/next`, `POST /api/robot/heartbeat`, `POST /api/robot/commands/:id/done`, `POST /api/robot/feed`, `POST /api/help`.
+- Staff login when `DASHBOARD_PASSWORD` is set: `/login` (one shared password) sets an httpOnly session cookie for 7 days. It is signed with a key made from `DASHBOARD_PASSWORD` and `SESSION_SECRET`, so changing either signs everybody out. Basic auth (any user name, that password) still works for scripts. `POST /api/logout` signs out.
+- Wrong passwords: 5 per address in 10 minutes, then `429` for 10 minutes. The address is only kept as a hash, for one hour.
+- The robot token also opens the dashboard routes, but only to read. Writes that the contract gives to staff answer `403` for the robot: places, `next` / `done` / `cancel` / `retry`, `with_staff`, robot commands, closing help, the demo switch.
+- Teams links (`GET /api/journeys/:id/next?to=...&k=...` and `GET /api/journeys/:id/done?k=...`) skip the login and check `k` against `CALL_KEY`.
+- Errors are `{ "error": "..." }` with 400 (bad body), 401 (token or login), 403 (not allowed for the robot), 404 (unknown id), 409 (state does not allow it).
 
-Visit
-```
-{
-  id, patientName, doctorId: string | null, doctorName, appointmentTime?: "10:00", language?: "de",
-  robot: "nova",
-  status: "checked_in" | "notified" | "called" | "escorting" | "with_doctor" | "done" | "cancelled",
-  createdAt, updatedAt,
-  events: [{ at, type, detail? }]   // timeline shown on robot screen and dashboard, oldest first
-}
-```
-No symptoms, no reason for the visit, no birthday or insurance data. Ever.
-`doctorId` is `null` when no doctor matched. Then `doctorName` is what the robot sent.
-Robot names are stored lower case (`"Nova"` -> `"nova"`).
+## Robot heartbeat and status (as in v2, plus the screen)
 
-Robot command (doctor -> robot)
-```
-{ id, robot, type: "call_patient", visitId, patientName, doctorName, spot, createdAt, deliveredAt?, doneAt? }
-```
-v2 adds `say` and `go_to` commands, see the end of this file.
-
-Event types in `visit.events`. `detail` is a short English sentence, so the robot can show it as is or map `type` to its own text.
-
-| type | when |
-|---|---|
-| `checked_in` | visit created ("Checked in by Nova") |
-| `notified` | Teams card sent to the doctor |
-| `teams_skipped` | no Teams webhook set up |
-| `teams_failed` | Teams did not accept the card |
-| `doctor_unknown` | no doctor matched the name |
-| `reception_notified` | "doctor not found" card sent to the practice channel |
-| `doctor_assigned` | staff picked the doctor on the board |
-| `called` | doctor is ready (Teams button or board) |
-| `called_again` | staff sent the robot again after it gave up |
-| `robot_got_call` | robot fetched the command from /api/robot/next |
-| `escorting`, `with_doctor`, `done`, `cancelled`, `called`, ... | status set with PATCH. `detail` = what the robot sent, or a default |
-| `robot_back` | robot posted command done |
-
-## Endpoints
-
-| Method | Path | Who | What |
-|---|---|---|---|
-| POST | /api/visits | robot | body `{ patientName, doctor, appointmentTime?, language?, robot }`. Matches `doctor` to a doctor by name (case/space-insensitive, "Dr Blue" = "Dr. Blue"). Creates visit, sends Teams card, returns `{ visit, notified: boolean, doctorKnown: boolean, spot? }` |
-| GET | /api/visits?active=1 | dashboard | visits not done/cancelled, newest first |
-| GET | /api/visits?since=<iso> | dashboard | visits created since then plus all still open, newest first |
-| GET | /api/visits/:id | robot, dashboard | one visit |
-| PATCH | /api/visits/:id | robot, dashboard | body `{ status?, detail?, doctorId? }` -> updates status and appends an event. Same status with a `detail` only adds the event. `doctorId` re-assigns the doctor (and sends the Teams card if the visit is still waiting) |
-| POST | /api/visits/:id/call | dashboard / Teams link | doctor is ready -> status `called`, creates robot command `call_patient`. Body `{ again: true }` (board) sends the robot again when it put the visit back to `called` |
-| GET | /api/visits/:id/call?k=<CALL_KEY> | Teams card button | same as POST but a link (Teams cards can only open URLs), shows a small "Nova is bringing the patient" page |
-| GET | /api/robot/next?robot=nova | robot (poll every 3 s) | oldest undelivered command for this robot or `204`; marks it delivered |
-| POST | /api/robot/commands/:id/done | robot | command finished |
-| POST | /api/help | robot | body `{ robot, summary, urgency: "normal" \| "urgent" }` -> urgent Teams message to the practice channel |
-| GET | /api/help?open=1 | dashboard, robot (bearer) | help requests, newest first (`open=1`: only the ones nobody took). The robot polls it during an urgent help request and stops waiting once its request is closed on the board |
-| PATCH | /api/help/:id | dashboard | body `{ status: "open" \| "done" }` |
-| GET | /api/stats?since=<iso> | dashboard | check-ins today, avg wait (checked_in -> called), per doctor counts. `since` = local midnight, default server midnight |
-| GET/POST/PATCH | /api/doctors | dashboard (robot: GET only, with bearer) | manage doctors. Robot reads the list to find a doctor's `spot` when it has no visit/command with one. GET returns an array. POST `{ name, spot?, teamsWebhookUrl?, active? }` (spot defaults to name), PATCH `{ id, ...fields }` (`teamsWebhookUrl: ""` removes it) |
-
-### Responses
-
-- Errors are `{ "error": "..." }` with status 400 (bad body), 401 (token), 404 (unknown id) or 409 (state does not allow it).
-- `POST /api/visits` -> `201 { visit, notified, doctorKnown, spot? }`. `spot` only when `doctorKnown`. An unknown doctor still creates the visit, and staff picks the doctor on the board.
-- `GET /api/visits/:id`, `PATCH /api/visits/:id` -> the visit object.
-- `POST /api/visits/:id/call` -> `200 { visit, command, already }`. Calling twice does not send the robot twice (`already: true`). `409` when the visit is closed or has no doctor yet.
-- `GET /api/robot/next` -> `200 <command>` or `204` with no body. It also marks the robot as online on the dashboard.
-- `POST /api/robot/commands/:id/done` -> `200 { ok: true, command }`.
-- `POST /api/help` -> `201 { ok: true, id, notified, help }`.
-- `GET /api/stats` -> `{ since, checkInsToday, avgWaitSeconds, avgWaitMinutes, waitingNow, withDoctorNow, doneToday, perDoctor: [{ doctorId, doctorName, checkIns, waiting, withDoctor, done, avgWaitSeconds }], robots: [{ name, lastSeenAt }] }`.
-
-### Auth
-
-- Robot routes (`POST /api/visits`, `GET /api/robot/next`, `POST /api/robot/heartbeat`, `POST /api/robot/commands/:id/done`, `POST /api/help`) need the bearer token when `TEAM_INBOX_TOKEN` is set. They never ask for the dashboard password.
-- `GET /api/robot/status` and `GET/POST /api/robot/commands` are dashboard routes (password, or the bearer).
-- Dashboard pages and dashboard routes use basic auth when `DASHBOARD_PASSWORD` is set (any user name). A valid bearer token also works there, so the robot can read visits and doctors and PATCH visits.
-- The Teams link checks `k` against `CALL_KEY`.
-
-## Teams
-
-Incoming webhook from a Teams "Workflows" flow (Post to a channel when a webhook request is received). Payload = Adaptive Card:
-```
-{ "type": "message", "attachments": [{ "contentType": "application/vnd.microsoft.card.adaptive", "content": { AdaptiveCard 1.4 } }] }
-```
-Card: title "Patient arrived", facts (Patient, Doctor, Appointment, Checked in at), button `Action.OpenUrl` "Call patient in" -> `/api/visits/:id/call?k=...`.
-Per-doctor webhook if set, else `TEAMS_WEBHOOK_URL`. If none is set, nothing is sent and `notified=false`.
-Links in cards use `PUBLIC_BASE_URL`, or the address the robot used to reach the backend when it is empty.
-Unknown doctor -> card "Patient arrived - doctor not found" to `TEAMS_WEBHOOK_URL`. Help -> card "Help needed at reception" (urgent: "Urgent: ...") to `TEAMS_WEBHOOK_URL`.
-
-## Flow
-
-1. Patient talks to Nova. AgentOS LLM fills `CHECK_IN` -> POST /api/visits -> Teams card -> robot says the reply.
-2. Robot screen shows the timeline from `visit.events`.
-3. Doctor taps "Call patient in" -> command `call_patient`.
-4. Robot polls /api/robot/next, says "Herr Weber, Dr. Blue ist jetzt bereit", PATCH `escorting`, navigates to `spot`, PATCH `with_doctor`, says goodbye, drives back to "Reception Point", POST command done.
-5. Dashboard shows everything live; doctor sets `done`.
-
-If the robot can't get there (blocked, lost position, spot not on the map), it PATCHes the visit back to the status it had before (`called` for a call) with `detail` = what went wrong, POSTs /api/help (normal) and drives back to reception.
-The board then shows that detail on the card with a "Send Nova again" button (POST `/call` with `{ again: true }`), which closes the old command and queues a new one.
-
-## v2 - Nova acts on its own (added 17.10.2026)
-
-### Queue and waiting time
-- Doctor gets `avgConsultMinutes` (number, default 10, editable on /doctors). `POST/PATCH /api/doctors` take it as a number from 1 to 120 (rounded to whole minutes), anything else -> `400`.
-- Every visit object returned by the API (POST result `visit`, GET one, GET list, also PATCH and `/call`) gets two computed fields:
-  - `queuePosition`: 1-based place among this doctor's waiting visits (status `checked_in` or `notified`, oldest `createdAt` first). `null` when the visit is not waiting or has no doctor.
-  - `estimatedWaitMinutes`: `(queuePosition - 1) * avgConsultMinutes`, plus `ceil(avgConsultMinutes / 2)` when the doctor has someone `with_doctor` or `escorting` right now. `null` when `queuePosition` is null.
-- The robot tells the patient after check-in ("2 Patienten vor Ihnen, etwa 10 Minuten") and answers `WAITING_STATUS` with it.
-
-### Robot heartbeat and status
-- `POST /api/robot/heartbeat` (robot, bearer) every 15 s, body `{ robot, battery: 0-100 | null, charging: boolean, state, position: string | null, goal: string | null, detail?: string }` -> `204`.
+- `POST /api/robot/heartbeat` (robot) every 15 s, body `{ robot, battery: 0-100 | null, charging, state, position, goal, detail?, screen? }` -> `204`.
   - `state`: `"idle" | "greeting" | "talking" | "fetching" | "walking" | "returning" | "charging" | "error"`.
-  - `goal`: what Nova is doing right now in plain English ("Walking Max Weber to Dr. Blue"), shown on the board.
-  - A heartbeat is never refused for odd values: `battery` is rounded and kept in 0-100, a non-number becomes `null`, `charging` is only `true` for `true`, `state` is stored lower case, empty strings become `null`.
-- `GET /api/robot/status?robot=nova` (dashboard) -> `{ robot, battery, charging, state, position, goal, detail, lastSeenAt, online }`. `online` = heartbeat or poll in the last 45 s. Unknown robot -> `{ robot, online: false }`. A robot that only polled so far (no heartbeat yet) -> `battery`, `state`, `position`, `goal`, `detail` are `null`, `charging` is `false`.
-- The board shows a robot panel: online/offline, battery, state, position, goal.
+  - `goal`: what Nova does right now, with the ticket, never a name ("Guiding A17 to Room B204").
+  - `screen` (v3.1): `{ view, ticket?, title, step?, progress? }`, `view` one of `idle, checkin, pickup, walking, check_back, waiting, arrived, help`. Unknown views become `idle`, `progress` is kept in 0..1, a bad ticket is dropped.
+  - Never refused for odd values: battery is rounded and kept in 0-100, a non-number becomes `null`, `charging` is only true for `true`, empty strings become `null`.
+- `GET /api/robot/status?robot=nova` (dashboard) -> `{ robot, battery, charging, state, position, goal, detail, screen, lastSeenAt, online }`. `online` = heartbeat or poll in the last 45 s. A robot never seen -> `{ robot, online: false }`.
 
-### More robot commands (staff -> robot)
-`/api/robot/next` can now return three command types (same shape, unused fields absent):
-- `call_patient` (as before).
-- `say`: `{ id, robot, type: "say", text, createdAt }` - Nova says `text` out loud (staff typed it on the board).
-- `go_to`: `{ id, robot, type: "go_to", spot, createdAt }` - Nova drives to `spot` and stays there (e.g. back to reception, or to the charger).
-- `POST /api/robot/commands` (dashboard) body `{ robot, type: "say" | "go_to", text?, spot? }` -> `201 <command>`. `400` when `type` is something else, `say` has no `text` (max 300 chars) or `go_to` has no `spot`.
-- `GET /api/robot/commands?robot=nova&limit=10` (dashboard, added for the board) -> the last commands of every type, newest first (`limit` 1-50, default 10). Queued = no `deliveredAt`, delivered = `deliveredAt` without `doneAt`, done = `doneAt`.
-- Robot posts `/api/robot/commands/:id/done` for every type when finished.
-The board's robot panel has "Say something" (text field) and "Send to" (spot field with suggestions from the doctors' spots plus `ROBOT_HOME_SPOT`, env, default "Reception Point").
+## Commands from staff (as in v2, plus ask)
+
+`GET /api/robot/next` returns `guide` (see journeys.md), `say`, `ask` or `go_to`, oldest first, or `204`. A poll also counts as "seen".
+- `say`: `{ id, robot, type: "say", text, createdAt }` - Nova says `text` word for word.
+- `ask` (v3.1): `{ id, robot, type: "ask", text, createdAt }` - Nova treats it like something a person said (AgentOS query).
+- `go_to`: `{ id, robot, type: "go_to", spot, createdAt }` - drive there and stay.
+- `POST /api/robot/commands` (staff) `{ robot, type: "ask" | "say" | "go_to", text?, spot? }` -> `201 <command>`. `ask` text max 500 chars, `say` max 300.
+- `GET /api/robot/commands?robot=nova&limit=10` (dashboard) -> last commands, newest first. Queued = no `deliveredAt`, delivered = `deliveredAt` without `doneAt`, done = `doneAt`.
+- The robot posts `POST /api/robot/commands/:id/done` for every type when it is finished (for a guide: back at reception or onto the next job).
+
+## Details the contract leaves open
+
+- `POST /api/journeys` takes only `to`, `forPlaceId`, `pace`, `wheelchair`, `robot`. Any other field (a name, a note, a language) is refused with `400`, not ignored.
+- `forPlaceId` must be a room, and `to` must be that room or its waiting room. The robot may create a journey when `to` is public, or when `forPlaceId` is a room with `selfCheckIn`. Everything else from the robot is `403`. Without an active reception place, `409`.
+- A journey to a waiting room for a room gets its Teams card ("Your visitor has arrived ...") when the leg is `arrived` there, not when it is created. "Call in" = `next` to the room. Guides to the exit send no card.
+- A leg the robot marks `failed` puts the journey back to `waiting_pickup` with that leg still `failed`. Staff then press "Send Nova again" = `POST /api/journeys/:id/retry` (same walk as a new leg and a new `guide`) or cancel.
+- Leg updates (`pickup`, `walking`, `arrived`, `failed`) only work on the current leg. A leg that is `arrived` or `failed` can't change any more (`409`), and neither can anything while the journey is `with_staff` (events still can).
+- Staff `with_staff` works from any open state. If Nova had not reported the arrival yet, the leg is set to `arrived` and its undelivered guide is dropped.
+- `POST /api/journeys/:id/done` twice is fine (`already: true`), the Teams link shows "already done".
+- Event types: the list in journeys.md, plus `teams_failed` (Teams did not take the card) from the server. The robot may send other lower-case types too; only the listed ones are counted. `feedback` needs `detail` = `up` or `down`.
+- Queue: the line of a journey is its `forPlaceId`, else where it goes. Order in the line: called into the room itself first, then the ones seated or at the door (by arrival), then the ones still walking.
+- `GET /api/stats?day=2026-10-17` (or `?since=<iso>`, or nothing = today in `CLINIC_TIMEZONE`) -> `{ day, journeys, guides, done, cancelled, avgWalkMinutes, lostPatients, feedbackUp, feedbackDown, activeNow, perPlace: [{ placeId, name, guides, done, avgWalkMinutes, lostPatients }] }`. Only numbers, kept per day and place in `daily_stats`.
+- Live feed (v3.1): `POST /api/robot/feed` answers `{ ok, stored, dropped, showPatientText }`. Items `who: "patient", kind: "said"` are dropped while the demo switch is off. `GET /api/robot/feed?robot=nova` (dashboard) -> `{ items (newest first), showPatientText }`. `PATCH /api/robot/feed { showPatientText }` (staff) flips the demo switch. The feed lives in the server's memory only; on Vercel each running instance has its own.
+- `GET /api/board?robot=nova` (dashboard) = everything the reception and room pages show in one request (places, open journeys with their place in line, help, robot status, last commands, feed, today's numbers).
+- Help: `POST /api/help { robot, summary, urgency, journeyId?, ticket? }` -> `201 { ok, id, notified, help }`. `GET /api/help?open=1` (dashboard and robot), `PATCH /api/help/:id { status: "open" | "done" }` (staff).
+- Retention runs on every write to journeys, places, help and commands: journeys that ended 12 h ago go with their legs, events, commands and feed. Open journeys nobody touched for 24 h go too. Old `say` / `ask` / `go_to` commands and handled help requests go after 12 h.

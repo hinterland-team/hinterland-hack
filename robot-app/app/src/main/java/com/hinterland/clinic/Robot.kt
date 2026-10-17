@@ -19,7 +19,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -43,6 +42,8 @@ enum class NavFailure(val screen: String, val spoken: String) {
 
 sealed interface NavOutcome {
     data object Arrived : NavOutcome
+    // the caller stopped it on purpose (check-back, pause, new pace); navigation is stopped
+    data object Interrupted : NavOutcome
     data class Failed(val why: NavFailure, val code: Int? = null) : NavOutcome
 }
 
@@ -63,13 +64,14 @@ object Robot {
     // RobotAPI doc recommends 0.2 m arrival range and a 30 s obstacle timeout; a bit more range so it stops before the door
     private const val ARRIVE_RANGE_M = 0.3
     private const val AVOID_TIMEOUT_MS = 30_000L
-    // slower when a patient walks behind; angular follows the doc formula 0.4 + (v - 0.1) / 3 * 4
-    private const val ESCORT_LINEAR = 0.45
-    private const val ESCORT_ANGULAR = 0.87
     private const val NAV_TIMEOUT_MS = 4 * 60_000L
     // blocked longer than this in total during one drive -> give up
     private const val BLOCKED_LIMIT_MS = 25_000L
-    private const val WATCH_MS = 500L
+    private const val WATCH_MS = 250L
+    // RobotAPI "Rotational Motion": speed 0-50 degrees/s. calm, about 4.5 s for a half turn
+    private const val TURN_DEG_PER_S = 40f
+    // after stopNavigation the chassis needs a moment before a turn (FAQ: resource conflict)
+    const val NAV_RELEASE_MS = 700L
     // while still blocked, ask again this often
     private const val NAG_EVERY_MS = 10_000L
     // "Stop Charging and Undock": speed and distance are the doc defaults
@@ -105,7 +107,10 @@ object Robot {
 
     var onHealth: (Boolean, String?) -> Unit = { _, _ -> }
 
-    val home: String get() = BuildConfig.HOME_SPOT.trim()
+    // the reception place's spot from /api/places, else robot.homeSpot from local.properties
+    @Volatile var homeFromPlaces: String? = null
+
+    val home: String get() = homeFromPlaces?.trim()?.takeIf { it.isNotEmpty() } ?: BuildConfig.HOME_SPOT.trim()
 
     fun isHome(spot: String?): Boolean = Brain.isHome(spot, home)
 
@@ -248,11 +253,12 @@ object Robot {
         return list.mapNotNull { p -> runCatching { Visitor(p.id, p.distance, p.isWithFace) }.getOrNull() }
     }
 
-    // how many people (face or body) are within range; null when the vision api gives nothing
-    fun peopleNear(rangeM: Double): Int? {
+    // distances (m) of everyone the vision sees right now, face or body (RobotAPI "Get All Persons
+    // Information", Person.getDistance). live only, nothing is stored. null when the vision api gives nothing.
+    fun peopleDistances(): List<Double>? {
         if (!ready) return null
         val list = runCatching { people.allPersons }.getOrNull() ?: return null
-        return list.count { p -> runCatching { p.distance > 0.0 && p.distance <= rangeM }.getOrDefault(false) }
+        return list.mapNotNull { p -> runCatching { p.distance }.getOrNull()?.takeIf { it > 0.0 } }
     }
 
     // ---- focus following: turns nova towards the person she talks to. it holds the chassis,
@@ -340,12 +346,15 @@ object Robot {
 
     // ---- driving ----
 
-    // drives to a map spot. gets off the charger first, stops focus following, gives up when
-    // blocked for BLOCKED_LIMIT_MS in total or when stopWhen() says so.
+    // drives to a map spot at the default speed or the given one (a guide's pace). gets off the charger
+    // first, stops focus following, gives up when blocked for BLOCKED_LIMIT_MS in total or when
+    // stopWhen() says so. interrupt() stops it on purpose (Interrupted). onTick runs every WATCH_MS.
     suspend fun goTo(
         spot: String,
-        escort: Boolean,
+        speed: Speed? = null,
         stopWhen: () -> Boolean = { false },
+        interrupt: () -> Boolean = { false },
+        onTick: (blocked: Boolean) -> Unit = {},
         onEvent: (NavEvent) -> Unit = {},
     ): NavOutcome {
         if (!ready) return NavOutcome.Failed(NavFailure.NOT_CONNECTED)
@@ -355,31 +364,40 @@ object Robot {
         atHome = false
         var outcome: NavOutcome = NavOutcome.Failed(NavFailure.OTHER)
         for (attempt in 0..1) {
-            outcome = watched(spot, escort, stopWhen, onEvent)
-            // the chassis may still be held by the focus following we just stopped - try once more
+            outcome = watched(spot, speed, stopWhen, interrupt, onTick, onEvent)
+            // the chassis may still be held (focus following, a turn that just ended) - try once more
             val busy = (outcome as? NavOutcome.Failed)?.why == NavFailure.BUSY
             if (!busy || attempt == 1) break
             delay(1_000)
         }
-        if (outcome == NavOutcome.Arrived) {
-            position = spot
-            atHome = isHome(spot)
-        } else {
-            position = null
-            atHome = null
+        when (outcome) {
+            NavOutcome.Arrived -> {
+                position = spot
+                atHome = isHome(spot)
+            }
+            NavOutcome.Interrupted -> {
+                position = null
+                atHome = false
+            }
+            is NavOutcome.Failed -> {
+                position = null
+                atHome = null
+            }
         }
         return outcome
     }
 
     private suspend fun watched(
         spot: String,
-        escort: Boolean,
+        speed: Speed?,
         stopWhen: () -> Boolean,
+        interrupt: () -> Boolean,
+        onTick: (Boolean) -> Unit,
         onEvent: (NavEvent) -> Unit,
     ): NavOutcome = coroutineScope {
         val clock = BlockedClock()
         val nav = async {
-            navigate(spot, escort) { ev ->
+            navigate(spot, speed) { ev ->
                 if (ev == NavEvent.BLOCKED) clock.blocked(now()) else clock.clear(now())
                 onEvent(ev)
             }
@@ -390,10 +408,15 @@ object Robot {
             result = withTimeoutOrNull(WATCH_MS) { nav.await() }
             if (result != null) break
             val t = now()
+            onTick(clock.isBlocked())
             when {
                 stopWhen() -> {
                     nav.cancel()
                     result = NavOutcome.Failed(NavFailure.STOPPED)
+                }
+                interrupt() -> {
+                    nav.cancel()
+                    result = NavOutcome.Interrupted
                 }
                 clock.total(t) > BLOCKED_LIMIT_MS -> {
                     nav.cancel()
@@ -409,7 +432,9 @@ object Robot {
         result ?: NavOutcome.Failed(NavFailure.OTHER)
     }
 
-    private suspend fun navigate(spot: String, escort: Boolean, onEvent: (NavEvent) -> Unit): NavOutcome {
+    // RobotAPI "Navigate to Specified Location": startNavigation(reqId, destName, coordinateDeviation, time,
+    // [linearSpeed, angularSpeed,] listener). cancelling the coroutine calls stopNavigation(reqId).
+    private suspend fun navigate(spot: String, speed: Speed?, onEvent: (NavEvent) -> Unit): NavOutcome {
         if (!ready) return NavOutcome.Failed(NavFailure.NOT_CONNECTED)
         val id = reqIds.getAndIncrement()
         val outcome = withTimeoutOrNull(NAV_TIMEOUT_MS) {
@@ -455,8 +480,8 @@ object Robot {
                 }
 
                 val started = runCatching {
-                    if (escort) {
-                        api.startNavigation(id, spot, ARRIVE_RANGE_M, AVOID_TIMEOUT_MS, ESCORT_LINEAR, ESCORT_ANGULAR, listener)
+                    if (speed != null) {
+                        api.startNavigation(id, spot, ARRIVE_RANGE_M, AVOID_TIMEOUT_MS, speed.linear, speed.angular, listener)
                     } else {
                         api.startNavigation(id, spot, ARRIVE_RANGE_M, AVOID_TIMEOUT_MS, listener)
                     }
@@ -472,6 +497,70 @@ object Robot {
         }
         if (outcome == null) runCatching { api.stopNavigation(id) }
         return outcome ?: NavOutcome.Failed(NavFailure.TIMEOUT)
+    }
+
+    // ---- turning on the spot (RobotAPI "Rotational Motion": turnLeft/turnRight(reqId, speed deg/s,
+    // angle deg, listener), stopped with stopMove). never while navigating: the guide stops that first. ----
+
+    // true when the robot took the command. waits until the turn had its time, the result may come early.
+    suspend fun turn(degrees: Float, left: Boolean): Boolean {
+        if (!ready) return false
+        if (stopFollow()) delay(FOLLOW_RELEASE_MS)
+        val angle = degrees.coerceIn(1f, 360f)
+        val expectedMs = (angle / TURN_DEG_PER_S * 1000f).toLong()
+        val startedAt = now()
+        val ok = withTimeoutOrNull(expectedMs + 6_000) {
+            suspendCancellableCoroutine<Boolean> { cont ->
+                val finished = AtomicBoolean(false)
+                fun finish(v: Boolean) {
+                    if (finished.compareAndSet(false, true)) cont.resume(v)
+                }
+                val listener = object : CommandListener() {
+                    override fun onResult(result: Int, message: String?) =
+                        finish(result == Definition.RESULT_OK || message?.contains("succeed") == true)
+
+                    override fun onError(errorCode: Int, errorString: String?) {
+                        Log.w(TAG, "turn error $errorCode")
+                        finish(false)
+                    }
+                }
+                val id = reqIds.getAndIncrement()
+                val started = runCatching {
+                    if (left) api.turnLeft(id, TURN_DEG_PER_S, angle, listener) else api.turnRight(id, TURN_DEG_PER_S, angle, listener)
+                }.getOrDefault(-1)
+                if (started < 0) finish(false)
+                cont.invokeOnCancellation { stopMove() }
+            }
+        }
+        if (ok == null) stopMove()
+        val rest = expectedMs - (now() - startedAt)
+        if (ok == true && rest > 0) delay(rest + 200)
+        return ok == true
+    }
+
+    fun stopMove() {
+        runCatching { api.stopMove(reqIds.getAndIncrement(), object : CommandListener() {}) }
+    }
+
+    // RobotAPI "Get Robot Current Position" (needs localization); null when it can't tell
+    suspend fun pose(): Point? {
+        if (!ready) return null
+        return withTimeoutOrNull(2_500) {
+            suspendCancellableCoroutine<Point?> { cont ->
+                val finished = AtomicBoolean(false)
+                fun finish(p: Point?) {
+                    if (finished.compareAndSet(false, true)) cont.resume(p)
+                }
+                val started = runCatching {
+                    api.getPosition(reqIds.getAndIncrement(), object : CommandListener() {
+                        override fun onResult(result: Int, message: String?) = finish(Json.pose(message))
+
+                        override fun onError(errorCode: Int, errorString: String?) = finish(null)
+                    })
+                }.getOrDefault(-1)
+                if (started < 0) finish(null)
+            }
+        }
     }
 
     // ---- charging ----
@@ -553,24 +642,18 @@ object Robot {
         return ok
     }
 
-    // names of all spots on the current map (empty if the robot api is not there)
-    suspend fun places(): List<String> {
+    // all spots on the current map with coordinates (RobotAPI "Get All Position Points on Current Map")
+    suspend fun mapPlaces(): List<MapPlace> {
         if (!ready) return emptyList()
         return withTimeoutOrNull(5_000) {
-            suspendCancellableCoroutine<List<String>> { cont ->
+            suspendCancellableCoroutine<List<MapPlace>> { cont ->
                 val finished = AtomicBoolean(false)
-                fun finish(names: List<String>) {
-                    if (finished.compareAndSet(false, true)) cont.resume(names)
+                fun finish(list: List<MapPlace>) {
+                    if (finished.compareAndSet(false, true)) cont.resume(list)
                 }
                 val started = runCatching {
                     api.getPlaceList(reqIds.getAndIncrement(), object : CommandListener() {
-                        override fun onResult(result: Int, message: String?) {
-                            val names = runCatching {
-                                val arr = JSONArray(message.orEmpty())
-                                (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name")?.takeIf { n -> n.isNotBlank() } }
-                            }.getOrDefault(emptyList())
-                            finish(names)
-                        }
+                        override fun onResult(result: Int, message: String?) = finish(Json.mapPlaces(message))
 
                         override fun onError(errorCode: Int, errorString: String?) = finish(emptyList())
                     })

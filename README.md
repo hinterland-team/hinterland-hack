@@ -4,7 +4,7 @@ Our entry for the Terra Robotics Challenge (Smart Receptionist). The robot (Orio
 
 ## What's in here
 
-- `robot-app/` - Android app for the robot (Kotlin, Jetpack Compose, AgentOS SDK 0.4.5). "Nova Clinic": Nova checks patients in, calls them when the doctor is ready and walks them to the doctor's room. See [Robot app](#robot-app).
+- `robot-app/` - Android app for the robot (Kotlin, Jetpack Compose, AgentOS SDK 0.4.5). "Nova Clinic": Nova picks a patient up by ticket, walks with them at their pace to the room the team chose, checks they still follow, and brings them to the exit. See [Robot app](#robot-app).
 - `team-inbox/` - Next.js. The reception board: visits per doctor, Teams cards with a "Call patient in" button, doctor list, and `/simulate` to demo the loop without the robot. See `team-inbox/README.md`.
 
 ## How it works
@@ -53,34 +53,41 @@ Then start "Nova Clinic" from the robot's home screen. OrionStar says to start a
 
 ## Robot app
 
-`robot-app/` is "Nova Clinic". The patient just talks. Nova asks only for name, doctor and appointment time, never for symptoms, and gives no medical advice.
+`robot-app/` is "Nova Clinic" v3, the robot side of `docs/journeys.md` (section 4 and 5). The team decides where a patient goes, Nova walks with them. Nova only knows a ticket (`A17`) and the room: no names, no reasons for the visit, nothing recorded.
+
+A `guide` command from `/api/robot/next` runs like this (`Guide.kt`):
+
+1. Pickup: Nova drives to the pickup spot if she isn't there, shows the ticket very large with a "That's me" button and calls the ticket (in the languages from `robot.callLanguages`, default `de,en`). Reminder every 45 s, after 3 min the leg is `failed` ("Nobody came") and she goes back.
+2. Pace: if staff didn't set slow or very slow, she asks "normally or a bit slower?". Speeds are in `Pace.kt` (0.6 / 0.4 / 0.25 m/s, wheelchair = slow), all inside what RobotApi navigation accepts.
+3. Walking: navigation at that speed. About every 25 s of driving, and right after waiting for an obstacle, she stops, turns around and looks for a person: close (3 m) -> "all good, shall I slow down?"; 3-6 m -> waits up to 20 s and slows down one step; nobody -> calls twice, after 30 s `lost_patient` + a help request to the team, after 60 s more the leg fails. She also talks at half way and almost there (from the robot's position on the map).
+4. Arrival: "This is Room B204, please take a seat", or goodbye at the exit, then an optional thumbs up / down. Then back to reception (the `reception` place from `/api/places`, else `robot.homeSpot`), or straight to the next leg.
+
+Every step is PATCHed to the journey (leg status + event, ticket only). While she walks, fetches or drives back, Nova Deploy gets the busy hold. During a guide the mic does not wait for a face (the patient walks behind), barge-in stays on.
 
 Actions (in `ClinicActions.kt`, the LLM picks them by their description):
 
-- `com.hinterland.clinic.CHECK_IN` - `patient_name`, `doctor`, `appointment_time` (optional), `language` (optional), `reply`. Saves the visit (POST /api/visits), then Nova says the reply. If the backend doesn't know the doctor, Nova still checks in and says the team will help.
-- `com.hinterland.clinic.GUIDE_TO_DOCTOR` - `doctor`, `patient_name` (optional). Walks to the doctor's map spot, says goodbye, drives back to `robot.homeSpot`.
-- `com.hinterland.clinic.CALL_STAFF` - `summary` (no medical details), `urgency` normal / urgent. POST /api/help. For urgent ones Nova also says to call 112.
-- `com.hinterland.clinic.WAITING_STATUS` - `patient_name`. Reads the visit and tells where it stands.
+- `CONFIRM_TICKET` `ticket` - the person says the ticket Nova calls.
+- `SET_PACE` `pace` (normal / slow / very_slow) - slower, faster, or go on after a pause.
+- `PAUSE_WALK` - wait right here.
+- `WALK_STATUS` - how far, how long, where are we.
+- `GUIDE_TO_PLACE` `place` - only places that are public (plus exit and reception). For rooms Nova says the reception desk assigns them.
+- `CHECK_IN_FOR` `place` - self check-in by voice for a room marked `selfCheckIn`.
+- `WAITING_STATUS` `ticket` - where that ticket stands, place in line, about how long.
+- `CALL_STAFF` `summary`, `urgency` - no health details; urgent also tells the person to call 112 and Nova stays.
 
-Nova also acts on her own (`NovaBrain.kt`, the priorities are in `Brain.kt`). Every second she picks the most important thing: stay put after an urgent help call, run the team's commands from `/api/robot/next` (`call_patient`, `go_to`, `say`; a patient who is talking gets up to 20 s first), greet a visitor who walks up, drive to the charger at 20 % battery and leave it at 30 %, and drive back to `robot.homeSpot` after a minute away. She never starts something new while someone is talking to her.
+Self check-in on the screen: "Check in" on the welcome screen, then who (the `selfCheckIn` rooms as tiles, or "I'm not sure"), how to walk, confirm. That POSTs `/api/journeys` and Nova walks the visitor to the room's waiting place.
 
-When she calls a patient she waits up to 30 s for someone to come close. If nobody comes, the visit goes back to `called` and the team gets a help message. After a check-in she says the place in the queue and the expected wait.
+The team can also send `say` (said as it is), `go_to` (drive there and stay) and `ask` (goes to AgentOS like something a person said, so Nova's AI decides). Everything Nova says on her own is written by the AgentOS LLM from a short English instruction in the patient's language, so there are no language or place lists in the code.
 
-Every 15 s she sends battery, state, position and goal to `/api/robot/heartbeat`. The screen shows the same goal under her face. Turning towards the person she talks to (focus following) can be switched off with `robot.focusFollow=false` in `local.properties`.
+Nova still acts on her own (`NovaBrain.kt`, the priorities are in `Brain.kt`): urgent help first, then what the person in front asked for, then the team's commands, greeting someone who walks up, charging at 20 %, going back to reception.
 
-Things Nova says on its own (calling the patient, goodbye, errors) are written by the AgentOS LLM in the visit's language. Doctor names and spots come from the backend and the robot map. So the code has no language lists and no doctor or room names.
+Heartbeat every 15 s (and right away when the screen changes) with a `screen` mirror for the dashboard. Nova's lines go to `/api/robot/feed`; from the patient only what Nova understood ("asked to walk slower"), their own words only when the dashboard's demo switch is on.
 
-The screen: Nova's face on the left (blinks, looks up while it thinks) with what was just said, the steps of the current visit on the right (details, doctor informed, waiting, walking, arrived, back at reception).
+The screen (549x308 dp, laid out at 1280x720 and scaled): Nova's face and what was just said on the left, the task on the right in large type. Motion is gentle and stops when Android's "remove animations" is on. The app has its own adaptive icon (Nova's face, blue to teal).
 
-Map: every doctor needs a spot on the robot map with the name from the dashboard (`spot`), plus the home spot (now "Reception Point"). The robot has to be localized on that map.
+Map: every place needs a spot on the robot map with the `spot` name from the dashboard. The robot has to be localized on that map.
 
-Tests for the plain logic (JSON, name matching, timeline, Nova's priorities): `gradlew.bat testDebugUnitTest`.
-
-Test the inbox without the robot: open http://localhost:3000/simulate, it plays the robot. Or check someone in by hand (token is in `team-inbox/.env.local`):
-
-```
-curl -X POST http://localhost:3000/api/visits -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d "{\"patientName\":\"Max Weber\",\"doctor\":\"Dr. Blue\",\"appointmentTime\":\"10:00\",\"robot\":\"nova\"}"
-```
+Tests for the plain logic (walk planner, pace table, pickup and lost-patient timelines, places, JSON, Nova's priorities, the screen mirror, the feed): `gradlew.bat :app:testDebugUnitTest`.
 
 ## Deploy to the robot
 

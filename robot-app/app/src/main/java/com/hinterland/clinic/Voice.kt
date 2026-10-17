@@ -9,12 +9,13 @@ import com.ainirobot.agent.base.llm.Role
 object Voice {
 
     private const val SYSTEM =
-        "You are Nova, the friendly reception robot of a doctor's practice. " +
-            "Write exactly what Nova says out loud right now: one or two short, warm sentences of plain spoken text. " +
+        "You are Nova, the friendly guide robot of a doctor's practice. You walk patients to the room the team chose, " +
+            "at their pace. Write exactly what Nova says out loud right now: one or two short, warm sentences of plain spoken text. " +
             "No lists, no emojis, no quotation marks, no stage directions. " +
+            "Never say or ask for a person's name: a patient is only a ticket number. " +
             "Never give medical advice and never talk about symptoms."
 
-    // text the planner already wrote (the reply param) - speak it as it is
+    // text that is already written (the team's say command) - speak it as it is
     suspend fun say(text: String?): Boolean {
         val t = text?.trim().orEmpty()
         if (t.isEmpty()) return true
@@ -29,10 +30,13 @@ object Voice {
         )
         repeat(2) {
             val ok = runCatching {
-                AgentCore.llmSync(messages, LLMConfig(temperature = 0.4f, maxTokens = 120), 30_000, isStreaming = true).isSuccess
+                AgentCore.llmSync(messages, LLMConfig(temperature = 0.4f, maxTokens = 140), 30_000, isStreaming = true).isSuccess
             }.getOrDefault(false)
             if (ok) return true
         }
         return false
     }
+
+    // the team's `ask` command: AgentOS plans it like something a person said (SDK 4.9 "Text Commands")
+    fun ask(text: String): Boolean = runCatching { AgentCore.query(text) }.isSuccess
 }

@@ -8,76 +8,104 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-// shapes follow docs/api.md
+// shapes follow docs/journeys.md (v3). a patient is only a ticket: no names anywhere in here.
 
-object VisitStatus {
-    const val CHECKED_IN = "checked_in"
-    const val NOTIFIED = "notified"
-    const val CALLED = "called"
-    const val ESCORTING = "escorting"
-    const val WITH_DOCTOR = "with_doctor"
+object JourneyStatus {
+    const val WAITING_PICKUP = "waiting_pickup"
+    const val WALKING = "walking"
+    const val ARRIVED = "arrived"
+    const val WITH_STAFF = "with_staff"
     const val DONE = "done"
     const val CANCELLED = "cancelled"
 
-    private val order = listOf(CHECKED_IN, NOTIFIED, CALLED, ESCORTING, WITH_DOCTOR, DONE)
-
-    // position in the normal flow, -1 for cancelled or unknown
-    fun rank(status: String?): Int = order.indexOf(status)
+    fun closed(status: String?) = status == DONE || status == CANCELLED
 }
 
-data class VisitEvent(val at: String?, val type: String, val detail: String?)
-
-data class Visit(
+data class Leg(
     val id: String,
-    val patientName: String,
-    val doctorId: String?,
-    val doctorName: String,
-    val appointmentTime: String?,
-    val language: String?,
-    val status: String,
-    val createdAt: String?,
-    val updatedAt: String?,
-    val spot: String?,
-    val events: List<VisitEvent>,
-    // computed by the backend: 1-based place among the doctor's waiting visits, null when not waiting
+    val fromPlaceId: String? = null,
+    val toPlaceId: String? = null,
+    val toName: String? = null,
+    val toSpot: String? = null,
+    val status: String? = null,
+)
+
+data class Journey(
+    val id: String,
+    val ticket: String,
+    val pace: Pace = Pace.NORMAL,
+    val wheelchair: Boolean = false,
+    val status: String = JourneyStatus.WAITING_PICKUP,
+    val legs: List<Leg> = emptyList(),
+    val createdBy: String? = null,
     val queuePosition: Int? = null,
     val estimatedWaitMinutes: Int? = null,
-)
+) {
+    // the current leg is the last one
+    val leg: Leg? get() = legs.lastOrNull()
+}
 
-data class CheckInResult(
-    val visit: Visit,
-    val notified: Boolean,
-    val doctorKnown: Boolean,
-    val spot: String?,
-)
+// a stop of a guide command (from / to)
+data class Stop(val name: String, val spot: String, val room: String? = null, val kind: String? = null) {
+    val label: String get() = room?.let { "Room $it" } ?: name
+}
 
-// unused fields are null: say has text, go_to has spot, call_patient has the visit fields
+// unused fields are null: guide has the journey fields, say/ask have text, go_to has spot
 data class RobotCommand(
     val id: String,
     val type: String,
-    val visitId: String? = null,
-    val patientName: String? = null,
-    val doctorName: String? = null,
+    val journeyId: String? = null,
+    val legId: String? = null,
+    val ticket: String? = null,
+    val pace: Pace? = null,
+    val wheelchair: Boolean = false,
+    val from: Stop? = null,
+    val to: Stop? = null,
     val spot: String? = null,
     val text: String? = null,
 ) {
     companion object {
-        const val CALL_PATIENT = "call_patient"
+        const val GUIDE = "guide"
         const val GO_TO = "go_to"
         const val SAY = "say"
+        const val ASK = "ask"
     }
 }
+
+data class JourneyCreated(val journey: Journey?, val command: RobotCommand?)
 
 // battery from the robot's status listener; either part can be missing
 data class PowerReading(val level: Int?, val charging: Boolean?)
 
-data class Doctor(val id: String?, val name: String, val spot: String?, val active: Boolean)
+// the live mirror of the robot screen for the dashboard (heartbeat `screen`)
+data class ScreenMirror(
+    val view: String,
+    val title: String,
+    val ticket: String? = null,
+    val step: String? = null,
+    val progress: Float? = null,
+)
 
-// language for robot-initiated sentences: the visit's tag, else the patient's own words, else the device locale
-data class Lang(val tag: String?, val sample: String? = null) {
+// one line of the live conversation feed (POST /api/robot/feed)
+data class FeedItem(val at: Long, val who: String, val kind: String, val text: String) {
+    companion object {
+        const val NOVA = "nova"
+        const val PATIENT = "patient"
+        const val SAID = "said"
+        const val INTENT = "intent"
+        const val ACTION = "action"
+    }
+}
+
+// language for robot-initiated sentences: a tag, else the patient's own words, else the device locale.
+// tags = say it once in each of these languages (the ticket call, robot.callLanguages)
+data class Lang(val tag: String?, val sample: String? = null, val tags: List<String> = emptyList()) {
     fun instruction(): String = when {
+        tags.isNotEmpty() ->
+            "Say it once in each of the languages with these BCP-47 tags, one short version after the other, " +
+                "in this order: ${tags.joinToString(", ")}."
         !tag.isNullOrBlank() -> "Speak in the language with the BCP-47 tag \"${tag.trim()}\"."
-        !sample.isNullOrBlank() -> "Speak in the same language the patient used in this sentence: \"${sample.trim()}\"."
+        !sample.isNullOrBlank() -> "Speak in the same language the person used in this sentence: \"${sample.trim()}\"."
         else -> "Speak in the language with the BCP-47 tag \"${Locale.getDefault().toLanguageTag()}\"."
     }
 
@@ -87,75 +115,119 @@ data class Lang(val tag: String?, val sample: String? = null) {
         // keeps a well-formed tag, drops anything else (a language name is not a tag)
         fun cleanTag(raw: String?): String? =
             raw?.trim()?.replace('_', '-')?.takeIf { tagPattern.matches(it) }
+
+        // "de, en" from local.properties -> [de, en]
+        fun tagList(raw: String?): List<String> =
+            raw.orEmpty().split(',', ';', ' ').mapNotNull { cleanTag(it) }.distinct()
     }
 }
 
 object Json {
 
-    fun checkIn(body: String): CheckInResult {
-        val o = JSONObject(body)
-        val v = visit(o.optJSONObject("visit") ?: o)
-        return CheckInResult(
-            visit = v,
-            notified = o.optBoolean("notified", false),
-            doctorKnown = if (o.has("doctorKnown")) o.optBoolean("doctorKnown", true) else true,
-            spot = o.str("spot") ?: v.spot,
+    fun places(body: String): List<Place> =
+        list(body, "places").objects().mapNotNull { o -> runCatching { place(o) }.getOrNull() }
+
+    fun place(o: JSONObject): Place {
+        val name = o.str("name") ?: error("place without name")
+        return Place(
+            id = o.str("id") ?: error("place without id"),
+            name = name,
+            room = o.str("room"),
+            spot = o.str("spot") ?: name,
+            kind = o.str("kind")?.lowercase(Locale.ROOT) ?: PlaceKind.OTHER,
+            public = o.bool("public") ?: false,
+            avgMinutes = o.int("avgMinutes"),
+            active = o.bool("active") ?: true,
+            selfCheckIn = o.bool("selfCheckIn") ?: false,
+            waitingPlaceId = o.str("waitingPlaceId"),
         )
     }
 
-    fun visit(body: String): Visit {
+    fun journey(body: String): Journey {
         val o = JSONObject(body)
-        return visit(o.optJSONObject("visit") ?: o)
+        return journey(o.optJSONObject("journey") ?: o)
     }
 
-    fun visit(o: JSONObject): Visit {
-        val events = o.optJSONArray("events")?.let { arr ->
-            (0 until arr.length()).mapNotNull { i ->
-                val e = arr.optJSONObject(i) ?: return@mapNotNull null
-                val type = e.str("type") ?: return@mapNotNull null
-                VisitEvent(at = e.str("at"), type = type, detail = e.str("detail"))
-            }
-        }.orEmpty()
-        return Visit(
-            id = o.str("id") ?: error("visit without id"),
-            patientName = o.str("patientName").orEmpty(),
-            doctorId = o.str("doctorId"),
-            doctorName = o.str("doctorName") ?: o.str("doctor").orEmpty(),
-            appointmentTime = o.str("appointmentTime"),
-            language = o.str("language"),
-            status = o.str("status") ?: VisitStatus.CHECKED_IN,
-            createdAt = o.str("createdAt"),
-            updatedAt = o.str("updatedAt"),
-            spot = o.str("spot"),
-            events = events,
+    fun journey(o: JSONObject): Journey {
+        val legs = o.optJSONArray("legs")?.objects().orEmpty().mapNotNull { l ->
+            val id = l.str("id") ?: return@mapNotNull null
+            Leg(
+                id = id,
+                fromPlaceId = l.str("fromPlaceId"),
+                toPlaceId = l.str("toPlaceId"),
+                toName = l.str("toName"),
+                toSpot = l.str("toSpot"),
+                status = l.str("status"),
+            )
+        }
+        return Journey(
+            id = o.str("id") ?: error("journey without id"),
+            ticket = o.str("ticket").orEmpty(),
+            pace = Pace.of(o.str("pace")) ?: Pace.NORMAL,
+            wheelchair = o.bool("wheelchair") ?: false,
+            status = o.str("status") ?: JourneyStatus.WAITING_PICKUP,
+            legs = legs,
+            createdBy = o.str("createdBy"),
             queuePosition = o.int("queuePosition")?.takeIf { it >= 1 },
             estimatedWaitMinutes = o.int("estimatedWaitMinutes")?.takeIf { it >= 0 },
         )
     }
 
-    fun visits(body: String): List<Visit> =
-        list(body, "visits").objects().mapNotNull { runCatching { visit(it) }.getOrNull() }
+    // POST /api/journeys -> { journey, command }
+    fun journeyCreated(body: String): JourneyCreated {
+        val o = JSONObject(body)
+        return JourneyCreated(
+            journey = o.optJSONObject("journey")?.let { runCatching { journey(it) }.getOrNull() },
+            command = o.optJSONObject("command")?.let { command(it) },
+        )
+    }
 
     // empty body or an object without id means "nothing to do"
     fun command(body: String): RobotCommand? {
         val t = body.trim()
         if (t.isEmpty() || t == "null") return null
         val root = JSONObject(t)
-        val o = root.optJSONObject("command") ?: root
+        return command(root.optJSONObject("command") ?: root)
+    }
+
+    fun command(o: JSONObject): RobotCommand? {
         val id = o.str("id") ?: return null
         return RobotCommand(
             id = id,
             type = o.str("type").orEmpty(),
-            visitId = o.str("visitId"),
-            patientName = o.str("patientName"),
-            doctorName = o.str("doctorName"),
+            journeyId = o.str("journeyId"),
+            legId = o.str("legId"),
+            ticket = Tickets.normalize(o.str("ticket")) ?: o.str("ticket"),
+            pace = Pace.of(o.str("pace")),
+            wheelchair = o.bool("wheelchair") ?: false,
+            from = o.optJSONObject("from")?.let(::stop),
+            to = o.optJSONObject("to")?.let(::stop),
             spot = o.str("spot"),
             text = o.str("text"),
         )
     }
 
+    private fun stop(o: JSONObject): Stop? {
+        val name = o.str("name")
+        val spot = o.str("spot") ?: name ?: return null
+        return Stop(name = name ?: spot, spot = spot, room = o.str("room"), kind = o.str("kind"))
+    }
+
+    // PATCH /api/journeys/:id body
+    fun journeyPatch(legId: String?, status: String?, eventType: String?, detail: String?): JSONObject {
+        val o = JSONObject()
+        legId?.let { o.put("legId", it) }
+        status?.let { o.put("status", it) }
+        if (eventType != null) {
+            val e = JSONObject().put("type", eventType)
+            detail?.takeIf { it.isNotBlank() }?.let { e.put("detail", it) }
+            o.put("event", e)
+        }
+        return o
+    }
+
     // POST /api/robot/heartbeat body. unknown values go as json null, detail only when there is one
-    fun heartbeat(robot: String, s: BrainStatus): JSONObject {
+    fun heartbeat(robot: String, s: BrainStatus, screen: ScreenMirror? = null): JSONObject {
         val o = JSONObject()
             .put("robot", robot)
             .put("battery", s.battery?.coerceIn(0, 100) ?: JSONObject.NULL)
@@ -164,8 +236,38 @@ object Json {
             .put("position", s.position?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
             .put("goal", s.goal.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
         s.detail?.takeIf { it.isNotBlank() }?.let { o.put("detail", it) }
+        screen?.let { o.put("screen", screen(it)) }
         return o
     }
+
+    fun screen(m: ScreenMirror): JSONObject {
+        val o = JSONObject().put("view", m.view).put("title", m.title)
+        m.ticket?.let { o.put("ticket", it) }
+        m.step?.let { o.put("step", it) }
+        m.progress?.let { o.put("progress", (it.coerceIn(0f, 1f) * 100).toInt() / 100.0) }
+        return o
+    }
+
+    // POST /api/robot/feed body
+    fun feed(robot: String, journeyId: String?, items: List<FeedItem>): JSONObject {
+        val arr = JSONArray()
+        items.forEach { i ->
+            arr.put(
+                JSONObject()
+                    .put("at", Instant.ofEpochMilli(i.at).toString())
+                    .put("who", i.who)
+                    .put("kind", i.kind)
+                    .put("text", i.text),
+            )
+        }
+        val o = JSONObject().put("robot", robot).put("items", arr)
+        journeyId?.let { o.put("journeyId", it) }
+        return o
+    }
+
+    // the feed answer says if the dashboard wants the patient's own words (demo switch)
+    fun showPatientText(body: String): Boolean? =
+        runCatching { JSONObject(body).bool("showPatientText") }.getOrNull()
 
     // Definition.STATUS_BATTERY data. the docs do not show the format, so this takes a json object
     // (BatteryBean has level / isCharging) or a bare number, and anything else is "unknown"
@@ -180,6 +282,25 @@ object Json {
         return PowerReading(level, charging)
     }
 
+    // RobotApi getPosition: {"px":..,"py":..,"theta":..} (Definition.JSON_NAVI_POSITION_X/Y), x/y also accepted
+    fun pose(message: String?): Point? {
+        val o = runCatching { JSONObject(message.orEmpty()) }.getOrNull() ?: return null
+        val x = o.number("px") ?: o.number("x") ?: return null
+        val y = o.number("py") ?: o.number("y") ?: return null
+        return Point(x, y)
+    }
+
+    // RobotApi getPlaceList: [{"name":..,"x":..,"y":..}, ...]
+    fun mapPlaces(message: String?): List<MapPlace> {
+        val arr = runCatching { JSONArray(message.orEmpty()) }.getOrNull() ?: return emptyList()
+        return arr.objects().mapNotNull { o ->
+            val name = o.str("name") ?: return@mapNotNull null
+            val x = o.number("x") ?: o.number("px") ?: return@mapNotNull null
+            val y = o.number("y") ?: o.number("py") ?: return@mapNotNull null
+            MapPlace(name, Point(x, y))
+        }
+    }
+
     // POST /api/help -> { ok, id, ... }
     fun helpId(body: String): String? =
         runCatching { JSONObject(body).str("id") }.getOrNull()
@@ -190,17 +311,6 @@ object Json {
             .filter { it.str("status") != "done" }
             .mapNotNull { it.str("id") }
             .toSet()
-
-    fun doctors(body: String): List<Doctor> =
-        list(body, "doctors").objects().mapNotNull { o ->
-            val name = o.str("name") ?: return@mapNotNull null
-            Doctor(
-                id = o.str("id"),
-                name = name,
-                spot = o.str("spot"),
-                active = o.optBoolean("active", true),
-            )
-        }
 
     // {"error": "..."} from the backend, if there is one
     fun errorMessage(body: String): String? =
@@ -263,18 +373,4 @@ object Clock {
 
     fun hhmm(value: String?, zone: ZoneId = ZoneId.systemDefault()): String? =
         instant(value)?.let { hhmm.format(it.atZone(zone)) }
-
-    fun minutesSince(value: String?, now: Instant = Instant.now()): Long? =
-        instant(value)?.let { ((now.toEpochMilli() - it.toEpochMilli()) / 60_000).coerceAtLeast(0) }
-
-    // the planner should send HH:mm, but people say "10" or "9.30" - keep anything else as it was said
-    fun normalizeTime(raw: String?): String? {
-        val t = raw?.trim().orEmpty()
-        if (t.isEmpty()) return null
-        val m = Regex("^(\\d{1,2})(?:\\s*[:.h]\\s*(\\d{2}))?$").find(t) ?: return t
-        val h = m.groupValues[1].toInt()
-        val min = m.groupValues[2].ifEmpty { "0" }.toInt()
-        if (h > 23 || min > 59) return t
-        return String.format(Locale.ROOT, "%02d:%02d", h, min)
-    }
 }

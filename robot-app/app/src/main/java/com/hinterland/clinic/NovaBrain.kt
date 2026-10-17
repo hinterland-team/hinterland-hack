@@ -19,20 +19,24 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
 // nova's brain. one loop looks around every second and picks the most important thing to do
-// (the priorities are in Brain.decide). one task at a time: every task holds the body lock,
-// and an action that walks a patient takes the same lock. nothing new starts while someone
-// is talking to nova.
+// (the priorities are in Brain.decide). one task at a time: every task holds the body lock.
+// a guide (staff command or the person's own request) runs as such a task. nothing new starts
+// while someone is talking to nova, except what that person asked for.
 object NovaBrain {
 
     private const val TAG = "NovaBrain"
     private const val TICK_MS = 1_000L
     private const val POLL_MS = 3_000L
     private const val HEARTBEAT_MS = 15_000L
+    // a screen change goes to the dashboard mirror at once, but not more often than this
+    private const val SCREEN_PUSH_MIN_MS = 1_500L
+    private const val FEED_MS = 2_000L
+    private const val PLACES_MS = 60_000L
+    private const val HANDLED_KEEP = 50
     private const val HOME_CHECK_MS = 20_000L
     private const val IDLE_RESET_MS = 45_000L
     private const val HELP_MAX_MS = 10 * 60_000L
     private const val HELP_CHECK_MS = 10_000L
-    private const val BODY_WAIT_MS = 6_000L
     private const val BOOT_GRACE_MS = 20_000L
     private const val MAX_QUEUE = 5
     // faces this close count as "the person nova talks to"
@@ -50,7 +54,6 @@ object NovaBrain {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val body = Mutex()
-    private val bodyWanted = AtomicInteger(0)
     @Volatile private var current: Running? = null
 
     private val _status = MutableStateFlow(BrainStatus())
@@ -69,6 +72,12 @@ object NovaBrain {
 
     // commands from the backend, oldest first
     private val commands = CopyOnWriteArrayList<RobotCommand>()
+    // the person in front asked for these (by command id, and by journey id until the command arrives)
+    private val ownByCommand = ConcurrentHashMap<String, OwnRequest>()
+    private val ownByJourney = ConcurrentHashMap<String, OwnRequest>()
+    // command ids already taken (from a POST answer or the poll), so a command never runs twice
+    private val handled = LinkedHashSet<String>()
+    @Volatile private var runningCommand: String? = null
     @Volatile private var waitingFor: String? = null
     @Volatile private var waitingSince: Long? = null
 
@@ -110,6 +119,8 @@ object NovaBrain {
             launch { loop() }
             launch { pollCommands() }
             launch { heartbeat() }
+            launch { sendFeed() }
+            launch { refreshPlaces() }
         }
     }
 
@@ -138,6 +149,37 @@ object NovaBrain {
     fun actionEnded() {
         actions.updateAndGet { (it - 1).coerceAtLeast(0) }
     }
+
+    // someone talks with nova right now (the guide waits for an answer)
+    fun conversationActive(): Boolean {
+        val now = now()
+        val inFlight = if (now - actionAt < ACTION_MAX_MS) actions.get() else 0
+        return Brain.talkLevel(now, agent, agentAt, userSpokeAt, robotSpokeAt, inFlight) == TalkLevel.ACTIVE
+    }
+
+    // ---- requests from the person in front (GUIDE_TO_PLACE, CHECK_IN_FOR, self check-in screen) ----
+
+    // the guide command for this journey may still come through the poll
+    fun expectOwn(journeyId: String, own: OwnRequest) {
+        ownByJourney[journeyId] = own
+    }
+
+    // the command from the POST answer: it runs next, without a pickup
+    fun addOwnCommand(cmd: RobotCommand, own: OwnRequest) {
+        if (!markHandled(cmd.id)) return
+        ownByCommand[cmd.id] = own
+        if (commands.none { it.id == cmd.id }) commands.add(cmd)
+    }
+
+    // false when this command was taken before
+    private fun markHandled(id: String): Boolean = synchronized(handled) {
+        if (!handled.add(id)) return false
+        while (handled.size > HANDLED_KEEP) handled.remove(handled.first())
+        true
+    }
+
+    private fun ownFor(cmd: RobotCommand): OwnRequest? =
+        ownByCommand[cmd.id] ?: cmd.journeyId?.let { ownByJourney[it] }
 
     // urgent CALL_STAFF: nova stays with the person, a drive home or to the charger stops at once
     fun helpStarted() {
@@ -176,27 +218,6 @@ object NovaBrain {
         returnFailedAt = now()
         returnHomeNow = true
         failed(detail)
-    }
-
-    // a patient asked to be walked (GUIDE_TO_DOCTOR): take the body - a drive home or to the
-    // charger gives way - and run block as the task. null when nova is busy with something
-    // that can't be dropped.
-    suspend fun runBody(state: RobotState, goal: String, block: suspend () -> Unit): Job? {
-        bodyWanted.incrementAndGet()
-        try {
-            current?.takeIf { it.preemptible }?.job?.cancel()
-            val deadline = now() + BODY_WAIT_MS
-            while (!body.tryLock()) {
-                if (now() > deadline) return null
-                delay(200)
-            }
-        } finally {
-            bodyWanted.decrementAndGet()
-        }
-        return start(Task(preemptible = false) {
-            activity(state, goal)
-            block()
-        })
     }
 
     // the caller holds the body lock; it is released when the task ends, however it ends
@@ -247,7 +268,10 @@ object NovaBrain {
     private suspend fun tick() {
         val now = now()
         val inFlight = if (now - actionAt < ACTION_MAX_MS) actions.get() else 0
-        val talk = Brain.talkLevel(now, agent, agentAt, userSpokeAt, robotSpokeAt, inFlight)
+        Clinic.expireCheckIn(now)
+        // the self check-in screen counts as a conversation: nothing new starts meanwhile
+        val talk = if (Clinic.ui.value.checkIn != null) TalkLevel.ACTIVE
+        else Brain.talkLevel(now, agent, agentAt, userSpokeAt, robotSpokeAt, inFlight)
         if (talk == TalkLevel.ACTIVE) lastTalkAt = now
         val busy = current != null || body.isLocked
         if (talk != TalkLevel.NONE || busy) quietSince = now
@@ -255,6 +279,7 @@ object NovaBrain {
             helpAt = null
             helpRequest = null
             helpOpen = null
+            Clinic.helpEnded()
         }
 
         if (!busy) {
@@ -268,14 +293,13 @@ object NovaBrain {
 
         val running = current
         if (running != null || body.isLocked) {
-            if (running != null && running.preemptible && Brain.shouldPreempt(snap, bodyWanted.get() > 0)) {
+            if (running != null && running.preemptible && Brain.shouldPreempt(snap)) {
                 running.job.cancel()
             }
             publish()
             return
         }
-        // an action is about to take the body, or just took it
-        if (bodyWanted.get() > 0 || !body.tryLock()) return
+        if (!body.tryLock()) return
         var started = false
         try {
             lastPlan = plan
@@ -316,6 +340,7 @@ object NovaBrain {
         helpActive = helpActive(),
         talk = talk,
         commands = commands.toList(),
+        ownCommandIds = commands.mapNotNull { c -> c.id.takeIf { ownFor(c) != null } }.toSet(),
         waitingSince = waitingSince,
         visitor = visitor,
         lastGreetAt = lastGreetAt,
@@ -379,13 +404,27 @@ object NovaBrain {
 
     private suspend fun runCommand(cmd: RobotCommand, excuse: Boolean) {
         commands.removeAll { it.id == cmd.id }
+        markHandled(cmd.id)
         waitingFor = null
         waitingSince = null
+        runningCommand = cmd.id
         activity(Brain.commandState(cmd, Robot.home), Brain.commandGoal(cmd, Robot.home))
+        try {
+            runCommandNow(cmd, excuse)
+        } finally {
+            runningCommand = null
+            ownByCommand.remove(cmd.id)
+            cmd.journeyId?.let { ownByJourney.remove(it) }
+        }
+    }
+
+    private suspend fun runCommandNow(cmd: RobotCommand, excuse: Boolean) {
         when (cmd.type) {
-            RobotCommand.CALL_PATIENT -> {
+            RobotCommand.GUIDE -> {
                 parkedAt = null
-                Clinic.fetch(cmd, excuse)
+                Guide.run(cmd, ownFor(cmd))
+                // back to the reception afterwards, unless someone needs urgent help (or she is there)
+                returnHomeNow = !helpActive()
             }
             RobotCommand.GO_TO -> {
                 if (Clinic.goToSpot(cmd, excuse)) {
@@ -395,6 +434,7 @@ object NovaBrain {
                 }
             }
             RobotCommand.SAY -> Clinic.sayFromTeam(cmd)
+            RobotCommand.ASK -> Clinic.askFromTeam(cmd)
             else -> Clinic.skipCommand(cmd)
         }
     }
@@ -441,12 +481,13 @@ object NovaBrain {
         val home = Robot.home
         Clinic.setWalking(true)
         val outcome = try {
-            Robot.goTo(home, escort = false, onEvent = { Clinic.onNavEvent(it) })
+            Robot.goTo(home, onEvent = { Clinic.onNavEvent(it) })
         } finally {
             Clinic.setWalking(false)
         }
         when (outcome) {
             NavOutcome.Arrived -> returnHomeNow = false
+            NavOutcome.Interrupted -> Unit
             is NavOutcome.Failed -> {
                 returnFailedAt = now()
                 failed("Could not get back to $home: ${outcome.why.screen}")
@@ -480,7 +521,13 @@ object NovaBrain {
         if (running != null && !running.preemptible) return
         while (commands.size < MAX_QUEUE) {
             val cmd = Clinic.pollCommand() ?: break
-            if (commands.none { it.id == cmd.id }) commands.add(cmd)
+            if (commands.any { it.id == cmd.id }) break
+            if (!markHandled(cmd.id)) {
+                // taken before (from the POST answer): close it once that run is over, so it stops coming
+                if (runningCommand != cmd.id) Clinic.commandDone(cmd.id)
+                break
+            }
+            commands.add(cmd)
         }
     }
 
@@ -492,16 +539,52 @@ object NovaBrain {
         helpOpen = id in open
     }
 
+    // every 15 s, and right away (at most every 1.5 s) when the screen changes, for the dashboard mirror
     private suspend fun heartbeat() {
+        var sentAt = 0L
+        var sentScreen: ScreenMirror? = null
         while (true) {
-            Robot.refreshPower()
-            publish()
-            if (Backend.configured) {
-                val body = Json.heartbeat(Backend.robot, _status.value)
-                withContext(Dispatchers.IO) { runCatching { Backend.heartbeat(body) } }
-                    .onFailure { e -> quietLog("heartbeat: ${Backend.friendly(e)}") }
+            val now = now()
+            val screen = Clinic.ui.value.mirror()
+            val due = now - sentAt >= HEARTBEAT_MS || (screen != sentScreen && now - sentAt >= SCREEN_PUSH_MIN_MS)
+            if (due) {
+                Robot.refreshPower()
+                publish()
+                sentAt = now
+                sentScreen = screen
+                if (Backend.configured) {
+                    val body = Json.heartbeat(Backend.robot, _status.value, screen)
+                    withContext(Dispatchers.IO) { runCatching { Backend.heartbeat(body) } }
+                        .onFailure { e -> quietLog("heartbeat: ${Backend.friendly(e)}") }
+                }
             }
-            delay(HEARTBEAT_MS)
+            delay(500)
+        }
+    }
+
+    // nova's lines and the patient's intents for the dashboard's live feed (lives only in memory there)
+    private suspend fun sendFeed() {
+        val feed = Clinic.feed
+        while (true) {
+            delay(FEED_MS)
+            if (!Backend.configured || feed.size() == 0) continue
+            val batch = feed.drain()
+            val body = Json.feed(Backend.robot, Guide.current?.journeyId?.ifBlank { null }, batch)
+            withContext(Dispatchers.IO) { runCatching { Backend.feed(body) } }
+                .onSuccess { show -> show?.let { feed.showPatientText = it } }
+                .onFailure { e ->
+                    feed.putBack(batch)
+                    quietLog("feed: ${Backend.friendly(e)}")
+                    delay(10_000)
+                }
+        }
+    }
+
+    // places for the screen, the actions and the home spot (the reception place)
+    private suspend fun refreshPlaces() {
+        while (true) {
+            if (Backend.configured) Clinic.refreshPlaces()
+            delay(PLACES_MS)
         }
     }
 

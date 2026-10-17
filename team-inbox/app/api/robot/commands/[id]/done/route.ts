@@ -1,12 +1,10 @@
-import { NextResponse } from "next/server";
-import { finishCommand } from "@/lib/clinic";
-import { requireRobot, routeWithId } from "@/lib/http";
+import { json, requireRobot, routeWith } from "@/lib/http";
+import { finishCommand } from "@/lib/robot";
 
 export const dynamic = "force-dynamic";
 
-// robot finished a command of any type (for a call: back at reception)
-export const POST = routeWithId(async (req, id) => {
+// robot finished a command of any type (for a guide: back at reception or onto the next)
+export const POST = routeWith<{ id: string }>(async (req, { id }) => {
   requireRobot(req);
-  const command = await finishCommand(id);
-  return NextResponse.json({ ok: true, command });
+  return json({ ok: true, command: await finishCommand(id) });
 });

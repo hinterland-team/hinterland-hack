@@ -1,6 +1,7 @@
-// applies db/schema.sql to DATABASE_URL (npm run db:setup reads .env.local)
+// applies db/schema.sql to DATABASE_URL (npm run db:setup reads .env.local). safe to run again
 import { readFile } from "node:fs/promises";
 import { neon } from "@neondatabase/serverless";
+import { setupDatabase } from "./schema.mjs";
 
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -9,14 +10,10 @@ if (!url) {
 }
 
 const schema = await readFile(new URL("../db/schema.sql", import.meta.url), "utf8");
-const statements = schema
-  .split(/;\s*(?:\r?\n|$)/)
-  .map((s) => s.replace(/^\s*--.*$/gm, "").trim())
-  .filter(Boolean);
-
 const sql = neon(url);
-for (const statement of statements) {
-  await sql.query(statement);
-  console.log("ok:", statement.split("\n")[0]);
-}
-console.log(`done, ${statements.length} statements`);
+const count = await setupDatabase(
+  (text, params) => sql.query(text, params ?? []),
+  schema,
+  (line) => console.log(line),
+);
+console.log(`done, ${count} statements`);

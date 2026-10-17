@@ -40,6 +40,8 @@ data class Snapshot(
     val talk: TalkLevel = TalkLevel.NONE,
     // pending commands from the backend, oldest first
     val commands: List<RobotCommand> = emptyList(),
+    // commands the person in front of nova asked for (GUIDE_TO_PLACE, self check-in): no waiting, no excuse
+    val ownCommandIds: Set<String> = emptySet(),
     // since when nova waits for the conversation to end before the next command
     val waitingSince: Long? = null,
     val visitor: Visitor? = null,
@@ -106,7 +108,10 @@ object Brain {
         // 1. someone needs urgent help: stay, keep talking, start nothing else
         if (s.helpActive) return Plan.StayWithPerson
 
-        // 2. the team wants something. a patient talking right now gets up to 20 s first
+        // 2. the person in front asked nova to walk them somewhere: go now
+        s.commands.firstOrNull { it.id in s.ownCommandIds }?.let { return Plan.RunCommand(it, excuse = false) }
+
+        // 3. the team wants something. a patient talking right now gets up to 20 s first
         nextCommand(s.commands)?.let { cmd ->
             val talking = s.talk != TalkLevel.NONE
             if (talking && s.now - (s.waitingSince ?: s.now) < QUIET_WAIT_MS) return Plan.WaitForQuiet(cmd)
@@ -118,10 +123,10 @@ object Brain {
         val visitor = greetable(s)
         if (s.talk == TalkLevel.ACTIVE || (s.talk == TalkLevel.LISTENING && visitor == null)) return Plan.Talk
 
-        // 3. someone walked up
+        // 4. someone walked up
         if (visitor != null) return Plan.Greet(visitor.id)
 
-        // 4. battery
+        // 5. battery
         if (s.charging || s.dockedByNova) {
             val full = s.battery != null && s.battery >= CHARGED_BATTERY
             val retry = s.now - s.leaveFailedAt >= RETRY_LEAVE_MS
@@ -130,32 +135,32 @@ object Brain {
         }
         if (needsCharge(s)) return Plan.GoCharge
 
-        // 5. back to the home spot
+        // 6. back to the home spot (reception)
         if (shouldReturn(s)) return Plan.ReturnHome
 
-        // 6. nothing to do
+        // 7. nothing to do
         return Plan.Wait
     }
 
-    // call_patient first, then go_to, then say; oldest first within a type
+    // guide first, then go_to, then say / ask; oldest first within a type
     fun nextCommand(commands: List<RobotCommand>): RobotCommand? =
         commands.withIndex()
             .minWithOrNull(compareBy<IndexedValue<RobotCommand>>({ rank(it.value.type) }, { it.index }))
             ?.value
 
     private fun rank(type: String) = when (type) {
-        RobotCommand.CALL_PATIENT -> 0
+        RobotCommand.GUIDE -> 0
         RobotCommand.GO_TO -> 1
-        RobotCommand.SAY -> 2
+        RobotCommand.SAY, RobotCommand.ASK -> 2
         else -> 3
     }
 
-    private fun moves(cmd: RobotCommand) = cmd.type == RobotCommand.CALL_PATIENT || cmd.type == RobotCommand.GO_TO
+    private fun moves(cmd: RobotCommand) = cmd.type == RobotCommand.GUIDE || cmd.type == RobotCommand.GO_TO
 
     fun greetable(s: Snapshot): Visitor? {
         val v = s.visitor ?: return null
         if (v.id < 0 || !v.withFace || v.distance <= 0.0 || v.distance > GREET_RANGE_M) return null
-        // not at a doctor's door after a walk, only at home or where the team parked her
+        // not at a room's door after a walk, only at home or where the team parked her
         if (s.atHome == false && s.parkedAt == null) return null
         if (s.now - maxOf(s.lastGreetAt, s.lastTalkAt) < GREET_COOLDOWN_MS) return null
         val seen = s.engaged[v.id] ?: return v
@@ -171,9 +176,9 @@ object Brain {
             (s.returnHomeNow || s.now - s.quietSince >= AWAY_IDLE_MS) &&
             s.now - s.returnFailedAt >= RETRY_RETURN_MS
 
-    // a running ReturnHome or GoCharge gives way to these
-    fun shouldPreempt(s: Snapshot, bodyWanted: Boolean): Boolean =
-        s.helpActive || bodyWanted || s.commands.any { moves(it) }
+    // a running ReturnHome or GoCharge gives way to these (a guide, the person's own request, go_to, urgent help)
+    fun shouldPreempt(s: Snapshot): Boolean =
+        s.helpActive || s.commands.any { moves(it) }
 
     fun talkLevel(now: Long, agent: AgentMode, agentAt: Long, userAt: Long, robotAt: Long, actions: Int): TalkLevel =
         when {
@@ -213,20 +218,24 @@ object Brain {
         Plan.Wait -> RobotState.IDLE
     }
 
+    // ticket, never a name ("Guiding A17 to Room B204")
     fun commandGoal(c: RobotCommand, homeSpot: String): String = when (c.type) {
-        RobotCommand.CALL_PATIENT ->
-            "Fetching ${c.patientName ?: "a patient"}" + (c.doctorName?.let { " for $it" } ?: "")
+        RobotCommand.GUIDE -> guideGoal(c.ticket, c.to?.label)
         RobotCommand.GO_TO -> when {
             c.spot.isNullOrBlank() -> "Checking a task from the team"
             isHome(c.spot, homeSpot) -> "Driving back to ${c.spot}"
             else -> "Going to ${c.spot}"
         }
         RobotCommand.SAY -> "Passing on a message from the team"
+        RobotCommand.ASK -> "Thinking about a message from the team"
         else -> "Checking a task from the team"
     }
 
+    fun guideGoal(ticket: String?, destination: String?): String =
+        "Guiding ${ticket?.ifBlank { null } ?: "a patient"}" + (destination?.ifBlank { null }?.let { " to $it" } ?: "")
+
     fun commandState(c: RobotCommand, homeSpot: String): RobotState = when (c.type) {
-        RobotCommand.CALL_PATIENT -> RobotState.FETCHING
+        RobotCommand.GUIDE -> RobotState.FETCHING
         RobotCommand.GO_TO -> if (isHome(c.spot, homeSpot)) RobotState.RETURNING else RobotState.WALKING
         else -> RobotState.TALKING
     }

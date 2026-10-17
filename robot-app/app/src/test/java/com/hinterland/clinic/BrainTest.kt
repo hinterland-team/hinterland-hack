@@ -25,8 +25,11 @@ class BrainTest {
     private val visitor = Visitor(id = 7, distance = 1.0)
 
     private fun call(id: String = "c1") = RobotCommand(
-        id, RobotCommand.CALL_PATIENT, visitId = "v1", patientName = "Ada Test", doctorName = "Dr. One", spot = "Room One",
+        id, RobotCommand.GUIDE, journeyId = "j1", legId = "l1", ticket = "A17",
+        from = Stop("Front Desk", "Desk Spot"), to = Stop("Dr. One", "Room One", room = "B204"),
     )
+
+    private fun ask(id: String = "a1") = RobotCommand(id, RobotCommand.ASK, text = "Tell the visitor we close at six")
 
     private fun goTo(id: String = "g1", spot: String = "Room Two") = RobotCommand(id, RobotCommand.GO_TO, spot = spot)
 
@@ -60,7 +63,7 @@ class BrainTest {
     }
 
     @Test
-    fun callPatientBeatsGoToBeatsSay() {
+    fun guideBeatsGoToBeatsSay() {
         assertEquals("c1", (decide(idle.copy(commands = listOf(say(), goTo(), call()))) as Plan.RunCommand).command.id)
         assertEquals("g1", (decide(idle.copy(commands = listOf(say(), goTo()))) as Plan.RunCommand).command.id)
         // oldest first within a type
@@ -79,7 +82,7 @@ class BrainTest {
         // a "listening" status counts as talking here
         assertEquals(Plan.WaitForQuiet(call()), decide(s.copy(talk = TalkLevel.LISTENING)))
         assertEquals(
-            "Finishing this talk, then fetching Ada Test for Dr. One",
+            "Finishing this talk, then guiding A17 to Room B204",
             Brain.goal(Plan.WaitForQuiet(call()), s),
         )
     }
@@ -89,8 +92,26 @@ class BrainTest {
         val s = idle.copy(commands = listOf(call()), talk = TalkLevel.ACTIVE, waitingSince = now - 20_000)
         assertEquals(Plan.RunCommand(call(), excuse = true), decide(s))
         assertEquals(Plan.RunCommand(goTo(), excuse = true), decide(s.copy(commands = listOf(goTo()))))
-        // say does not leave, so no excuse
+        // say and ask do not leave, so no excuse
         assertEquals(Plan.RunCommand(say(), excuse = false), decide(s.copy(commands = listOf(say()))))
+        assertEquals(Plan.RunCommand(ask(), excuse = false), decide(s.copy(commands = listOf(ask()))))
+    }
+
+    // ---- the person in front asked (GUIDE_TO_PLACE, CHECK_IN_FOR, self check-in screen) ----
+
+    @Test
+    fun ownRequestRunsAtOnceWithoutExcuse() {
+        val own = call("own1")
+        val s = idle.copy(
+            commands = listOf(goTo(), say(), own), ownCommandIds = setOf("own1"),
+            talk = TalkLevel.ACTIVE, waitingSince = now - 1_000,
+        )
+        assertEquals(Plan.RunCommand(own, excuse = false), decide(s))
+        // before a staff guide that came first
+        val staff = call("staff1")
+        assertEquals("own1", (decide(s.copy(commands = listOf(staff, own))) as Plan.RunCommand).command.id)
+        // urgent help still comes first
+        assertEquals(Plan.StayWithPerson, decide(s.copy(helpActive = true)))
     }
 
     @Test
@@ -153,7 +174,7 @@ class BrainTest {
     }
 
     @Test
-    fun noGreetingAtADoctorsDoorButWhereTheTeamParkedHer() {
+    fun noGreetingAtARoomDoorButWhereTheTeamParkedHer() {
         val away = idle.copy(visitor = visitor, atHome = false, quietSince = now)
         assertEquals(Plan.Wait, decide(away))
         assertEquals(Plan.Greet(7), decide(away.copy(parkedAt = "Entrance")))
@@ -230,12 +251,12 @@ class BrainTest {
 
     @Test
     fun driveHomeOrToChargerGivesWay() {
-        assertTrue(Brain.shouldPreempt(idle.copy(commands = listOf(call())), bodyWanted = false))
-        assertTrue(Brain.shouldPreempt(idle.copy(commands = listOf(goTo())), bodyWanted = false))
-        assertFalse(Brain.shouldPreempt(idle.copy(commands = listOf(say())), bodyWanted = false))
-        assertTrue(Brain.shouldPreempt(idle, bodyWanted = true))
-        assertTrue(Brain.shouldPreempt(idle.copy(helpActive = true), bodyWanted = false))
-        assertFalse(Brain.shouldPreempt(idle, bodyWanted = false))
+        assertTrue(Brain.shouldPreempt(idle.copy(commands = listOf(call()))))
+        assertTrue(Brain.shouldPreempt(idle.copy(commands = listOf(goTo()))))
+        assertFalse(Brain.shouldPreempt(idle.copy(commands = listOf(say()))))
+        assertFalse(Brain.shouldPreempt(idle.copy(commands = listOf(ask()))))
+        assertTrue(Brain.shouldPreempt(idle.copy(helpActive = true)))
+        assertFalse(Brain.shouldPreempt(idle))
     }
 
     // ---- inputs ----
@@ -269,7 +290,8 @@ class BrainTest {
 
     @Test
     fun goalsAndStatesForCommands() {
-        assertEquals("Fetching Ada Test for Dr. One", Brain.goal(Plan.RunCommand(call(), false), idle))
+        // ticket, never a name
+        assertEquals("Guiding A17 to Room B204", Brain.goal(Plan.RunCommand(call(), false), idle))
         assertEquals(RobotState.FETCHING, Brain.state(Plan.RunCommand(call(), false), home))
         assertEquals("Going to Room Two", Brain.goal(Plan.RunCommand(goTo(), false), idle))
         assertEquals(RobotState.WALKING, Brain.state(Plan.RunCommand(goTo(), false), home))
@@ -279,8 +301,12 @@ class BrainTest {
         assertEquals(RobotState.RETURNING, Brain.state(Plan.RunCommand(back, false), home))
         assertEquals("Passing on a message from the team", Brain.goal(Plan.RunCommand(say(), false), idle))
         assertEquals(RobotState.TALKING, Brain.state(Plan.RunCommand(say(), false), home))
-        val noNames = RobotCommand("c9", RobotCommand.CALL_PATIENT)
-        assertEquals("Fetching a patient", Brain.goal(Plan.RunCommand(noNames, false), idle))
+        assertEquals("Thinking about a message from the team", Brain.goal(Plan.RunCommand(ask(), false), idle))
+        assertEquals(RobotState.TALKING, Brain.state(Plan.RunCommand(ask(), false), home))
+        val bare = RobotCommand("c9", RobotCommand.GUIDE)
+        assertEquals("Guiding a patient", Brain.goal(Plan.RunCommand(bare, false), idle))
+        val noRoom = call().copy(to = Stop("Way Out", "Door Spot"))
+        assertEquals("Guiding A17 to Way Out", Brain.goal(Plan.RunCommand(noRoom, false), idle))
     }
 
     @Test

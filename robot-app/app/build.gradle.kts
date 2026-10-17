@@ -30,8 +30,10 @@ android {
         buildConfigField("String", "BACKEND_URL", "\"${local("teamInbox.url")}\"")
         buildConfigField("String", "BACKEND_TOKEN", "\"${local("teamInbox.token")}\"")
         buildConfigField("String", "ROBOT_NAME", "\"${local("robot.name", "nova")}\"")
-        // map spot nova drives back to after walking a patient
+        // map spot nova drives back to after a walk, used when /api/places has no reception place
         buildConfigField("String", "HOME_SPOT", "\"${local("robot.homeSpot")}\"")
+        // languages nova calls a ticket in (BCP-47 tags, comma separated), until the patient speaks
+        buildConfigField("String", "CALL_LANGUAGES", "\"${local("robot.callLanguages", "de,en")}\"")
         // nova turns towards the person she talks to (RobotApi focus following); false turns it off
         buildConfigField("boolean", "FOCUS_FOLLOW", local("robot.focusFollow", "true").toBoolean().toString())
         // nova deploy on the robot, gets the busy hold while nova walks (docs/deploy.md)

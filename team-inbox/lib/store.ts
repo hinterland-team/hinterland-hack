@@ -13,7 +13,19 @@ export function getStore(): Store {
   const url = process.env.DATABASE_URL;
   if (url) {
     const sql = neon(url);
-    store = createPgStore({ query: (text, params) => sql.query(text, params ?? []) });
+    store = createPgStore({
+      query: async (text, params) => {
+        try {
+          return await sql.query(text, params ?? []);
+        } catch (err) {
+          // a missing table means the setup script was not run yet
+          if (err instanceof Error && /relation .* does not exist/.test(err.message)) {
+            throw new Error(`database is not set up, run npm run db:setup (${err.message})`);
+          }
+          throw err;
+        }
+      },
+    });
   } else {
     store = memoryStore;
   }
