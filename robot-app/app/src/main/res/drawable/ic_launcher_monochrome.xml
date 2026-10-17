@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- themed icon (android 13+): the head as one shape with eyes and smile cut out, plus the badge -->
+<!-- themed icon (android 13+): otto in one colour. helmet with the visor cut out, glasses, eyes and smile
+     inside it, the head mirror with its ring, ear pieces, and the coat with the scrubs cut out. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
@@ -8,13 +9,31 @@
     <path
         android:fillColor="#FF000000"
         android:fillType="evenOdd"
-        android:pathData="M54,54m-24,0a24,24 0,1 1,48 0a24,24 0,1 1,-48 0
-            M45.6,45.25a3.47,3.47 0,0 0,-3.47 3.47v5.6a3.47,3.47 0,0 0,6.94 0v-5.6a3.47,3.47 0,0 0,-3.47 -3.47z
-            M62.4,45.25a3.47,3.47 0,0 0,-3.47 3.47v5.6a3.47,3.47 0,0 0,6.94 0v-5.6a3.47,3.47 0,0 0,-3.47 -3.47z
-            M47.3,59.5Q54,64.6 60.7,59.5a1.2,1.2 0,0 1,1.5 1.9Q54,68.4 45.8,61.4a1.2,1.2 0,0 1,1.5 -1.9z" />
+        android:pathData="M24,100C25,86 34,80 43,78.6L65,78.6C74,80 83,86 84,100Z
+            M46.5,78.6L54,90.5L61.5,78.6Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M29.1,48.5a2.7,2.7 0,0 1,2.7 2.7v11.6a2.7,2.7 0,0 1,-5.4 0v-11.6a2.7,2.7 0,0 1,2.7 -2.7z
+            M78.9,48.5a2.7,2.7 0,0 1,2.7 2.7v11.6a2.7,2.7 0,0 1,-5.4 0v-11.6a2.7,2.7 0,0 1,2.7 -2.7z" />
     <path
         android:fillColor="#FF000000"
         android:fillType="evenOdd"
-        android:pathData="M70,70m-6.5,0a6.5,6.5 0,1 1,13 0a6.5,6.5 0,1 1,-13 0
-            M68.8,66.2h2.4v2.6h2.6v2.4h-2.6v2.6h-2.4v-2.6h-2.6v-2.4h2.6z" />
+        android:pathData="M51,34h6a21,21 0,0 1,21 21v3.5a21,21 0,0 1,-21 21h-6a21,21 0,0 1,-21 -21v-3.5a21,21 0,0 1,21 -21z
+            M46,43h16a11,11 0,0 1,11 11v6.5a11,11 0,0 1,-11 11h-16a11,11 0,0 1,-11 -11v-6.5a11,11 0,0 1,11 -11z" />
+    <path
+        android:fillColor="#FF000000"
+        android:fillType="evenOdd"
+        android:pathData="M54,30m-8,0a8,8 0,1 1,16 0a8,8 0,1 1,-16 0
+            M54,30m-2.4,0a2.4,2.4 0,1 1,4.8 0a2.4,2.4 0,1 1,-4.8 0" />
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.25"
+        android:strokeLineCap="round"
+        android:pathData="M45.4,55.6m-7.3,0a7.3,7.3 0,1 1,14.6 0a7.3,7.3 0,1 1,-14.6 0M62.6,55.6m-7.3,0a7.3,7.3 0,1 1,14.6 0a7.3,7.3 0,1 1,-14.6 0
+            M52.7,55.3Q54,54.5 55.3,55.3" />
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M42.2,58Q45.4,51.4 48.6,58M59.4,58Q62.6,51.4 65.8,58M49.8,64.4Q54,67.8 58.2,64.4" />
 </vector>
