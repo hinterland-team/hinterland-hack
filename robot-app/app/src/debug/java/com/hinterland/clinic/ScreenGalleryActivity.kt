@@ -52,6 +52,12 @@ private fun checkIn(step: CheckInStep) =
     UiState(places = ROOMS, checkIn = CheckInUi(step = step, rooms = ROOMS, room = ROOMS[0]))
 
 val SCREENS: Map<String, UiState> = linkedMapOf(
+    // otto talking with the big face: his words in the bubble on the right
+    "speaking" to UiState(speaking = true, subtitle = "Hello! I'm Otto. Who are you here to see?"),
+    "speaking-long" to UiState(
+        speaking = true,
+        subtitle = "Good morning! I can walk you to your doctor's room, at your own pace. Just tell me your doctor's name, or tap the screen to check in.",
+    ),
     // the welcome shows after a tap on the face
     "welcome" to UiState(places = ROOMS),
     "welcome-desk" to UiState(),
