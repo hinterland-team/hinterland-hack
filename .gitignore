@@ -1,0 +1,24 @@
+# secrets and machine paths - never in git
+local.properties
+*.jks
+*.keystore
+.env*
+!.env.example
+
+# build output
+node_modules/
+.next/
+build/
+.gradle/
+.kotlin/
+*.apk
+
+# editors and os
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# personal drafts
+docs/mail-*.txt

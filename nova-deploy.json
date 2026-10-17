@@ -1,0 +1,12 @@
+{
+  "apps": [
+    {
+      "id": "nova-clinic",
+      "name": "Nova Clinic",
+      "project": "robot-app",
+      "module": "app",
+      "package": "com.hinterland.relay",
+      "launch": "home"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+// nova's face. one svg string so the react logo, the call page and the favicon look the same
+export const MASCOT_SVG = `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <line x1="32" y1="6" x2="32" y2="14" stroke="#2f6fde" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="32" cy="6" r="3.5" fill="#7cc4ff"/>
+  <rect x="2" y="29" width="6" height="14" rx="3" fill="#1f56b8"/>
+  <rect x="56" y="29" width="6" height="14" rx="3" fill="#1f56b8"/>
+  <rect x="6" y="13" width="52" height="44" rx="18" fill="#2f6fde"/>
+  <rect x="13" y="21" width="38" height="28" rx="12" fill="#0d1b33"/>
+  <g class="nova-eyes">
+    <circle cx="24" cy="33" r="5" fill="#7cc4ff"/>
+    <circle cx="40" cy="33" r="5" fill="#7cc4ff"/>
+    <circle cx="25.8" cy="31.2" r="1.6" fill="#ffffff"/>
+    <circle cx="41.8" cy="31.2" r="1.6" fill="#ffffff"/>
+  </g>
+  <path d="M28 41.5 Q32 44.5 36 41.5" fill="none" stroke="#7cc4ff" stroke-width="2" stroke-linecap="round"/>
+</svg>`;

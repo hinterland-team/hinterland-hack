@@ -1,0 +1,168 @@
+@import "tailwindcss";
+
+/* one palette, light and dark. spacing 4/8/12/16/24/32/48/64, type 12/14/16/18/24/40 */
+:root {
+  --canvas: #f3f6fb;
+  --surface: #ffffff;
+  --subtle: #eaf0f8;
+  --line: #dbe3ee;
+  --line-strong: #c3d0e2;
+  --ink: #0e1a2b;
+  --muted: #56667d;
+  --primary: #2a63d4;
+  --primary-hover: #1f52b8;
+  --primary-soft: #e2ecfd;
+  --primary-ink: #1a4aa8;
+  --on-primary: #ffffff;
+  --ok: #0f8a5f;
+  --ok-soft: #dff4ea;
+  --warn: #a85a06;
+  --warn-soft: #fcefdc;
+  --danger: #c0353d;
+  --danger-soft: #fce6e7;
+  --st-checked: #7186a3;
+  --st-notified: #0b93d1;
+  --st-called: #2a63d4;
+  --st-escorting: #6a5ae0;
+  --st-with: #0e8f86;
+  --st-done: #3b9a5e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #0a101c;
+    --surface: #111a2b;
+    --subtle: #16213a;
+    --line: #1f2c45;
+    --line-strong: #2c3d5e;
+    --ink: #e6edf7;
+    --muted: #93a3bb;
+    --primary: #5c9bff;
+    --primary-hover: #7fb1ff;
+    --primary-soft: #182b4c;
+    --primary-ink: #a8c8ff;
+    --on-primary: #08101e;
+    --ok: #4ccb98;
+    --ok-soft: #10302a;
+    --warn: #f2a54a;
+    --warn-soft: #33240f;
+    --danger: #ff7b82;
+    --danger-soft: #3a1820;
+    --st-checked: #8396b3;
+    --st-notified: #3bb4ea;
+    --st-called: #5c9bff;
+    --st-escorting: #9a8cff;
+    --st-with: #34c4b7;
+    --st-done: #5fc483;
+  }
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-subtle: var(--subtle);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-ink: var(--primary-ink);
+  --color-on-primary: var(--on-primary);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-st-checked: var(--st-checked);
+  --color-st-notified: var(--st-notified);
+  --color-st-called: var(--st-called);
+  --color-st-escorting: var(--st-escorting);
+  --color-st-with: var(--st-with);
+  --color-st-done: var(--st-done);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@theme {
+  --text-display: 40px;
+  --text-display--line-height: 48px;
+  /* rem like the built-in breakpoints, so it sorts after sm/md/lg */
+  --breakpoint-board: 96rem;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.mascot svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.nova-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: blink 6s infinite;
+}
+
+@keyframes blink {
+  0%,
+  95%,
+  100% {
+    transform: scaleY(1);
+  }
+  97% {
+    transform: scaleY(0.1);
+  }
+}
+
+/* a card that just moved to a new column */
+.arrive {
+  animation: arrive 1.8s ease-out;
+}
+
+@keyframes arrive {
+  from {
+    box-shadow: 0 0 0 3px var(--primary);
+  }
+  to {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.pulse {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nova-eyes,
+  .arrive,
+  .pulse {
+    animation: none;
+  }
+}
