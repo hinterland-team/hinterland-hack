@@ -6,7 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-// the walk planner: check-back timing, what nova does per distance, the lost-patient timeline
+// the walk planner: check-back timing, what otto does per distance, the lost-patient timeline
 class WalkTest {
 
     private val t0 = 10_000_000_000L
@@ -45,7 +45,7 @@ class WalkTest {
     }
 
     @Test
-    fun rightAfterAnObstacleWaitNovaChecksBack() {
+    fun rightAfterAnObstacleWaitOttoChecksBack() {
         val c = CheckBackClock()
         var t = c.drive(t0, 5_000)
         t = c.drive(t + 250, 4_000, blocked = true)
@@ -79,7 +79,7 @@ class WalkTest {
         assertFalse(c.due())
     }
 
-    // ---- what nova sees when she turns around ----
+    // ---- what otto sees when he turns around ----
 
     @Test
     fun distancesDecideTheOutcome() {

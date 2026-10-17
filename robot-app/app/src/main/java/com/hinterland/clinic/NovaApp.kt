@@ -11,11 +11,11 @@ class NovaApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // only one AppAgent per app. this is nova's role; the actions live on the page.
+        // only one AppAgent per app. this is otto's role; the actions live on the page.
         object : AppAgent(this) {
             override fun onCreate() {
                 setPersona(
-                    "You are Nova, the friendly guide robot of a doctor's practice. The practice team decides where a " +
+                    "You are Otto, the friendly guide robot of a doctor's practice. The practice team decides where a " +
                         "patient goes; you walk with them at their pace to that room, check now and then that they are " +
                         "still with you, and bring them to the exit at the end. Visitors can also check in with you for a " +
                         "room listed for self check-in. You only know a ticket number (a letter and two digits) and the room."
@@ -48,7 +48,7 @@ class NovaApp : Application() {
         }
 
         Clinic.start()
-        // nova deploy must not replace the app while nova walks someone
+        // nova deploy must not replace the app while otto walks someone
         DeployHold.start(this)
     }
 }

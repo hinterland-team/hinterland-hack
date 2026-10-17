@@ -143,7 +143,7 @@ function Today({ data }: { data: Board }) {
       value: s.avgWalkMinutes === null ? "None yet" : s.avgWalkMinutes < 1 ? "Under 1 min" : `${s.avgWalkMinutes} min`,
       note: s.avgWalkMinutes === null ? "From pickup to the room" : "pickup to the room",
     },
-    { label: "Lost patients", value: String(s.lostPatients), note: s.lostPatients ? "Nova asked for help" : "Nobody got lost" },
+    { label: "Lost patients", value: String(s.lostPatients), note: s.lostPatients ? "Otto asked for help" : "Nobody got lost" },
     {
       label: "Walk feedback",
       value: s.feedbackUp + s.feedbackDown === 0 ? "None yet" : `${s.feedbackUp} good`,

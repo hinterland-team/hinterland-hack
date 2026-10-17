@@ -5,13 +5,13 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-// the busy hold nova clinic sends to nova deploy while she drives
+// the busy hold nova clinic sends to nova deploy while he drives
 class BusyHoldTest {
 
     private val now = 10_000_000_000L
 
     @Test
-    fun nothingWhileNovaStandsStill() {
+    fun nothingWhileOttoStandsStill() {
         val h = BusyHold()
         for (s in listOf(null, RobotState.IDLE, RobotState.GREETING, RobotState.TALKING, RobotState.CHARGING, RobotState.ERROR)) {
             assertNull(h.next(s, now))

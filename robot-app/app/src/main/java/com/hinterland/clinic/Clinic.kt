@@ -18,7 +18,7 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
 // the screen state, what the actions and the screen buttons do, and the team's small commands.
-// a guide itself runs in Guide; what nova does on her own is decided by NovaBrain.
+// a guide itself runs in Guide; what otto does on his own is decided by OttoBrain.
 // network on Dispatchers.IO, never on the main thread. no patient names anywhere: tickets only.
 object Clinic {
 
@@ -34,7 +34,7 @@ object Clinic {
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
-    // lines for the dashboard's live feed, sent by NovaBrain
+    // lines for the dashboard's live feed, sent by OttoBrain
     val feed = FeedBuffer()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -55,7 +55,7 @@ object Clinic {
         if (!started.compareAndSet(false, true)) return
         // goal, battery and robot state on the screen
         scope.launch {
-            NovaBrain.status.collect { b -> _ui.update { it.copy(brain = b) } }
+            OttoBrain.status.collect { b -> _ui.update { it.copy(brain = b) } }
         }
         // keep the planner in sync with what the screen shows
         scope.launch {
@@ -73,21 +73,21 @@ object Clinic {
 
     fun onUserSpeech(text: String, final: Boolean) {
         if (text.isBlank()) return
-        NovaBrain.heardUser()
+        OttoBrain.heardUser()
         if (final) {
             lastUserText = text
             Guide.current?.heard(text)
             // the raw words leave the robot only with the dashboard's demo switch on
             feed.patientSaid(now(), text)
         }
-        // the patient's own words are never shown (they could say their name): only that nova listens
+        // the patient's own words are never shown (they could say their name): only that otto listens
         _ui.update { it.copy(subtitle = "", subtitleFromUser = true) }
     }
 
     fun onRobotSpeech(text: String, final: Boolean) {
         if (text.isBlank()) return
-        NovaBrain.heardRobot()
-        if (final) feed.novaSaid(now(), text)
+        OttoBrain.heardRobot()
+        if (final) feed.ottoSaid(now(), text)
         _ui.update { it.copy(subtitle = text, subtitleFromUser = false, speaking = true) }
         speakingJob?.cancel()
         speakingJob = scope.launch {
@@ -102,7 +102,7 @@ object Clinic {
             "thinking", "processing" -> AgentMode.THINKING
             else -> AgentMode.IDLE
         }
-        NovaBrain.agentStatus(mode)
+        OttoBrain.agentStatus(mode)
         val note = if (status == "processing") message?.trim()?.takeIf { it.isNotEmpty() } else null
         _ui.update { it.copy(agent = mode, agentNote = note) }
     }
@@ -127,7 +127,7 @@ object Clinic {
         _ui.update { it.copy(chassis = issue) }
     }
 
-    // ---- staff menu (long-press the Nova logo 3 s) ----
+    // ---- staff menu (long-press the Nova Clinic logo 3 s) ----
 
     fun openStaff() {
         staffTouchedAt = now()
@@ -209,8 +209,8 @@ object Clinic {
 
     fun guideStarted() {
         guideCardJob?.cancel()
-        // the patient walks behind nova: the mic has to hear them without facing the robot.
-        // barge-in stays on (speaking over nova stops her tts, AgentOS default).
+        // the patient walks behind otto: the mic has to hear them without facing the robot.
+        // barge-in stays on (speaking over otto stops his tts, AgentOS default).
         setWakeFree(false)
         _ui.update { it.copy(checkIn = null) }
     }
@@ -240,7 +240,7 @@ object Clinic {
 
     // ---- actions (ClinicActions). sample = what the person said, for the language ----
 
-    // CONFIRM_TICKET: the person says the ticket nova calls
+    // CONFIRM_TICKET: the person says the ticket otto calls
     suspend fun confirmTicket(ticket: String?, sample: String?): Boolean {
         val t = Tickets.normalize(ticket)
         val g = Guide.current
@@ -284,7 +284,7 @@ object Clinic {
 
     // PAUSE_WALK
     suspend fun pauseWalk(sample: String?): Boolean {
-        feed.patientIntent(now(), "Asked Nova to wait")
+        feed.patientIntent(now(), "Asked Otto to wait")
         val lang = Lang(null, sample)
         val g = Guide.current
         if (g != null && g.pause()) {
@@ -359,7 +359,7 @@ object Clinic {
         return startOwnJourney(target.to, room.id, null, null, OwnRequest(paceChosen = false, sample = sample), "Checked in for ${room.label}", lang)
     }
 
-    // "I'm not sure": at the reception the desk helps, elsewhere nova walks them there
+    // "I'm not sure": at the reception the desk helps, elsewhere otto walks them there
     private suspend fun notSure(lang: Lang): Boolean {
         val reception = Places.reception(_ui.value.places)
         if (reception == null || Robot.atHome == true) {
@@ -378,7 +378,7 @@ object Clinic {
             )
             return true
         }
-        if (Guide.current == null && !NovaBrain.helpActive()) return false
+        if (Guide.current == null && !OttoBrain.helpActive()) return false
         speak(
             "Say kindly that you are walking with someone right now and the team at the reception desk can help.",
             lang,
@@ -387,7 +387,7 @@ object Clinic {
         return true
     }
 
-    // POST /api/journeys for the person in front of nova; the guide starts at once (no pickup)
+    // POST /api/journeys for the person in front of otto; the guide starts at once (no pickup)
     private suspend fun startOwnJourney(
         to: Place,
         forPlaceId: String?,
@@ -412,8 +412,8 @@ object Clinic {
             )
             return false
         }
-        created.journey?.id?.let { NovaBrain.expectOwn(it, own) }
-        created.command?.let { NovaBrain.addOwnCommand(it, own) }
+        created.journey?.id?.let { OttoBrain.expectOwn(it, own) }
+        created.command?.let { OttoBrain.addOwnCommand(it, own) }
         return true
     }
 
@@ -450,8 +450,8 @@ object Clinic {
         append("Ticket ${j.ticket}. ")
         append(
             when (j.status) {
-                JourneyStatus.WAITING_PICKUP -> "Nova will pick them up for $where soon. "
-                JourneyStatus.WALKING -> "Nova is walking them to $where right now. "
+                JourneyStatus.WAITING_PICKUP -> "Otto will pick them up for $where soon. "
+                JourneyStatus.WALKING -> "Otto is walking them to $where right now. "
                 JourneyStatus.ARRIVED -> "They are at $where and the team knows they are there. "
                 JourneyStatus.WITH_STAFF -> "They are with the team at $where. "
                 JourneyStatus.DONE -> "The visit is finished. "
@@ -471,7 +471,7 @@ object Clinic {
         val urgent = urgency == "urgent"
         // stay with the person from now on, even before the message is out
         if (urgent) {
-            NovaBrain.helpStarted()
+            OttoBrain.helpStarted()
             _ui.update { it.copy(help = HelpUi(urgent = true, sent = null)) }
         }
         feed.patientIntent(now(), if (urgent) "Needs urgent help" else "Asked for a team member")
@@ -480,13 +480,13 @@ object Clinic {
         setTask(if (urgent) "Alerting the practice team" else "Calling the practice team")
         val result = net { Backend.help(summary, if (urgent) "urgent" else "normal", g?.journeyId, g?.ticket) }
         if (urgent) {
-            NovaBrain.helpSent(result.getOrNull())
+            OttoBrain.helpSent(result.getOrNull())
             _ui.update { it.copy(help = HelpUi(urgent = true, sent = result.isSuccess)) }
         }
         val sent = result.isSuccess
         setTask(null)
         if (sent) {
-            // no happy face in an emergency: she stays concerned with the person
+            // no happy face in an emergency: he stays concerned with the person
             if (!urgent) flash(Mood.RELIEVED)
             speak(
                 "Tell the person the practice team has been informed and someone will come to them shortly." +
@@ -628,9 +628,9 @@ object Clinic {
             val r = net { Backend.createJourney(target.to.id, forId, c.pace, c.wheelchair) }
             r.onSuccess { created ->
                 val own = OwnRequest(paceChosen = true, sample = lastUserText)
-                created.journey?.id?.let { NovaBrain.expectOwn(it, own) }
+                created.journey?.id?.let { OttoBrain.expectOwn(it, own) }
                 // the guide screen takes over as soon as the guide starts (guideStarted closes this one)
-                created.command?.let { NovaBrain.addOwnCommand(it, own) }
+                created.command?.let { OttoBrain.addOwnCommand(it, own) }
             }.onFailure { e ->
                 _ui.update { s ->
                     s.checkIn?.let { s.copy(checkIn = it.copy(step = CheckInStep.FAILED, error = Backend.friendly(e))) } ?: s
@@ -642,7 +642,7 @@ object Clinic {
 
     private fun touched() {
         lastTouchAt = now()
-        NovaBrain.heardUser()
+        OttoBrain.heardUser()
     }
 
     // called by the brain every second
@@ -652,7 +652,7 @@ object Clinic {
         if (now - lastTouchAt > CHECK_IN_IDLE_MS) _ui.update { it.copy(checkIn = null) }
     }
 
-    // ---- commands from the team (run by NovaBrain, holding the body lock) ----
+    // ---- commands from the team (run by OttoBrain, holding the body lock) ----
 
     suspend fun pollCommand(): RobotCommand? = net(quiet = true) { Backend.nextCommand() }.getOrNull()
 
@@ -660,31 +660,31 @@ object Clinic {
         withContext(NonCancellable) { net(quiet = true) { Backend.commandDone(id) } }
     }
 
-    // go_to: drive to the spot and stay there. true when she got there.
+    // go_to: drive to the spot and stay there. true when he got there.
     suspend fun goToSpot(cmd: RobotCommand, excuse: Boolean): Boolean {
         try {
             val spot = cmd.spot?.trim().orEmpty()
             if (spot.isEmpty()) return false
             if (excuse) excuseMe()
             val home = Robot.isHome(spot)
-            NovaBrain.activity(
+            OttoBrain.activity(
                 if (home) RobotState.RETURNING else RobotState.WALKING,
                 if (home) "Driving back to $spot" else "Going to $spot",
             )
             setWalking(true)
             val outcome = try {
-                Robot.goTo(spot, stopWhen = { NovaBrain.helpActive() }, onEvent = { onNavEvent(it) })
+                Robot.goTo(spot, stopWhen = { OttoBrain.helpActive() }, onEvent = { onNavEvent(it) })
             } finally {
                 setWalking(false)
             }
-            if (outcome is NavOutcome.Failed) NovaBrain.failed("Could not reach $spot: ${outcome.why.screen}")
+            if (outcome is NavOutcome.Failed) OttoBrain.failed("Could not reach $spot: ${outcome.why.screen}")
             return outcome == NavOutcome.Arrived
         } finally {
             commandDone(cmd.id)
         }
     }
 
-    // say: the team typed it, nova says it as it is
+    // say: the team typed it, otto says it as it is
     suspend fun sayFromTeam(cmd: RobotCommand) {
         try {
             val text = cmd.text?.trim().orEmpty()
@@ -696,12 +696,12 @@ object Clinic {
         }
     }
 
-    // ask: the team's text goes to AgentOS like something a person said, so nova's ai decides (query)
+    // ask: the team's text goes to AgentOS like something a person said, so otto's ai decides (query)
     suspend fun askFromTeam(cmd: RobotCommand) {
         try {
             val text = cmd.text?.trim().orEmpty()
             if (text.isEmpty()) return
-            feed.novaDid(now(), "Message from the team: $text")
+            feed.ottoDid(now(), "Message from the team: $text")
             Voice.ask(text)
         } finally {
             commandDone(cmd.id)
@@ -715,7 +715,7 @@ object Clinic {
     }
 
     // walk_control from the patient's phone or the dashboard (docs/journeys.md 6.4). runs at once,
-    // also while nova walks; closed on every path
+    // also while otto walks; closed on every path
     suspend fun walkControl(cmd: RobotCommand) {
         try {
             val c = WalkControl.of(cmd.action)
@@ -729,7 +729,7 @@ object Clinic {
             feed.patientIntent(
                 now(),
                 when (c) {
-                    WalkControl.WAIT -> "Asked Nova to wait (phone)"
+                    WalkControl.WAIT -> "Asked Otto to wait (phone)"
                     WalkControl.RESUME -> "Ready to go on (phone)"
                     WalkControl.SLOWER -> "Asked to walk slower (phone)"
                     WalkControl.FASTER -> "Asked to walk faster (phone)"
@@ -752,7 +752,7 @@ object Clinic {
     }
 
     // ask with a journey = the patient's phone ("Talk"): their words, so they only go to the dashboard
-    // feed with the demo switch on and never to the log. nova's ai answers right away, also mid-walk
+    // feed with the demo switch on and never to the log. otto's ai answers right away, also mid-walk
     suspend fun askDuringWalk(cmd: RobotCommand) {
         try {
             val text = cmd.text?.trim().orEmpty()
@@ -760,20 +760,20 @@ object Clinic {
             // with a journey it comes from the walk page on the patient's phone
             if (cmd.journeyId != null) {
                 Guide.current?.takeIf { it.journeyId == cmd.journeyId }?.heard(text)
-                feed.patientIntent(now(), "Talked to Nova through the phone")
+                feed.patientIntent(now(), "Talked to Otto through the phone")
                 feed.patientSaid(now(), text)
                 RobotLog.i(LogSource.VOICE, "Patient talked through the phone")
             } else {
-                feed.novaDid(now(), "Message from the team: $text")
+                feed.ottoDid(now(), "Message from the team: $text")
             }
-            NovaBrain.heardUser()
+            OttoBrain.heardUser()
             Voice.ask(text)
         } finally {
             commandDone(cmd.id)
         }
     }
 
-    // nova has to go while someone talks to her (after waiting up to 20 s)
+    // otto has to go while someone talks to him (after waiting up to 20 s)
     private suspend fun excuseMe() {
         speak(
             "Politely tell the person you are talking with that you have to go now because the practice team needs you, " +
@@ -783,7 +783,7 @@ object Clinic {
         )
     }
 
-    // ---- things nova says on her own (brain tasks) ----
+    // ---- things otto says on his own (brain tasks) ----
 
     suspend fun greet() {
         speak(
@@ -802,7 +802,7 @@ object Clinic {
         _ui.update { it.copy(walking = on) }
     }
 
-    // blocked: ask people to let nova pass, at most every OBSTACLE_TALK_EVERY_MS
+    // blocked: ask people to let otto pass, at most every OBSTACLE_TALK_EVERY_MS
     fun onNavEvent(ev: NavEvent, lang: Lang = Lang(null)) {
         when (ev) {
             NavEvent.BLOCKED -> {
@@ -840,7 +840,7 @@ object Clinic {
         }
     }
 
-    // the same, without waiting (nova turns or drives meanwhile)
+    // the same, without waiting (otto turns or drives meanwhile)
     fun speakLater(task: String, lang: Lang) {
         scope.launch { Voice.speak(task, lang) }
     }

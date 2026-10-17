@@ -164,7 +164,7 @@ class WireV32Test {
         assertEquals(ChassisIssue.DISABLED, Chassis.issue(false, true, false, null, 30_000))
         assertEquals(ChassisIssue.SUSPENDED, Chassis.issue(true, false, true, null, 30_000))
         assertEquals(ChassisIssue.EMERGENCY, Chassis.issue(true, false, true, true, 30_000))
-        // an emergency value alone does not stop nova (its format is not documented)
+        // an emergency value alone does not stop otto (its format is not documented)
         assertNull(Chassis.issue(true, false, false, true, 30_000))
         assertNull(Chassis.issue(true, false, false, null, 30_000))
         assertTrue(ChassisIssue.NOT_STARTED.hint.contains("home screen"))
@@ -180,7 +180,7 @@ class WireV32Test {
         assertEquals("Out of service", m.title)
         assertTrue(m.step!!.contains("home screen"))
         assertTrue(s.screenInfo(), s.screenInfo().contains("cannot drive right now"))
-        // no self check-in while nova can't walk
+        // no self check-in while otto can't walk
         assertFalse(s.canSelfCheckIn)
         // a walk on screen still wins over the out-of-service card
         val g = GuideUi(ticket = "A17", destination = "Room B204", phase = GuidePhase.FAILED)

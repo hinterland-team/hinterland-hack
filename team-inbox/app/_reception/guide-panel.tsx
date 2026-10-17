@@ -154,12 +154,12 @@ export function GuidePanel({ places, open, onSent }: { places: Place[]; open: Jo
       {active.length === 0 ? (
         <SetupHint
           title="Add your places first"
-          text="Nova needs to know where it picks patients up (the reception), where the exit is, and your rooms. You set them up once."
+          text="Otto needs to know where it picks patients up (the reception), where the exit is, and your rooms. You set them up once."
         />
       ) : !reception ? (
         <SetupHint
           title="Add the reception"
-          text="Nova picks patients up at the reception. Add a place of kind Reception with its map spot."
+          text="Otto picks patients up at the reception. Add a place of kind Reception with its map spot."
         />
       ) : destinations.length === 0 ? (
         <SetupHint title="Add rooms" text="There is nowhere to walk to yet. Add your rooms, waiting rooms and the exit." />
@@ -206,7 +206,7 @@ export function GuidePanel({ places, open, onSent }: { places: Place[]; open: Jo
           </div>
           <p id="quick-help" className="mt-2 hidden flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted sm:flex">
             <span className="flex items-center gap-1">
-              <Kbd>Enter</Kbd> sends Nova
+              <Kbd>Enter</Kbd> sends Otto
             </span>
             <span className="flex items-center gap-1">
               <Kbd>1</Kbd>
@@ -253,7 +253,7 @@ export function GuidePanel({ places, open, onSent }: { places: Place[]; open: Jo
               />
               <p className="mt-2 text-sm text-muted">
                 {straight
-                  ? `Nova walks the patient right into ${placeText(selected)}.`
+                  ? `Otto walks the patient right into ${placeText(selected)}.`
                   : `The patient waits in ${waitingRoom.name}. ${selected.name} gets a Teams card and calls them in.`}
               </p>
             </div>
@@ -277,21 +277,21 @@ export function GuidePanel({ places, open, onSent }: { places: Place[]; open: Jo
                   </span>
                 </span>
               }
-              description="Nova keeps a slow pace"
+              description="Otto keeps a slow pace"
             />
           </div>
 
           <Button kind="primary" size="xl" className="mt-5 w-full" disabled={!selected || busy} onClick={send}>
             <NavigationArrow size={24} weight="fill" aria-hidden />
-            {busy ? "Sending Nova" : selected ? `Send Nova to ${goesVia ? goesVia.name : selected.name}` : "Send Nova"}
+            {busy ? "Sending Otto" : selected ? `Send Otto to ${goesVia ? goesVia.name : selected.name}` : "Send Otto"}
           </Button>
           <p className="mt-2 min-h-5 text-sm text-muted" role="status">
             {error ? (
               <span className="font-medium text-danger">{error}</span>
             ) : selected ? (
-              `${PACE_LABEL[pace]} pace${wheelchair ? ", wheelchair" : ""}. Nova only gets a ticket and the room.`
+              `${PACE_LABEL[pace]} pace${wheelchair ? ", wheelchair" : ""}. Otto only gets a ticket and the room.`
             ) : (
-              "Pick where the patient goes. Nova only gets a ticket and the room, never a name."
+              "Pick where the patient goes. Otto only gets a ticket and the room, never a name."
             )}
           </p>
         </>
@@ -417,11 +417,11 @@ function TicketShown({
       <h3 className="mt-6 text-sm font-semibold">What happens next</h3>
       <ol className="mt-3 grid gap-3">
         {[
-          `Nova comes to ${pickup} and shows ${journey.ticket} on its screen.`,
-          `The patient taps "That's me" on Nova, or says the ticket.`,
-          `Nova walks with them${slow ? " slowly" : ""} to ${via ? via.name : room.name} and checks they keep up.`,
+          `Otto comes to ${pickup} and shows ${journey.ticket} on its screen.`,
+          `The patient taps "That's me" on Otto, or says the ticket.`,
+          `Otto walks with them${slow ? " slowly" : ""} to ${via ? via.name : room.name} and checks they keep up.`,
           via
-            ? `${room.name} gets a Teams card and taps Call in when ready. Nova brings them over.`
+            ? `${room.name} gets a Teams card and taps Call in when ready. Otto brings them over.`
             : `${room.name} sees ${journey.ticket} coming on the room view and in Teams.`,
         ].map((t, i) => (
           <li key={i} className="grid grid-cols-[32px_minmax(0,1fr)] items-start gap-3 text-[15px]">

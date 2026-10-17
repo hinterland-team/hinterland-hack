@@ -107,7 +107,7 @@ object Robot {
 
     val ready: Boolean get() = connected && !suspended
 
-    // why nova can't drive right now, null = she can (or is still starting up)
+    // why otto can't drive right now, null = he can (or is still starting up)
     fun chassisIssue(): ChassisIssue? =
         Chassis.issue(connected, disabled, suspended, emergency, System.currentTimeMillis() - bootAt)
 
@@ -135,7 +135,7 @@ object Robot {
 
     fun isHome(spot: String?): Boolean = Brain.isHome(spot, home)
 
-    // the spot nova stands at (arrived there and has not moved since), null while moving or unknown
+    // the spot otto stands at (arrived there and has not moved since), null while moving or unknown
     @Volatile var position: String? = null
         private set
 
@@ -143,7 +143,7 @@ object Robot {
     @Volatile var atHome: Boolean? = null
         private set
 
-    // nova drove onto the charger herself
+    // otto drove onto the charger himself
     @Volatile var docked = false
         private set
     @Volatile private var undockedAt = 0L
@@ -262,7 +262,7 @@ object Robot {
     }
 
     private fun setUp() {
-        // keep the app in charge while docked: nova still talks there, only the chassis is locked.
+        // keep the app in charge while docked: otto still talks there, only the chassis is locked.
         // also needed before leaveChargingPile (RobotAPI "Disable Battery Interface")
         runCatching { api.disableBattery() }
         runCatching { api.unregisterStatusListener(batteryListener) }
@@ -326,7 +326,7 @@ object Robot {
         return list.mapNotNull { p -> runCatching { p.distance }.getOrNull()?.takeIf { it > 0.0 } }
     }
 
-    // ---- focus following: turns nova towards the person she talks to. it holds the chassis,
+    // ---- focus following: turns otto towards the person he talks to. it holds the chassis,
     // so every drive stops it first (RobotAPI "Focus Following", note 1).
     // the jar marks start/stopFocusFollow deprecated (for startSmartFocusFollow, which is not in
     // the docs), so we stay with the documented call. robot.focusFollow=false turns it off. ----
@@ -368,7 +368,7 @@ object Robot {
         return true
     }
 
-    // ---- where nova is ----
+    // ---- where otto is ----
 
     // RobotAPI "Check if Robot is at Position Point"; null when it can't tell
     suspend fun isAt(spot: String, rangeM: Double): Boolean? {
@@ -397,7 +397,7 @@ object Robot {
         }
     }
 
-    // is nova at her home spot? keeps a non-home spot she was parked at
+    // is otto at his home spot? keeps a non-home spot he was parked at
     suspend fun checkHome() {
         if (home.isEmpty()) return
         val at = isAt(home, HOME_RANGE_M) ?: return
@@ -512,7 +512,7 @@ object Robot {
                 }
             }
             if (unstuck) {
-                RobotLog.i(LogSource.NAV, "Obstacle status cleared: Nova moved on")
+                RobotLog.i(LogSource.NAV, "Obstacle status cleared: Otto moved on")
                 onEvent(NavEvent.CLEAR)
             }
             val step = synchronized(lock) { blocked.step(t) }
@@ -656,7 +656,7 @@ object Robot {
     // heading in radians from the fresh pose, for the turn check
     fun heading(): Double? = latestPose()?.theta
 
-    // where nova is: the fresh STATUS_POSE value, else RobotAPI "Get Robot Current Position"
+    // where otto is: the fresh STATUS_POSE value, else RobotAPI "Get Robot Current Position"
     // (needs localization). null when it can't tell
     suspend fun robotPose(): RobotPose? {
         if (!ready) return null

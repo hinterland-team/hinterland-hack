@@ -172,7 +172,7 @@ function Timeline({ journey, now, run, busy }: { journey: JourneyWithQueue; now:
   const stage = stageOf(journey, now);
   const events = journey.events.filter((e) => !e.type.startsWith("teams_") && !e.type.startsWith("email_")).slice(-5);
   const leg = currentLeg(journey);
-  const withNova = leg.status === "pickup" || leg.status === "walking";
+  const withOtto = leg.status === "pickup" || leg.status === "walking";
   return (
     <div className="mt-4 rounded-xl border border-line p-3 sm:p-4">
       <div className="flex items-center gap-3">
@@ -182,7 +182,7 @@ function Timeline({ journey, now, run, busy }: { journey: JourneyWithQueue; now:
           <p className="text-sm text-muted">{stage.detail}</p>
         </div>
       </div>
-      {withNova && (
+      {withOtto && (
         <div className="mt-3" role="group" aria-label={`Walk controls for ${journey.ticket}`}>
           <div className="grid grid-cols-4 gap-1.5">
             {(Object.keys(WALK_ICONS) as WalkAction[]).map((action) => {
@@ -208,7 +208,7 @@ function Timeline({ journey, now, run, busy }: { journey: JourneyWithQueue; now:
       )}
       {journey.walkCode && (
         <p className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm text-muted">
-          <span>{withNova ? "The patient has the same buttons on their phone." : "The patient can follow the walk on their phone."}</span>
+          <span>{withOtto ? "The patient has the same buttons on their phone." : "The patient can follow the walk on their phone."}</span>
           <a
             href={`/walk/${journey.walkCode}`}
             target="_blank"
@@ -244,7 +244,7 @@ export function ConversationCard({ data, run }: { data: Board; run: Run }) {
       </h2>
       {list.length === 0 ? (
         <p className="mt-3 rounded-xl bg-subtle p-4 text-[15px] text-muted">
-          {online ? "Nothing said yet." : "Nova is offline."} When Nova talks with a patient, its lines and what it understood
+          {online ? "Nothing said yet." : "Otto is offline."} When Otto talks with a patient, its lines and what it understood
           show up here.
           {show ? " The demo switch is on, so patients' own words show too." : " Patients' own words stay on the robot."}
         </p>
@@ -269,7 +269,7 @@ export function ConversationCard({ data, run }: { data: Board; run: Run }) {
           description={
             show
               ? "On: patients' words appear here, kept in memory only. Turn off after the demo."
-              : "Off: only what Nova understood, like “asked to slow down”."
+              : "Off: only what Otto understood, like “asked to slow down”."
           }
         />
       </div>
@@ -288,15 +288,15 @@ function FeedLine({ item }: { item: FeedItem }) {
       </li>
     );
   }
-  const nova = item.who === "nova";
+  const otto = item.who === "nova";
   return (
-    <li className={`rise flex flex-col ${nova ? "items-start" : "items-end"}`}>
+    <li className={`rise flex flex-col ${otto ? "items-start" : "items-end"}`}>
       <span className="mb-0.5 flex items-center gap-2 text-xs font-semibold text-muted">
-        {nova ? "Nova" : item.kind === "said" ? "Patient said" : "Patient"} {time}
+        {otto ? "Otto" : item.kind === "said" ? "Patient said" : "Patient"} {time}
       </span>
       <span
         className={`max-w-[92%] rounded-2xl px-3 py-2 text-[15px] leading-snug break-words ${
-          nova
+          otto
             ? "rounded-tl-md bg-primary-soft text-ink"
             : item.kind === "intent"
               ? "rounded-tr-md border border-dashed border-line-strong text-muted italic"
@@ -323,7 +323,7 @@ export function ControlsCard({ data, run, busy }: { data: Board; run: Run; busy:
   return (
     <section aria-labelledby="tell-title" className={PANEL}>
       <h2 id="tell-title" className="text-xl font-semibold tracking-tight">
-        Tell Nova
+        Tell Otto
       </h2>
       <form
         className="mt-3"
@@ -332,11 +332,11 @@ export function ControlsCard({ data, run, busy }: { data: Board; run: Run; busy:
           if (message.trim()) sendText("ask");
         }}
       >
-        <label htmlFor="tell-nova" className="text-sm font-semibold">
+        <label htmlFor="tell-otto" className="text-sm font-semibold">
           Anything, in your own words
         </label>
         <input
-          id="tell-nova"
+          id="tell-otto"
           className={`${INPUT} mt-2`}
           value={message}
           maxLength={500}
@@ -346,15 +346,15 @@ export function ControlsCard({ data, run, busy }: { data: Board; run: Run; busy:
         />
         <div className="mt-2 flex flex-wrap gap-2">
           <Button kind="primary" type="submit" disabled={!message.trim() || busy === "robot:ask"}>
-            <Sparkle size={18} aria-hidden /> Tell Nova
+            <Sparkle size={18} aria-hidden /> Tell Otto
           </Button>
           <Button disabled={!message.trim() || busy === "robot:say"} onClick={() => sendText("say")}>
             <Megaphone size={18} aria-hidden /> Say it out loud
           </Button>
         </div>
         <p className="mt-2 text-sm text-muted">
-          Tell Nova: its AI decides what to do. Say it out loud: Nova repeats your words exactly.
-          {!online && " Nova is offline and gets it when it is back."}
+          Tell Otto: its AI decides what to do. Say it out loud: Otto repeats your words exactly.
+          {!online && " Otto is offline and gets it when it is back."}
         </p>
       </form>
 
@@ -367,7 +367,7 @@ export function ControlsCard({ data, run, busy }: { data: Board; run: Run; busy:
         }}
       >
         <label htmlFor="send-to" className="text-sm font-semibold">
-          Send Nova to
+          Send Otto to
         </label>
         <div className="mt-2 flex gap-2">
           <select id="send-to" className={`${INPUT} flex-1`} value={spot} onChange={(e) => setSpot(e.target.value)}>
@@ -397,10 +397,10 @@ function Recent({ commands }: { commands: Board["commands"] }) {
     done: "bg-ok-soft text-ok",
     cancelled: "bg-subtle text-muted",
   };
-  const label = { queued: "Waiting", delivered: "Nova has it", done: "Done", cancelled: "Cancelled" };
+  const label = { queued: "Waiting", delivered: "Otto has it", done: "Done", cancelled: "Cancelled" };
   return (
     <div className="mt-5 border-t border-line pt-4">
-      <h3 className="text-sm font-semibold">Sent to Nova</h3>
+      <h3 className="text-sm font-semibold">Sent to Otto</h3>
       <ol className="mt-2 grid gap-2">
         {commands.slice(0, 5).map((c) => {
           const s = commandState(c);

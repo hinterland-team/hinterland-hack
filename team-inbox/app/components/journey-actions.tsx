@@ -41,7 +41,7 @@ export function JourneyActions({
   if (mode === "cancel") {
     return (
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label={`Cancel ${journey.ticket}?`}>
-        <span className="w-full text-[15px] font-medium sm:w-auto">Cancel {journey.ticket}? Nova stops this guide.</span>
+        <span className="w-full text-[15px] font-medium sm:w-auto">Cancel {journey.ticket}? Otto stops this guide.</span>
         <Button kind="danger" size={size} className={wide} disabled={any} onClick={() => act("cancel", "/cancel")}>
           Yes, cancel
         </Button>
@@ -56,7 +56,7 @@ export function JourneyActions({
     const choices = active.filter((p) => p.kind !== "reception" && p.id !== leg.toPlaceId);
     return (
       <div className="w-full" role="group" aria-label={`Next place for ${journey.ticket}`}>
-        <p className="mb-2 text-[15px] font-semibold">Where should Nova take {journey.ticket} next?</p>
+        <p className="mb-2 text-[15px] font-semibold">Where should Otto take {journey.ticket} next?</p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {choices.map((p) => (
             <Button
@@ -101,7 +101,7 @@ export function JourneyActions({
       onClick={() => act("exit", "/next", { to: exit.id })}
     >
       <ExitIcon size={20} aria-hidden />
-      {is("exit") ? "Sending Nova" : "Done → exit"}
+      {is("exit") ? "Sending Otto" : "Done → exit"}
     </Button>
   ) : null;
   const finished = (
@@ -136,7 +136,7 @@ export function JourneyActions({
         <>
           <Button kind="primary" size={size} className={wide} disabled={any} onClick={() => act("retry", "/retry")}>
             <ArrowsClockwise size={20} aria-hidden />
-            {is("retry") ? "Sending Nova" : "Send Nova again"}
+            {is("retry") ? "Sending Otto" : "Send Otto again"}
           </Button>
           {cancel}
         </>
@@ -165,7 +165,7 @@ export function JourneyActions({
               onClick={() => act("call", "/next", { to: forPlace.id })}
             >
               <ArrowBendUpRight size={20} aria-hidden />
-              {is("call") ? "Sending Nova" : `Call in to ${forPlace.name}`}
+              {is("call") ? "Sending Otto" : `Call in to ${forPlace.name}`}
             </Button>
           )}
           {nextRoom}

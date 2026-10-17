@@ -44,7 +44,7 @@ export function MapPanel({ places, robot }: { places: Place[]; robot: RobotStatu
               compact
               stale={stale}
               className="aspect-[4/3] lg:aspect-[16/11]"
-              label={`Live map of ${map.mapName ?? "Nova's floor"}: Nova${map.target ? ` heading to ${map.target.name}` : ""}, ${spots.length} spots`}
+              label={`Live map of ${map.mapName ?? "Otto's floor"}: Otto${map.target ? ` heading to ${map.target.name}` : ""}, ${spots.length} spots`}
             />
           </div>
           <div className="mt-3">
@@ -55,7 +55,7 @@ export function MapPanel({ places, robot }: { places: Place[]; robot: RobotStatu
               <SpotPanel key={spot.name} spot={spot} map={map} robot={robot} onClose={() => setPicked(null)} />
             </div>
           ) : (
-            <p className="mt-3 text-sm text-muted">Tap a place on the map to send Nova there.</p>
+            <p className="mt-3 text-sm text-muted">Tap a place on the map to send Otto there.</p>
           )}
         </>
       )}

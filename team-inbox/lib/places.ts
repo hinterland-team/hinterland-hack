@@ -63,7 +63,7 @@ async function checkUnique(places: Place[], name: string, exceptId?: string) {
   if (clash) throw new ApiError(409, `there is already a place called ${clash.name}`);
 }
 
-// nova picks patients up at one reception and guides them out through one exit
+// otto picks patients up at one reception and guides them out through one exit
 function checkSingle(places: Place[], kind: PlaceKind, active: boolean, exceptId?: string) {
   if (!active || (kind !== "reception" && kind !== "exit")) return;
   const other = places.find((p) => p.id !== exceptId && p.active && p.kind === kind);

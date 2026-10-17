@@ -94,7 +94,7 @@ enum class WalkControl(val wire: String) {
 }
 
 // the QR code on the pickup screen: <base>/walk/<walkCode>. a full walkUrl from the server wins;
-// else the walk base url from local.properties, else the server nova uses right now.
+// else the walk base url from local.properties, else the server otto uses right now.
 object WalkLink {
     private val code = Regex("^[A-Za-z0-9_-]{4,32}$")
 
@@ -123,7 +123,8 @@ data class ScreenMirror(
 // one line of the live conversation feed (POST /api/robot/feed)
 data class FeedItem(val at: Long, val who: String, val kind: String, val text: String) {
     companion object {
-        const val NOVA = "nova"
+        // the robot was called nova first; the backend and its database still expect "nova" here
+        const val OTTO = "nova"
         const val PATIENT = "patient"
         const val SAID = "said"
         const val INTENT = "intent"
@@ -265,7 +266,7 @@ object Json {
     }
 
     // POST /api/robot/heartbeat body. unknown values go as json null, detail only when there is one.
-    // server = the team-inbox url nova uses (6.1), version = the app version
+    // server = the team-inbox url otto uses (6.1), version = the app version
     fun heartbeat(
         robot: String,
         s: BrainStatus,

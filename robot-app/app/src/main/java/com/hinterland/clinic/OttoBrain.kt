@@ -17,11 +17,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
-// nova's brain. one loop looks around every second and picks the most important thing to do
+// otto's brain. one loop looks around every second and picks the most important thing to do
 // (the priorities are in Brain.decide). one task at a time: every task holds the body lock.
 // a guide (staff command or the person's own request) runs as such a task. nothing new starts
-// while someone is talking to nova, except what that person asked for.
-object NovaBrain {
+// while someone is talking to otto, except what that person asked for.
+object OttoBrain {
 
     private const val TICK_MS = 1_000L
     private const val POLL_MS = 3_000L
@@ -39,12 +39,12 @@ object NovaBrain {
     private const val HELP_CHECK_MS = 10_000L
     private const val BOOT_GRACE_MS = 20_000L
     private const val MAX_QUEUE = 5
-    // faces this close count as "the person nova talks to"
+    // faces this close count as "the person otto talks to"
     private const val TALK_RANGE_M = 2.5
     private const val ENGAGED_KEEP_MS = 10 * 60_000L
     private const val FAILURE_SHOW_MS = 2 * 60_000L
     private const val LOG_EVERY_MS = 60_000L
-    // an action that never finished does not keep nova "in a conversation" forever
+    // an action that never finished does not keep otto "in a conversation" forever
     private const val ACTION_MAX_MS = 6 * 60_000L
 
     private class Running(val job: Job, val preemptible: Boolean)
@@ -81,7 +81,7 @@ object NovaBrain {
     @Volatile private var waitingFor: String? = null
     @Volatile private var waitingSince: Long? = null
 
-    // people in front of nova
+    // people in front of otto
     @Volatile private var visitor: Visitor? = null
     @Volatile private var talker: Visitor? = null
     private val engaged = ConcurrentHashMap<Int, Long>()
@@ -142,7 +142,7 @@ object NovaBrain {
     // last time the mic heard the person (talk window at a check-back)
     fun lastUserSpeechAt(): Long = userSpokeAt
 
-    // nova's ai is busy with an answer right now: planning, an action, or nova speaking. tighter than
+    // otto's ai is busy with an answer right now: planning, an action, or otto speaking. tighter than
     // the brain's talk level, which stays on for 8 s after the last words
     fun aiBusy(): Boolean {
         val now = now()
@@ -190,7 +190,7 @@ object NovaBrain {
     private fun ownFor(cmd: RobotCommand): OwnRequest? =
         ownByCommand[cmd.id] ?: cmd.journeyId?.let { ownByJourney[it] }
 
-    // urgent CALL_STAFF: nova stays with the person, a drive home or to the charger stops at once
+    // urgent CALL_STAFF: otto stays with the person, a drive home or to the charger stops at once
     fun helpStarted() {
         helpAt = now()
         helpRequest = null
@@ -253,7 +253,7 @@ object NovaBrain {
         return job
     }
 
-    // what the running task does, null when nova has no task (DeployHold)
+    // what the running task does, null when otto has no task (DeployHold)
     fun taskState(): RobotState? {
         if (current == null) return null
         return doing?.first ?: Brain.state(lastPlan, Robot.home)
@@ -328,7 +328,7 @@ object NovaBrain {
         val people = Robot.faces()
         visitor = people?.let { Brain.pickVisitor(it) }
         talker = people?.let { Brain.pickVisitor(it, TALK_RANGE_M) }
-        // whoever stands there while nova talks is not greeted again later
+        // whoever stands there while otto talks is not greeted again later
         if (talk == TalkLevel.ACTIVE && people != null) {
             people.filter { it.id >= 0 && it.distance > 0.0 && it.distance <= TALK_RANGE_M }
                 .forEach { engaged[it.id] = now }
@@ -358,7 +358,7 @@ object NovaBrain {
         engaged = HashMap(engaged),
         battery = Robot.battery,
         charging = Robot.chargingReported(),
-        dockedByNova = Robot.docked,
+        dockedByOtto = Robot.docked,
         atHome = Robot.atHome,
         parkedAt = parkedAt,
         quietSince = quietSince,
@@ -380,7 +380,7 @@ object NovaBrain {
         }
     }
 
-    // focus following on while someone talks to nova, off when she is idle
+    // focus following on while someone talks to otto, off when he is idle
     private fun steer(plan: Plan) {
         when (plan) {
             Plan.Talk, Plan.StayWithPerson, is Plan.WaitForQuiet -> {
@@ -392,7 +392,7 @@ object NovaBrain {
         }
     }
 
-    // a visit is over and nova is idle again: welcome card, and the next patient starts with a fresh llm context
+    // a visit is over and otto is idle again: welcome card, and the next patient starts with a fresh llm context
     private fun maybeReset(now: Long, plan: Plan) {
         if (plan != Plan.Wait && plan != Plan.Charge) return
         if (now - quietSince < IDLE_RESET_MS) return
@@ -433,12 +433,12 @@ object NovaBrain {
             RobotCommand.GUIDE -> {
                 parkedAt = null
                 Guide.run(cmd, ownFor(cmd))
-                // back to the reception afterwards, unless someone needs urgent help (or she is there)
+                // back to the reception afterwards, unless someone needs urgent help (or he is there)
                 returnHomeNow = !helpActive()
             }
             RobotCommand.GO_TO -> {
                 if (Clinic.goToSpot(cmd, excuse)) {
-                    // she stays where the team sent her; home is not "parked"
+                    // he stays where the team sent him; home is not "parked"
                     parkedAt = cmd.spot?.takeUnless { Robot.isHome(it) }
                     returnHomeNow = false
                 }
@@ -522,9 +522,9 @@ object NovaBrain {
         }
     }
 
-    // commands stay on the server while nova can't take them (urgent help, out of service, a task
-    // other than a walk). during a walk nova keeps polling: walk_control and the phone's ask must
-    // reach her at once (docs/journeys.md 6.4); other commands wait in her queue until the walk ends.
+    // commands stay on the server while otto can't take them (urgent help, out of service, a task
+    // other than a walk). during a walk otto keeps polling: walk_control and the phone's ask must
+    // reach him at once (docs/journeys.md 6.4); other commands wait in his queue until the walk ends.
     private suspend fun pollOnce() {
         val now = now()
         checkHelp(now)
@@ -597,7 +597,7 @@ object NovaBrain {
         }
     }
 
-    // nova's lines and the patient's intents for the dashboard's live feed (lives only in memory there)
+    // otto's lines and the patient's intents for the dashboard's live feed (lives only in memory there)
     private suspend fun sendFeed() {
         val feed = Clinic.feed
         while (true) {

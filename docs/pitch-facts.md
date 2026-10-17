@@ -81,7 +81,7 @@ The guidelines are written for video surveillance. A robot that uses its camera 
 - Para 74: "The video footage of an individual cannot however in itself be considered as biometric data under Article 9, if it has not been specifically technically processed in order to contribute to the identification of an individual."
 - Para 80: "However, when the purpose of the processing is for example to distinguish one category of people from another but not to uniquely identify anyone the processing does not fall under Article 9."
 
-**e) Seeing a wheelchair is not health data by itself, but using video to monitor health is.** So Nova must not use the camera to judge a patient's condition.
+**e) Seeing a wheelchair is not health data by itself, but using video to monitor health is.** So Otto must not use the camera to judge a patient's condition.
 - Para 62 (example): "Video footage showing a data subject wearing glasses or using a wheel chair are not per se considered to be special categories of personal data."
 - Para 64 (example): "A hospital installing a video camera in order to monitor a patient's health condition would be considered as processing of special categories of personal data (Article 9)."
 
@@ -126,10 +126,10 @@ and which does not achieve its principal intended action by pharmacological, imm
 **Why a pure navigation helper is likely not a medical device:**
 - Its intended purpose is to guide people through a building. That is none of the medical purposes in Article 2(1).
 - Recital 19 says general-purpose software is not a medical device just because it runs in a hospital. (A recital helps reading the law; it is not itself a rule.)
-- Nova does not diagnose, triage, monitor health or choose medical destinations. Staff decide where a patient goes.
+- Otto does not diagnose, triage, monitor health or choose medical destinations. Staff decide where a patient goes.
 
 **Careful:**
-- Article 2(1) includes "compensation for ... disability". So don't market Nova as an aid for disabled people. Market it as building navigation for everyone, with a slower walking pace as an option.
+- Article 2(1) includes "compensation for ... disability". So don't market Otto as an aid for disabled people. Market it as building navigation for everyone, with a slower walking pace as an option.
 - The intended purpose includes "promotional or sales materials" (Art. 2(12)). The pitch itself counts. No medical claims.
 - Wording for the pitch: "likely not a medical device; this needs a proper regulatory assessment before use in a hospital."
 

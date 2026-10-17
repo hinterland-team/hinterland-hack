@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
 // robot logs (docs/journeys.md 6.2): shown in the staff menu and shipped in batches to
-// POST /api/robot/logs. never patient words or names - only what nova does, tickets at most.
+// POST /api/robot/logs. never patient words or names - only what otto does, tickets at most.
 
 enum class LogLevel(val wire: String) { DEBUG("debug"), INFO("info"), WARN("warn"), ERROR("error") }
 
@@ -111,7 +111,7 @@ class ShipPace(private val everyMs: Long = EVERY_MS, private val maxMs: Long = M
 // the app's log: android logcat, the staff menu and the server
 object RobotLog {
 
-    private const val TAG = "Nova"
+    private const val TAG = "Otto"
 
     private val lines = LogQueue(shipFrom = if (BuildConfig.LOG_DEBUG) LogLevel.DEBUG else LogLevel.INFO)
     private val _recent = MutableStateFlow<List<LogLine>>(emptyList())

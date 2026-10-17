@@ -13,7 +13,7 @@ class FeedTest {
         val f = FeedBuffer()
         assertFalse(f.patientSaid(1, "my name is Sam and my knee hurts"))
         f.patientIntent(2, "Asked to walk slower")
-        f.novaSaid(3, "Of course, I'll walk slower.")
+        f.ottoSaid(3, "Of course, I'll walk slower.")
         val out = f.drain()
         assertEquals(listOf("intent", "said"), out.map { it.kind })
         assertTrue(out.none { it.text.contains("Sam") })
@@ -30,7 +30,7 @@ class FeedTest {
     @Test
     fun drainsInBatchesAndPutsBackInOrder() {
         val f = FeedBuffer(capacity = 5)
-        repeat(7) { f.novaDid(it.toLong(), "line $it") }
+        repeat(7) { f.ottoDid(it.toLong(), "line $it") }
         // full: the oldest are dropped
         assertEquals(5, f.size())
         val batch = f.drain(3)
@@ -43,8 +43,8 @@ class FeedTest {
     @Test
     fun blankLinesAreDroppedLongOnesCut() {
         val f = FeedBuffer()
-        f.novaSaid(1, "   ")
-        f.novaSaid(2, "x".repeat(500))
+        f.ottoSaid(1, "   ")
+        f.ottoSaid(2, "x".repeat(500))
         val out = f.drain()
         assertEquals(1, out.size)
         assertEquals(FeedBuffer.MAX_TEXT, out[0].text.length)

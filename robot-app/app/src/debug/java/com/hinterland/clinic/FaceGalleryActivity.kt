@@ -25,7 +25,7 @@ import com.hinterland.clinic.ui.NovaTheme
 import com.hinterland.clinic.ui.text
 import kotlinx.coroutines.delay
 
-// debug builds only: nova's face alone, in any mood, to check the animations without the robot.
+// debug builds only: otto's face alone, in any mood, to check the animations without the robot.
 //   adb shell am start -n com.hinterland.relay/com.hinterland.clinic.FaceGalleryActivity --es mood LOVE --ez talking true
 //   adb shell am start -n com.hinterland.relay/com.hinterland.clinic.FaceGalleryActivity --ez cycle true
 class FaceGalleryActivity : ComponentActivity() {

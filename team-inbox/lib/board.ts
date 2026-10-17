@@ -17,7 +17,7 @@ export async function board(robot: string) {
   ]);
   const commands = await listCommands(robot, 6, feed.showPatientText);
   const journeys = await withQueue(open, open);
-  // the journey nova works on: the ticket on its screen, else the guide it fetched last
+  // the journey otto works on: the ticket on its screen, else the guide it fetched last
   const onScreen = status.screen?.ticket ? journeys.find((j) => j.ticket === status.screen?.ticket) : undefined;
   const fetched = commands.find((c) => c.type === "guide" && c.deliveredAt && !c.doneAt);
   const currentJourneyId = onScreen?.id ?? (fetched?.type === "guide" ? fetched.journeyId : undefined) ?? null;

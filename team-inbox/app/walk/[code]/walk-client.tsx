@@ -24,28 +24,28 @@ type Gone = { kind: "ended" | "unknown" | "busy" | "offline"; message: string };
 
 const PHASE: Record<WalkPhase, { title: string; text: string }> = {
   coming: {
-    title: "Nova is coming to get you",
-    text: "Your ticket shows on Nova's screen. The buttons work as soon as Nova is with you.",
+    title: "Otto is coming to get you",
+    text: "Your ticket shows on Otto's screen. The buttons work as soon as Otto is with you.",
   },
-  pickup: { title: "Nova is here for you", text: "Tap “That's me” on Nova's screen, or say your ticket to Nova." },
-  walking: { title: "Walking with you", text: "Nova keeps your pace and looks back to check on you." },
+  pickup: { title: "Otto is here for you", text: "Tap “That's me” on Otto's screen, or say your ticket to Otto." },
+  walking: { title: "Walking with you", text: "Otto keeps your pace and looks back to check on you." },
   arrived: { title: "You are there", text: "Please take a seat. The team knows you are here." },
-  with_staff: { title: "With the team", text: "Nova is not needed right now. Get well soon." },
-  help: { title: "Nova has stopped", text: "A person from the team is coming to help you." },
+  with_staff: { title: "With the team", text: "Otto is not needed right now. Get well soon." },
+  help: { title: "Otto has stopped", text: "A person from the team is coming to help you." },
 };
 
 const ACTIONS: { action: WalkAction; label: string; hint: string; Icon: typeof HandPalm }[] = [
-  { action: "wait", label: "Wait", hint: "Nova stops", Icon: HandPalm },
-  { action: "resume", label: "Go on", hint: "Nova walks on", Icon: Play },
+  { action: "wait", label: "Wait", hint: "Otto stops", Icon: HandPalm },
+  { action: "resume", label: "Go on", hint: "Otto walks on", Icon: Play },
   { action: "slower", label: "Slower", hint: "A bit slower", Icon: PersonSimpleWalk },
   { action: "faster", label: "Faster", hint: "A bit faster", Icon: PersonSimpleRun },
 ];
 
 const DONE_TEXT: Record<WalkAction, string> = {
-  wait: "Nova got it and waits for you.",
-  resume: "Nova got it and walks on.",
-  slower: "Nova got it and walks slower.",
-  faster: "Nova got it and walks a bit faster.",
+  wait: "Otto got it and waits for you.",
+  resume: "Otto got it and walks on.",
+  slower: "Otto got it and walks slower.",
+  faster: "Otto got it and walks a bit faster.",
 };
 
 // the parts of the browser speech api this page uses
@@ -99,7 +99,7 @@ export function WalkClient({ code }: { code: string }) {
         setGone({ kind: "ended", message: "Your walk has ended. Get well soon." });
       } else if (status === 404) {
         stopped.current = true;
-        setGone({ kind: "unknown", message: "This link only works while Nova walks with you." });
+        setGone({ kind: "unknown", message: "This link only works while Otto walks with you." });
       } else if (status === 429) {
         setGone({ kind: "busy", message: "Too many requests. The page tries again in a moment." });
         return 20_000;
@@ -153,7 +153,7 @@ export function WalkClient({ code }: { code: string }) {
         <Mascot size={40} />
         <div className="leading-tight">
           <p className="text-[17px] font-semibold tracking-tight">Nova Clinic</p>
-          <p className="text-sm text-muted">Your walk with Nova</p>
+          <p className="text-sm text-muted">Your walk with Otto</p>
         </div>
       </div>
 
@@ -217,7 +217,7 @@ export function WalkClient({ code }: { code: string }) {
             {gone && <p className="mt-3 text-sm font-medium text-warn">{gone.message}</p>}
           </section>
 
-          <section aria-label="Tell Nova" className="mt-4">
+          <section aria-label="Tell Otto" className="mt-4">
             <div className="grid grid-cols-2 gap-3">
               {ACTIONS.map(({ action, label, hint, Icon }) => {
                 const on = last === action && view.canControl;
@@ -257,8 +257,8 @@ export function WalkClient({ code }: { code: string }) {
       <p className="mt-auto flex items-start gap-2 pt-8 text-sm text-muted">
         <ShieldCheck size={18} aria-hidden className="mt-0.5 shrink-0" />
         {ended
-          ? "Nova only knows your ticket and the room. Nothing is recorded."
-          : "Nova only knows your ticket and the room. Nothing is recorded. What you say here goes to Nova as text and is deleted once Nova has it."}
+          ? "Otto only knows your ticket and the room. Nothing is recorded."
+          : "Otto only knows your ticket and the room. Nothing is recorded. What you say here goes to Otto as text and is deleted once Otto has it."}
       </p>
     </main>
   );
@@ -292,7 +292,7 @@ function Talk({
       return;
     }
     const r = new Api();
-    // the phone's own language: nova answers in the language the patient speaks
+    // the phone's own language: otto answers in the language the patient speaks
     r.lang = navigator.language;
     r.interimResults = true;
     r.continuous = false;
@@ -333,7 +333,7 @@ function Talk({
       if (res.status === 201) {
         setText("");
         setMode("idle");
-        onSent("Nova got your message and answers out loud.");
+        onSent("Otto got your message and answers out loud.");
         return;
       }
       onError((data as { error?: string } | null)?.error ?? "That did not work. Please try again.");
@@ -352,7 +352,7 @@ function Talk({
         className="press mt-3 flex h-16 w-full items-center justify-center gap-3 rounded-2xl bg-primary text-lg font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
       >
         <Microphone size={26} weight="fill" aria-hidden />
-        {canListen ? "Talk to Nova" : "Write to Nova"}
+        {canListen ? "Talk to Otto" : "Write to Otto"}
       </button>
     );
   }
@@ -371,7 +371,7 @@ function Talk({
       ) : (
         <>
           <label htmlFor="talk-text" className="text-sm font-semibold">
-            Your message to Nova
+            Your message to Otto
           </label>
           <textarea
             id="talk-text"

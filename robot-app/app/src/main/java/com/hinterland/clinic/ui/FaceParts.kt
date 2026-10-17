@@ -21,7 +21,7 @@ import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.sin
 
-// nova's face rig. the doctor art is split into a clean bust (doctor_body) and glowing parts
+// otto's face rig. the doctor art is split into a clean bust (doctor_body) and glowing parts
 // (doctor_eye_*, doctor_brow_*, doctor_mouth_*) added on top with BlendMode.Plus, so each part can move,
 // squash and fade on its own. body + parts in their places = the original art.
 // all numbers are pixels of doctor_body (818 x 712).
@@ -75,7 +75,7 @@ internal enum class Mouth(@DrawableRes val res: Int = 0) {
 
 internal enum class Fx { RINGS, DOTS, SPARKLES, CONFETTI, HEARTS, ZZZ, QUESTION, SWEAT, NOTES }
 
-// little things nova does by herself when nobody needs her for a while (and the tired yawn)
+// little things otto does by himself when nobody needs him for a while (and the tired yawn)
 internal enum class Act { NONE, LOOK_AROUND, WINK, HUM, STRETCH, TILT, YAWN }
 
 internal val IDLE_ACTS = listOf(Act.LOOK_AROUND, Act.WINK, Act.HUM, Act.STRETCH, Act.TILT)
@@ -102,7 +102,7 @@ internal data class Pose(
     val lean: Float = 1f,
     val energy: Float = 1f,
     val fx: Set<Fx> = emptySet(),
-    // mouth shapes she flaps through while talking in this mood
+    // mouth shapes he flaps through while talking in this mood
     val talk: List<Mouth> = HAPPY_TALK,
 )
 

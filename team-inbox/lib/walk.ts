@@ -33,17 +33,17 @@ export type WalkView = {
   phase: WalkPhase;
   pace: Pace;
   wheelchair: boolean;
-  // nova is with this ticket right now (pickup or walking): the buttons work
+  // otto is with this ticket right now (pickup or walking): the buttons work
   canControl: boolean;
   remainingMeters: number | null;
   progress: number | null;
 };
 
 const ACTION_TEXT: Record<WalkAction, string> = {
-  wait: "asked Nova to wait",
-  resume: "asked Nova to go on",
-  slower: "asked Nova to walk slower",
-  faster: "asked Nova to walk faster",
+  wait: "asked Otto to wait",
+  resume: "asked Otto to go on",
+  slower: "asked Otto to walk slower",
+  faster: "asked Otto to walk faster",
 };
 
 export async function journeyForCode(raw: string) {
@@ -64,7 +64,7 @@ function phaseOf(j: StoredJourney): WalkPhase {
   return "coming";
 }
 
-function withNova(j: StoredJourney) {
+function withOtto(j: StoredJourney) {
   const s = currentLeg(j).status;
   return s === "pickup" || s === "walking";
 }
@@ -76,7 +76,7 @@ export async function walkView(j: StoredJourney): Promise<WalkView> {
   let progress: number | null = null;
   if (phase === "walking") {
     const [status, map] = await Promise.all([getRobotStatus(j.robot), readMap(j.robot)]);
-    // only when nova's own screen says it is walking this ticket
+    // only when otto's own screen says it is walking this ticket
     const onIt = status.online && status.screen?.ticket === j.ticket;
     if (onIt && status.screen?.progress !== undefined) progress = status.screen.progress;
     const fresh = map !== null && Date.now() - Date.parse(map.updatedAt) < WALK_FRESH_SECONDS * 1000;
@@ -88,23 +88,23 @@ export async function walkView(j: StoredJourney): Promise<WalkView> {
     phase,
     pace: j.pace,
     wheelchair: j.wheelchair,
-    canControl: withNova(j),
+    canControl: withOtto(j),
     remainingMeters,
     progress,
   };
 }
 
-function notWithNova(j: StoredJourney) {
+function notWithOtto(j: StoredJourney) {
   const phase = phaseOf(j);
-  if (phase === "coming") return new ApiError(409, "Nova is still on its way to you");
-  if (phase === "help") return new ApiError(409, "Nova has stopped. A person from the team is coming");
-  return new ApiError(409, "Nova is not walking with this ticket right now. Please ask the team");
+  if (phase === "coming") return new ApiError(409, "Otto is still on its way to you");
+  if (phase === "help") return new ApiError(409, "Otto has stopped. A person from the team is coming");
+  return new ApiError(409, "Otto is not walking with this ticket right now. Please ask the team");
 }
 
-// wait / resume / slower / faster. only while nova is with this ticket, so a tap can't steer another walk
+// wait / resume / slower / faster. only while otto is with this ticket, so a tap can't steer another walk
 export async function controlWalk(j: StoredJourney, action: unknown, origin: "staff" | "phone") {
   if (!isOneOf(WALK_ACTIONS, action)) throw new ApiError(400, `action must be one of ${WALK_ACTIONS.join(", ")}`);
-  if (!withNova(j)) throw notWithNova(j);
+  if (!withOtto(j)) throw notWithOtto(j);
   await retention();
   const at = now();
   const command: WalkControlCommand = {
@@ -137,12 +137,12 @@ export async function staffWalkControl(body: Record<string, unknown>) {
   return controlWalk(j, body.action, "staff");
 }
 
-// "Talk" on the phone: the words go to nova as an ask command. the db loses the text once nova has it,
+// "Talk" on the phone: the words go to otto as an ask command. the db loses the text once otto has it,
 // the dashboard shows only "asked something" unless the demo switch is on (then only in memory)
 export async function askFromPhone(j: StoredJourney, raw: unknown) {
   const t = text(raw, WALK_TEXT_MAX);
   if (!t) throw new ApiError(400, "Say or type something first");
-  if (!withNova(j)) throw notWithNova(j);
+  if (!withOtto(j)) throw notWithOtto(j);
   await retention();
   const at = now();
   const command: AskCommand = {
@@ -158,7 +158,7 @@ export async function askFromPhone(j: StoredJourney, raw: unknown) {
   const show = await showPatientText();
   const item: FeedItem = show
     ? { id: feedId(), robot: j.robot, journeyId: j.id, at, who: "patient", kind: "said", text: t }
-    : { id: feedId(), robot: j.robot, journeyId: j.id, at, who: "patient", kind: "intent", text: "asked Nova something on the phone" };
+    : { id: feedId(), robot: j.robot, journeyId: j.id, at, who: "patient", kind: "intent", text: "asked Otto something on the phone" };
   await saveFeed(j.robot, [item]);
   return { ok: true };
 }

@@ -28,24 +28,24 @@ android {
 
         // base url of team-inbox without a path, e.g. http://192.168.2.214:3000
         buildConfigField("String", "BACKEND_URL", "\"${local("teamInbox.url")}\"")
-        // several servers, comma separated, first = preferred (online, then the laptop). nova uses the
+        // several servers, comma separated, first = preferred (online, then the laptop). otto uses the
         // first one whose /api/health answers. empty = only teamInbox.url (docs/journeys.md 6.1)
         buildConfigField("String", "BACKEND_URLS", "\"${local("teamInbox.urls")}\"")
-        // where phones open the walk companion (<base>/walk/<code>); empty = the server nova uses
+        // where phones open the walk companion (<base>/walk/<code>); empty = the server otto uses
         buildConfigField("String", "WALK_BASE_URL", "\"${local("walk.baseUrl")}\"")
-        // radar point frame: auto (nova finds out), map or robot
+        // radar point frame: auto (otto finds out), map or robot
         buildConfigField("String", "SCAN_FRAME", "\"${local("robot.scanFrame", "auto")}\"")
         // true = debug log lines go to the server too (they always show in the staff menu)
         buildConfigField("boolean", "LOG_DEBUG", local("robot.logDebug", "false").toBoolean().toString())
         buildConfigField("String", "BACKEND_TOKEN", "\"${local("teamInbox.token")}\"")
         buildConfigField("String", "ROBOT_NAME", "\"${local("robot.name", "nova")}\"")
-        // map spot nova drives back to after a walk, used when /api/places has no reception place
+        // map spot otto drives back to after a walk, used when /api/places has no reception place
         buildConfigField("String", "HOME_SPOT", "\"${local("robot.homeSpot")}\"")
-        // languages nova calls a ticket in (BCP-47 tags, comma separated), until the patient speaks
+        // languages otto calls a ticket in (BCP-47 tags, comma separated), until the patient speaks
         buildConfigField("String", "CALL_LANGUAGES", "\"${local("robot.callLanguages", "de,en")}\"")
-        // nova turns towards the person she talks to (RobotApi focus following); false turns it off
+        // otto turns towards the person he talks to (RobotApi focus following); false turns it off
         buildConfigField("boolean", "FOCUS_FOLLOW", local("robot.focusFollow", "true").toBoolean().toString())
-        // nova deploy on the robot, gets the busy hold while nova walks (docs/deploy.md)
+        // nova deploy on the robot, gets the busy hold while otto walks (docs/deploy.md)
         buildConfigField("String", "NOVA_DEPLOY_PACKAGE", "\"${local("novaDeploy.package", "com.novadeploy.agent")}\"")
     }
 

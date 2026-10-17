@@ -10,7 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-// tells nova deploy (the updater app on the robot) to wait while nova walks, fetches or drives
+// tells nova deploy (the updater app on the robot) to wait while otto walks, fetches or drives
 // back (BusyHold). explicit broadcast, so it reaches nova deploy on android 8+; when nova deploy
 // is not installed it just goes nowhere.
 object DeployHold {
@@ -30,7 +30,7 @@ object DeployHold {
         val app = context.applicationContext
         scope.launch {
             while (isActive) {
-                runCatching { hold.next(NovaBrain.taskState(), System.currentTimeMillis()) }
+                runCatching { hold.next(OttoBrain.taskState(), System.currentTimeMillis()) }
                     .getOrNull()?.let { send(app, it) }
                 delay(CHECK_MS)
             }

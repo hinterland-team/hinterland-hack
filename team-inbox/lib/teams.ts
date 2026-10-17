@@ -65,7 +65,7 @@ function paceText(j: Pick<Journey, "pace" | "wheelchair">) {
 
 export type CardLinks = { exit?: string; done: string; callIn?: string };
 
-// "A17 is on the way" to the place nova walks to
+// "A17 is on the way" to the place otto walks to
 export function onTheWayCard(
   j: Pick<Journey, "ticket" | "pace" | "wheelchair">,
   to: Pick<Place, "name" | "room">,
@@ -78,7 +78,7 @@ export function onTheWayCard(
   return message(
     [
       title(`${j.ticket} is on the way`),
-      line("Nova is walking this patient to you. Nova only knows the ticket and the room."),
+      line("Otto is walking this patient to you. Otto only knows the ticket and the room."),
       facts([
         ["Ticket", j.ticket],
         ["To", placeLabel(to)],
@@ -103,7 +103,7 @@ export function visitorCard(
   return message(
     [
       title(`Your visitor has arrived - ticket ${j.ticket}, waiting in ${waiting.name}`),
-      line("Tap Call in when you are ready. Nova picks the ticket up in the waiting room and walks them to you."),
+      line("Tap Call in when you are ready. Otto picks the ticket up in the waiting room and walks them to you."),
       facts([
         ["Ticket", j.ticket],
         ["Waiting in", placeLabel(waiting)],

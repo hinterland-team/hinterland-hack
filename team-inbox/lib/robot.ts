@@ -41,7 +41,7 @@ export async function finishCommand(id: string) {
   return command;
 }
 
-// staff: ask = nova's ai decides what to do with it, say = word for word, go_to = drive there and stay
+// staff: ask = otto's ai decides what to do with it, say = word for word, go_to = drive there and stay
 export async function createRobotCommand(body: Record<string, unknown>): Promise<RobotCommand> {
   await retention();
   const id = crypto.randomUUID();
@@ -61,7 +61,7 @@ export async function createRobotCommand(body: Record<string, unknown>): Promise
   throw new ApiError(400, "type must be ask, say, go_to or walk_control");
 }
 
-// what a patient asked on the phone only shows with the demo switch on (and is gone once nova has it)
+// what a patient asked on the phone only shows with the demo switch on (and is gone once otto has it)
 export async function listCommands(robot: string, limit: number, showPatientWords?: boolean) {
   const show = showPatientWords ?? (await showPatientText());
   const list = await getStore().listCommands(robot, Math.min(50, Math.max(1, Math.round(limit) || 10)));
@@ -186,7 +186,7 @@ export async function postFeed(body: Record<string, unknown>) {
     const kind = r.kind;
     const t = text(r.text, 300);
     if (!isOneOf(FEED_WHO, who) || !isOneOf(FEED_KINDS, kind) || !t) {
-      throw new ApiError(400, "each item needs who (nova or patient), kind (said, intent or action) and text");
+      throw new ApiError(400, "each item needs who (otto or patient), kind (said, intent or action) and text");
     }
     if (who === "patient" && kind === "said" && !show) {
       dropped++;

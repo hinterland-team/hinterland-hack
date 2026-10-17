@@ -8,10 +8,10 @@ import { Button } from "./button";
 import { type SpotInfo, distance, meters, spotLabel } from "./map-view";
 import { useNow, usePoll } from "./use-poll";
 
-// a frame older than this means nova stopped sending (app closed, offline)
+// a frame older than this means otto stopped sending (app closed, offline)
 export const MAP_STALE_SECONDS = 30;
 
-// fast while nova sends often, slow when it is idle or away
+// fast while otto sends often, slow when it is idle or away
 export function useLiveMap() {
   const now = useNow();
   const { data, failed } = usePoll<{ map: MapState | null }>(`/api/robot/map?robot=${ROBOT}`, (d) =>
@@ -84,14 +84,14 @@ export function MapEmpty({ failed, loaded }: { failed: boolean; loaded: boolean 
         <p className="mt-1 max-w-prose text-[15px] text-muted">
           {failed
             ? "The server did not answer. Retrying."
-            : "Nova sends its position, the spots on its map and what its LiDAR sees while the Nova Clinic app runs: about once a second while it moves."}
+            : "Otto sends its position, the spots on its map and what its LiDAR sees while the Nova Clinic app runs: about once a second while it moves."}
         </p>
       </div>
     </div>
   );
 }
 
-// "what is nova busy with": the ticket on its screen during a walk
+// "what is otto busy with": the ticket on its screen during a walk
 function busyWith(robot: RobotStatus | null) {
   const s = robot?.online ? robot.screen : null;
   if (!s?.ticket) return null;
@@ -133,9 +133,9 @@ export function SpotPanel({
             {spot.place?.room && <span className="ml-2 font-normal text-muted">Room {spot.place.room}</span>}
           </p>
           <p className="text-sm text-muted">
-            {spot.place ? KIND_LABEL[spot.place.kind] : "A spot on Nova's map, not set up in Places"}
+            {spot.place ? KIND_LABEL[spot.place.kind] : "A spot on Otto's map, not set up in Places"}
             {", "}
-            <span className="tabular">{meters(away)} from Nova in a straight line</span>
+            <span className="tabular">{meters(away)} from Otto in a straight line</span>
           </p>
         </div>
         <Button kind="ghost" size="sm" onClick={onClose}>
@@ -143,20 +143,20 @@ export function SpotPanel({
         </Button>
       </div>
       {ticket && state.status !== "sent" && (
-        <p className="mt-3 text-sm font-medium text-warn">Nova is walking with ticket {ticket} right now.</p>
+        <p className="mt-3 text-sm font-medium text-warn">Otto is walking with ticket {ticket} right now.</p>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button kind="primary" size="lg" disabled={state.status === "sending" || state.status === "sent"} onClick={send}>
           <NavigationArrow size={20} weight="fill" aria-hidden />
-          {state.status === "sending" ? "Sending" : state.status === "sent" ? "Sent" : "Send Nova here"}
+          {state.status === "sending" ? "Sending" : state.status === "sent" ? "Sent" : "Send Otto here"}
         </Button>
         <p className="min-w-0 flex-1 basis-40 text-sm" role="status">
           {state.status === "sent" ? (
-            <span className="font-medium text-ok">Nova is on its way to {name}.</span>
+            <span className="font-medium text-ok">Otto is on its way to {name}.</span>
           ) : state.status === "error" ? (
             <span className="font-medium text-danger">{state.message}</span>
           ) : (
-            <span className="text-muted">Nova drives to the spot &quot;{spot.name}&quot; and stays there.</span>
+            <span className="text-muted">Otto drives to the spot &quot;{spot.name}&quot; and stays there.</span>
           )}
         </p>
       </div>

@@ -52,11 +52,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -69,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpRect
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
@@ -116,7 +124,7 @@ private fun UiState.view(): View = when {
 }
 
 // 14" 1920x1080 landscape (549x308 dp at density 3.5). laid out at 1280x720 design dp and scaled,
-// so it looks the same at any density. most of the time nova's face fills the screen. when something
+// so it looks the same at any density. most of the time otto's face fills the screen. when something
 // happens it moves to the left column (face, what was just said, status) and the task shows on the right.
 @Composable
 fun ClinicScreen(state: UiState, actions: ScreenActions = ScreenActions()) {
@@ -156,17 +164,20 @@ private val DESIGN_HEIGHT = 720.dp
 private const val INFO_MS = 8_000L
 // the welcome after someone tapped the face, a bit longer to read and choose
 private const val WELCOME_MS = 12_000L
-// nova's words stay under the big face this long after she stops talking
+// otto's words stay in the bubble this long after he stops talking
 private const val CAPTION_LINGER_MS = 4_000L
 
-// the Nova logo in the top left corner (long-press opens the staff menu), the face column starts under it
+// the Nova Clinic logo in the top left corner (long-press opens the staff menu), the face column starts under it
 private val LOGO_HEIGHT = 60.dp
 // the face alone, filling the screen (a bit of air on top for the head mirror)
 private val HeroFace = DpRect(0.dp, 24.dp, DESIGN_WIDTH, DESIGN_HEIGHT)
-// the face in the left column, under the logo and above the caption and the status line
+// the face in the left column, under the logo and above what otto says
 private val SideFace = DpRect(Space.page, Space.page + LOGO_HEIGHT, Space.page + Space.faceColumn, 432.dp)
 private val SideBelow = SideFace.bottom + Space.s
 private val InfoLeft = SideFace.right + Space.page
+// otto talking with the big face: he moves a little to the left, his words go in a bubble on the right
+private val TalkFace = DpRect(0.dp, 24.dp, 860.dp, DESIGN_HEIGHT)
+private val BUBBLE_LEFT = 770.dp
 
 @Composable
 private fun Stage(state: UiState, actions: ScreenActions, reduced: Boolean) {
@@ -189,7 +200,17 @@ private fun Stage(state: UiState, actions: ScreenActions, reduced: Boolean) {
     )
     // the info comes in once the face is mostly out of the way, and goes first on the way back
     val reveal = ((t - 0.5f) / 0.5f).coerceIn(0f, 1f)
-    val face = lerp(HeroFace, SideFace, t)
+
+    // 0 = quiet, 1 = otto talks: face a bit to the left, his words in the bubble on the right
+    val spoken = rememberSpoken(state)
+    var lastSpoken by remember { mutableStateOf("") }
+    LaunchedEffect(spoken) { if (spoken != null) lastSpoken = spoken }
+    val talk by animateFloatAsState(
+        if (spoken != null && !info) 1f else 0f,
+        if (reduced) snap() else tween(600, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)),
+        label = "talk",
+    )
+    val face = lerp(lerp(HeroFace, TalkFace, talk), SideFace, t)
 
     Box(
         Modifier
@@ -223,9 +244,30 @@ private fun Stage(state: UiState, actions: ScreenActions, reduced: Boolean) {
             }
         }
 
-        if (t < 1f) HeroCaption(state, Modifier.align(Alignment.BottomCenter).graphicsLayer { alpha = 1f - t })
+        // the bubble comes in once the face has made room, and goes first
+        val bubble = ((talk - 0.35f) / 0.65f).coerceIn(0f, 1f) * (1f - t)
+        if (bubble > 0f) {
+            Box(
+                Modifier
+                    .offset(BUBBLE_LEFT, 0.dp)
+                    .size(DESIGN_WIDTH - BUBBLE_LEFT - Space.page, DESIGN_HEIGHT)
+                    .padding(bottom = 64.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                SpeechBubble(
+                    lastSpoken,
+                    Modifier.graphicsLayer {
+                        alpha = bubble
+                        translationX = (1f - bubble) * 48.dp.toPx()
+                        scaleX = 0.94f + 0.06f * bubble
+                        scaleY = 0.94f + 0.06f * bubble
+                        transformOrigin = TransformOrigin(0f, 0.62f)
+                    },
+                )
+            }
+        }
 
-        // tap the big face to see what nova can do, tap the small one to get the big face back
+        // tap the big face to see what otto can do, tap the small one to get the big face back
         Box(
             Modifier
                 .offset(face.left, face.top)
@@ -268,10 +310,12 @@ private fun InfoContent(state: UiState, actions: ScreenActions, reduced: Boolean
     }
 }
 
-// ---- under the big face: nova's words while she talks ----
+// ---- next to the big face: otto's words in a speech bubble ----
 
+// otto's line while he talks and a few seconds after, null = nothing to show.
+// the patient's words stay off the screen; otto's own lines are shown.
 @Composable
-private fun HeroCaption(state: UiState, modifier: Modifier) {
+private fun rememberSpoken(state: UiState): String? {
     var recent by remember { mutableStateOf(false) }
     LaunchedEffect(state.speaking) {
         if (state.speaking) {
@@ -281,42 +325,57 @@ private fun HeroCaption(state: UiState, modifier: Modifier) {
             recent = false
         }
     }
-    // the patient's words stay off the screen; nova's own lines are shown
-    val line = state.subtitle.takeIf { recent && it.isNotBlank() && !state.subtitleFromUser }
-    var last by remember { mutableStateOf("") }
-    LaunchedEffect(line) { if (line != null) last = line }
-    AnimatedVisibility(
-        visible = line != null,
-        enter = fadeIn(tween(250)),
-        exit = fadeOut(tween(400)),
-        modifier = modifier.padding(bottom = Space.m),
+    return state.subtitle.takeIf { recent && it.isNotBlank() && !state.subtitleFromUser }
+}
+
+private val TAIL = 30.dp
+
+@Composable
+private fun SpeechBubble(line: String, modifier: Modifier) {
+    val shape = BubbleShape(with(LocalDensity.current) { TAIL.toPx() }, with(LocalDensity.current) { Space.radius.toPx() })
+    // long lines get smaller, and only the newest words when even that is too much
+    val shown = if (line.length > 200) "…" + line.takeLast(200).substringAfter(' ') else line
+    val size = when {
+        shown.length <= 60 -> 42.sp
+        shown.length <= 120 -> 36.sp
+        else -> 30.sp
+    }
+    Column(
+        modifier
+            .fillMaxWidth()
+            .shadow(14.dp, shape, ambientColor = Nova.Blue.copy(alpha = 0.18f), spotColor = Nova.Blue.copy(alpha = 0.18f))
+            .clip(shape)
+            .background(Nova.Card)
+            .border(2.dp, Nova.Line, shape)
+            .padding(start = TAIL + Space.l, end = Space.l, top = Space.m, bottom = Space.l),
     ) {
-        Box(
-            Modifier
-                .width(880.dp)
-                .clip(RoundedCornerShape(Space.radius))
-                .background(Nova.Card.copy(alpha = 0.92f))
-                .border(1.5.dp, Nova.Line, RoundedCornerShape(Space.radius))
-                .padding(horizontal = Space.l, vertical = Space.m),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                line ?: last,
-                style = text(Type.bodyLarge, FontWeight.Medium, Nova.Ink),
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text("OTTO", style = text(Type.label, FontWeight.Bold, Nova.Blue, spacing = 2.5.sp))
+        Spacer(Modifier.height(Space.xs))
+        Text(shown, style = text(size, FontWeight.Medium, Nova.Ink, lineHeight = size * 1.25f), maxLines = 7, overflow = TextOverflow.Ellipsis)
     }
 }
 
-// ---- left column under the small face: what nova says ----
+// a rounded card with a tail on the left, pointing at otto's mouth
+private class BubbleShape(private val tail: Float, private val radius: Float) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        val card = Path().apply { addRoundRect(RoundRect(tail, 0f, size.width, size.height, CornerRadius(radius))) }
+        val y = size.height * 0.62f
+        val point = Path().apply {
+            moveTo(tail + radius * 0.2f, y - tail * 0.75f)
+            lineTo(0f, y + tail * 0.45f)
+            lineTo(tail + radius * 0.2f, y + tail * 0.2f)
+            close()
+        }
+        return Outline.Generic(Path.combine(PathOperation.Union, card, point))
+    }
+}
 
-// what nova just said, big, always the same height. connection and battery are in the staff menu.
+// ---- left column under the small face: what otto says ----
+
+// what otto just said, big, always the same height. connection and battery are in the staff menu.
 @Composable
 private fun Caption(state: UiState) {
-    // the patient's words stay off the screen; nova's own lines are shown
+    // the patient's words stay off the screen; otto's own lines are shown
     val fromUser = state.subtitleFromUser
     Column(
         Modifier
@@ -327,7 +386,7 @@ private fun Caption(state: UiState) {
             .border(1.5.dp, Nova.Line, RoundedCornerShape(Space.radius))
             .padding(horizontal = Space.m, vertical = 18.dp),
     ) {
-        Text("NOVA", style = text(Type.label, FontWeight.Bold, Nova.Blue, spacing = 2.5.sp))
+        Text("OTTO", style = text(Type.label, FontWeight.Bold, Nova.Blue, spacing = 2.5.sp))
         Spacer(Modifier.height(Space.xs))
         Text(
             when {
@@ -344,7 +403,7 @@ private fun Caption(state: UiState) {
 
 private val CAPTION_HEIGHT = DESIGN_HEIGHT - Space.page - SideBelow
 
-// ---- idle: the welcome, or what nova is busy with ----
+// ---- idle: the welcome, or what otto is busy with ----
 
 @Composable
 private fun IdleContent(state: UiState, actions: ScreenActions) {
@@ -360,7 +419,7 @@ private fun IdleContent(state: UiState, actions: ScreenActions) {
         RobotState.CHARGING -> Message("I'm charging", "Just talk to me if you need me.", { IconBadge(GlyphKind.PLUG, Nova.Teal, Nova.TealSoft, pulse = true) })
         RobotState.ERROR -> Message("One moment, please", "The desk will help you.", { IconBadge(GlyphKind.PERSON, Nova.Amber, Nova.AmberSoft) })
         else -> Column(Modifier.fillMaxSize()) {
-            Headline("Hello! I'm Nova")
+            Headline("Hello! I'm Otto")
             Spacer(Modifier.height(Space.xs))
             Say("I walk with you to your room.")
             Spacer(Modifier.weight(1f))
@@ -380,7 +439,7 @@ private fun IdleContent(state: UiState, actions: ScreenActions) {
     }
 }
 
-// ---- out of service: nova can't drive (no chassis rights, emergency stop, the system took over) ----
+// ---- out of service: otto can't drive (no chassis rights, emergency stop, the system took over) ----
 
 @Composable
 private fun OutOfServiceContent(state: UiState) {
@@ -389,7 +448,7 @@ private fun OutOfServiceContent(state: UiState) {
         issue.title, "The desk will help you.",
         { IconBadge(GlyphKind.PLUG, Nova.Amber, Nova.AmberSoft) },
     ) {
-        // for the staff: how to get nova going again
+        // for the staff: how to get otto going again
         Text(issue.hint, style = text(Type.caption, FontWeight.Normal, Nova.InkFaint), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

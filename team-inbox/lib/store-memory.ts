@@ -166,7 +166,7 @@ export const memoryStore: Store = {
     if (!c) return null;
     c.deliveredAt = now;
     const out = copy(c);
-    // what a patient typed on the phone stays only until nova has it
+    // what a patient typed on the phone stays only until otto has it
     if (c.type === "ask" && c.origin === "phone") c.text = "";
     return out;
   },

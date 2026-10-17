@@ -1,7 +1,7 @@
 package com.hinterland.clinic
 
-// what nova does next, as a plain function of what she knows right now (Brain.decide).
-// no android and no sdk in here, so the priorities are unit tested on the jvm. NovaBrain runs it.
+// what otto does next, as a plain function of what he knows right now (Brain.decide).
+// no android and no sdk in here, so the priorities are unit tested on the jvm. OttoBrain runs it.
 
 // wire = value for the heartbeat (docs/api.md), label = on-screen english
 enum class RobotState(val wire: String, val label: String) {
@@ -40,23 +40,23 @@ data class Snapshot(
     val talk: TalkLevel = TalkLevel.NONE,
     // pending commands from the backend, oldest first
     val commands: List<RobotCommand> = emptyList(),
-    // commands the person in front of nova asked for (GUIDE_TO_PLACE, self check-in): no waiting, no excuse
+    // commands the person in front of otto asked for (GUIDE_TO_PLACE, self check-in): no waiting, no excuse
     val ownCommandIds: Set<String> = emptySet(),
-    // since when nova waits for the conversation to end before the next command
+    // since when otto waits for the conversation to end before the next command
     val waitingSince: Long? = null,
     val visitor: Visitor? = null,
     val lastGreetAt: Long = 0,
     val lastTalkAt: Long = 0,
-    // person id -> last time nova greeted or talked with them
+    // person id -> last time otto greeted or talked with them
     val engaged: Map<Int, Long> = emptyMap(),
     val battery: Int? = null,
     // the battery says it is charging
     val charging: Boolean = false,
-    // nova drove onto the charger herself
-    val dockedByNova: Boolean = false,
+    // otto drove onto the charger himself
+    val dockedByOtto: Boolean = false,
     // null = not known yet
     val atHome: Boolean? = null,
-    // spot the team sent nova to with go_to; she stays there
+    // spot the team sent otto to with go_to; he stays there
     val parkedAt: String? = null,
     // last time something happened (talk or a task)
     val quietSince: Long = 0,
@@ -70,9 +70,9 @@ data class Snapshot(
 sealed interface Plan {
     // urgent help was called: stay put and keep talking
     data object StayWithPerson : Plan
-    // a command is waiting until the person talking to nova is done (at most QUIET_WAIT_MS)
+    // a command is waiting until the person talking to otto is done (at most QUIET_WAIT_MS)
     data class WaitForQuiet(val command: RobotCommand) : Plan
-    // excuse = say sorry to the person talking first, nova has to go
+    // excuse = say sorry to the person talking first, otto has to go
     data class RunCommand(val command: RobotCommand, val excuse: Boolean) : Plan
     data object Talk : Plan
     data class Greet(val visitorId: Int) : Plan
@@ -108,7 +108,7 @@ object Brain {
         // 1. someone needs urgent help: stay, keep talking, start nothing else
         if (s.helpActive) return Plan.StayWithPerson
 
-        // 2. the person in front asked nova to walk them somewhere: go now
+        // 2. the person in front asked otto to walk them somewhere: go now
         s.commands.firstOrNull { it.id in s.ownCommandIds }?.let { return Plan.RunCommand(it, excuse = false) }
 
         // 3. the team wants something. a patient talking right now gets up to 20 s first
@@ -127,11 +127,11 @@ object Brain {
         if (visitor != null) return Plan.Greet(visitor.id)
 
         // 5. battery
-        if (s.charging || s.dockedByNova) {
+        if (s.charging || s.dockedByOtto) {
             val full = s.battery != null && s.battery >= CHARGED_BATTERY
             val retry = s.now - s.leaveFailedAt >= RETRY_LEAVE_MS
-            // only leave a charger nova drove to herself; if the team docked her, she stays
-            return if (s.dockedByNova && full && s.robotReady && retry) Plan.LeaveCharger else Plan.Charge
+            // only leave a charger otto drove to himself; if the team docked him, he stays
+            return if (s.dockedByOtto && full && s.robotReady && retry) Plan.LeaveCharger else Plan.Charge
         }
         if (needsCharge(s)) return Plan.GoCharge
 
@@ -160,7 +160,7 @@ object Brain {
     fun greetable(s: Snapshot): Visitor? {
         val v = s.visitor ?: return null
         if (v.id < 0 || !v.withFace || v.distance <= 0.0 || v.distance > GREET_RANGE_M) return null
-        // not at a room's door after a walk, only at home or where the team parked her
+        // not at a room's door after a walk, only at home or where the team parked him
         if (s.atHome == false && s.parkedAt == null) return null
         if (s.now - maxOf(s.lastGreetAt, s.lastTalkAt) < GREET_COOLDOWN_MS) return null
         val seen = s.engaged[v.id] ?: return v

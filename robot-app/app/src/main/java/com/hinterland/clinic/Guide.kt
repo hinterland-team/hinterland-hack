@@ -11,7 +11,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 
-// someone asked nova directly (GUIDE_TO_PLACE, CHECK_IN_FOR, the self check-in screen): the person is
+// someone asked otto directly (GUIDE_TO_PLACE, CHECK_IN_FOR, the self check-in screen): the person is
 // right here, so there is no pickup. paceChosen = they picked the pace on the screen already.
 data class OwnRequest(val paceChosen: Boolean = false, val sample: String? = null)
 
@@ -51,7 +51,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     @Volatile var phase: GuidePhase = GuidePhase.PICKUP
         private set
 
-    // the map spot nova drives to right now (live map), null while standing
+    // the map spot otto drives to right now (live map), null while standing
     @Volatile var targetSpot: String? = null
         private set
 
@@ -84,7 +84,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         if (text.isNotBlank()) sample = text
     }
 
-    // true when the ticket was the one nova calls
+    // true when the ticket was the one otto calls
     fun confirm(spokenTicket: String?, how: String): Boolean {
         if (spokenTicket != null && !Tickets.same(spokenTicket, ticket)) return false
         return confirmed.complete(how) || confirmed.isCompleted
@@ -186,17 +186,17 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
 
     private suspend fun pickup(): Boolean {
         val at = fromName.ifBlank { "the pickup point" }
-        NovaBrain.activity(RobotState.FETCHING, "Picking up ${ticketOr()} at $at")
+        OttoBrain.activity(RobotState.FETCHING, "Picking up ${ticketOr()} at $at")
         if (own != null) {
-            patch(LegStatus.PICKUP, JourneyEvent.PICKUP_STARTED, "Patient asked Nova directly")
-            patch(null, JourneyEvent.PATIENT_CONFIRMED, "Patient is with Nova")
+            patch(LegStatus.PICKUP, JourneyEvent.PICKUP_STARTED, "Patient asked Otto directly")
+            patch(null, JourneyEvent.PATIENT_CONFIRMED, "Patient is with Otto")
             return true
         }
         val fromSpot = cmd.from?.spot?.trim().orEmpty()
         val there = fromSpot.isEmpty() || Names.same(Robot.position, fromSpot) || Robot.isAt(fromSpot, 1.0) == true
         patch(
             LegStatus.PICKUP, JourneyEvent.PICKUP_STARTED,
-            if (there) "Nova is waiting at $at" else "Nova is on the way to $at",
+            if (there) "Otto is waiting at $at" else "Otto is on the way to $at",
         )
         if (!there) {
             setPhase(GuidePhase.TO_PICKUP)
@@ -206,12 +206,12 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                 return false
             }
             if (o is NavOutcome.Failed) {
-                if (NovaBrain.helpActive()) return end(GuideOutcome.STOPPED)
+                if (OttoBrain.helpActive()) return end(GuideOutcome.STOPPED)
                 return failNav(o.why, "the pickup point")
             }
         }
         setPhase(GuidePhase.PICKUP)
-        NovaBrain.activity(RobotState.FETCHING, "Waiting for ${ticketOr()} at $at")
+        OttoBrain.activity(RobotState.FETCHING, "Waiting for ${ticketOr()} at $at")
         callTicket(first = true)
         val timeline = PickupTimeline()
         val startedAt = now()
@@ -226,7 +226,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                 PickupStep.REMIND -> callTicket(first = false)
                 PickupStep.TIMEOUT -> {
                     patch(LegStatus.FAILED, JourneyEvent.FAILED, "Nobody came")
-                    Clinic.feed.novaDid(now(), "Nobody came for ticket $ticket")
+                    Clinic.feed.ottoDid(now(), "Nobody came for ticket $ticket")
                     RobotLog.i(LogSource.BRAIN, "Nobody came for ${ticketOr()} at $at")
                     setPhase(GuidePhase.NOBODY_CAME)
                     Clinic.flash(Mood.SORRY, 4_000)
@@ -248,10 +248,10 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     private suspend fun callTicket(first: Boolean) {
         Clinic.speak(
             if (first) {
-                "Call out ticket $ticket so the patient in the waiting area hears it, and ask them to please come to Nova. " +
+                "Call out ticket $ticket so the patient in the waiting area hears it, and ask them to please come to Otto. " +
                     "Just that, very short."
             } else {
-                "Call ticket $ticket once more, friendly and short: they should please come to Nova."
+                "Call ticket $ticket once more, friendly and short: they should please come to Otto."
             },
             callLang,
             "Ticket $ticket, please come to me.",
@@ -273,8 +273,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     private suspend fun walk(scope: CoroutineScope): GuideOutcome {
         patch(LegStatus.WALKING, JourneyEvent.WALKING, "Walking at ${pace.label.lowercase()}")
         setPhase(GuidePhase.WALKING)
-        NovaBrain.activity(RobotState.WALKING, Brain.guideGoal(ticket, destination))
-        Clinic.feed.novaDid(now(), "Walking ticket $ticket to $destination")
+        OttoBrain.activity(RobotState.WALKING, Brain.guideGoal(ticket, destination))
+        Clinic.feed.ottoDid(now(), "Walking ticket $ticket to $destination")
 
         mapPlaces = Robot.mapPlaces()
         dest = WalkMath.find(to.spot, mapPlaces)?.point
@@ -309,7 +309,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                 val o = Robot.goTo(
                     spot = target,
                     speed = PaceTable.speed(pace),
-                    stopWhen = { NovaBrain.helpActive() || cancelled },
+                    stopWhen = { OttoBrain.helpActive() || cancelled },
                     interrupt = { pauseWanted || wantedPace != null || schedule.due(now()) != null },
                     onTick = { blocked ->
                         val t = now()
@@ -343,7 +343,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                     }
                     is NavOutcome.Failed -> when {
                         cancelled -> return cancelledNow()
-                        NovaBrain.helpActive() -> {
+                        OttoBrain.helpActive() -> {
                             patch(LegStatus.FAILED, JourneyEvent.FAILED, "Stopped: urgent help was called")
                             return result(GuideOutcome.STOPPED)
                         }
@@ -397,8 +397,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
 
     private suspend fun takeDetour(spot: String) {
         RobotLog.i(LogSource.NAV, "Way to ${to.spot} blocked, trying the waypoint $spot once")
-        patch(null, JourneyEvent.WALKING, "The way was blocked, Nova takes another way")
-        Clinic.feed.novaDid(now(), "The way is blocked, taking another way")
+        patch(null, JourneyEvent.WALKING, "The way was blocked, Otto takes another way")
+        Clinic.feed.ottoDid(now(), "The way is blocked, taking another way")
         Clinic.updateGuide { it.copy(detour = true) }
         Clinic.speak(
             "Tell the patient behind you kindly that this way is blocked and you will take another way. One short sentence.",
@@ -442,8 +442,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         pauseWanted = false
         resumeWanted = false
         setPhase(GuidePhase.PAUSED)
-        patch(null, JourneyEvent.WAITING_FOR_PATIENT, "Patient asked Nova to wait")
-        Clinic.feed.novaDid(now(), "Waiting until the patient is ready")
+        patch(null, JourneyEvent.WAITING_FOR_PATIENT, "Patient asked Otto to wait")
+        Clinic.feed.ottoDid(now(), "Waiting until the patient is ready")
         RobotLog.i(LogSource.BRAIN, "Paused for ${ticketOr()}")
         val until = now() + PAUSE_MAX_MS
         while (!resumeWanted && now() < until) {
@@ -466,8 +466,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     // first = null to walk on, else the end of the guide; second = how far the patient was
     private suspend fun checkBack(reason: CheckReason, watch: FollowerWatch?): Pair<GuideOutcome?, Double?> {
         setPhase(GuidePhase.CHECKING)
-        NovaBrain.activity(RobotState.WALKING, "Checking on ${ticketOr()}")
-        Clinic.feed.novaDid(
+        OttoBrain.activity(RobotState.WALKING, "Checking on ${ticketOr()}")
+        Clinic.feed.ottoDid(
             now(),
             when (reason) {
                 CheckReason.OBSTACLE -> "Checking on the patient after an obstacle"
@@ -485,7 +485,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         val samples = look()
         val ahead = if (turned) Radar.nearestAhead() else null
         val camera = CheckBack.nearest(samples)
-        // not turned = nova looks the wrong way: ask out loud instead of raising a false alarm
+        // not turned = otto looks the wrong way: ask out loud instead of raising a false alarm
         val seen = when {
             now() - presenceAt < PRESENCE_MS -> Proximity.CLOSE
             !turned -> Proximity.UNKNOWN
@@ -510,7 +510,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                 patch(
                     null, events.first(),
                     buildString {
-                        append(if (seen == Proximity.UNKNOWN) "Nova could not see behind, asked out loud" else "Patient close, all fine")
+                        append(if (seen == Proximity.UNKNOWN) "Otto could not see behind, asked out loud" else "Patient close, all fine")
                         if (answered) append(", they answered")
                     },
                 )
@@ -528,7 +528,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         }
         if (pauseWanted) return pauseHere() to distance
         setPhase(GuidePhase.WALKING)
-        NovaBrain.activity(RobotState.WALKING, Brain.guideGoal(ticket, destination))
+        OttoBrain.activity(RobotState.WALKING, Brain.guideGoal(ticket, destination))
         return null to distance
     }
 
@@ -548,7 +548,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         return out
     }
 
-    // face to face: the yes/no question, ~6 s listening, nova's answer, then on (TalkWindow).
+    // face to face: the yes/no question, ~6 s listening, otto's answer, then on (TalkWindow).
     // the screen shows the question with "All good" / "Slower" / "Wait". true = they answered by voice
     private suspend fun talkWindow(): Boolean {
         allGood = false
@@ -568,7 +568,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         while (step != TalkStep.DONE && !cancelled) {
             delay(TALK_TICK_MS)
             val decided = allGood || wantedPace != null || pauseWanted
-            val next = window.next(now(), NovaBrain.lastUserSpeechAt(), NovaBrain.aiBusy(), decided)
+            val next = window.next(now(), OttoBrain.lastUserSpeechAt(), OttoBrain.aiBusy(), decided)
             if (next == TalkStep.REPLY && step != TalkStep.REPLY) {
                 Clinic.updateGuide { g -> g.talk?.let { g.copy(talk = it.copy(stage = TalkStage.REPLYING)) } ?: g }
             }
@@ -586,7 +586,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                 else -> "no answer"
             },
         )
-        // nova's ai answers spoken replies itself; otherwise a short "let's go on" while she turns back
+        // otto's ai answers spoken replies itself; otherwise a short "let's go on" while he turns back
         if (!byVoice && wantedPace == null && !pauseWanted) {
             Clinic.speakLater("Say very briefly and warmly that you walk on now.", lang)
         }
@@ -596,10 +596,10 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
 
     private suspend fun waitForFar(events: List<String>): GuideOutcome? {
         setPhase(GuidePhase.WAITING)
-        NovaBrain.activity(RobotState.WALKING, "Waiting for ${ticketOr()}")
-        Clinic.feed.novaDid(now(), "Waiting for the patient to catch up")
+        OttoBrain.activity(RobotState.WALKING, "Waiting for ${ticketOr()}")
+        Clinic.feed.ottoDid(now(), "Waiting for the patient to catch up")
         Clinic.speak("Tell the patient behind you kindly that you will wait for them. One short sentence.", lang, "I'll wait for you.")
-        patch(null, JourneyEvent.WAITING_FOR_PATIENT, "Patient 3-6 m behind, Nova waits")
+        patch(null, JourneyEvent.WAITING_FOR_PATIENT, "Patient 3-6 m behind, Otto waits")
         val wait = FarWait(now())
         var step = FarStep.WAIT
         while (step == FarStep.WAIT) {
@@ -625,9 +625,9 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     // nobody behind: call out twice, tell the team after 30 s, give up 60 s later (LostTimeline)
     private suspend fun lost(): GuideOutcome? {
         setPhase(GuidePhase.LOOKING)
-        NovaBrain.activity(RobotState.WALKING, "Looking for ${ticketOr()}")
-        Clinic.feed.novaDid(now(), "Nobody behind Nova, calling the patient")
-        RobotLog.w(LogSource.VISION, "Nobody behind Nova, calling ${ticketOr()}")
+        OttoBrain.activity(RobotState.WALKING, "Looking for ${ticketOr()}")
+        Clinic.feed.ottoDid(now(), "Nobody behind Otto, calling the patient")
+        RobotLog.w(LogSource.VISION, "Nobody behind Otto, calling ${ticketOr()}")
         val timeline = LostTimeline()
         val startedAt = now()
         while (true) {
@@ -640,11 +640,11 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                 )
                 LostStep.REPORT -> {
                     val near = WalkMath.nearestSpot(here, mapPlaces) ?: fromName.ifBlank { null } ?: to.name
-                    patch(null, JourneyEvent.LOST_PATIENT, "No one behind Nova after calling twice")
+                    patch(null, JourneyEvent.LOST_PATIENT, "No one behind Otto after calling twice")
                     Clinic.net(quiet = true) {
                         Backend.help("Lost the patient with ticket $ticket near $near", "normal", journeyId, ticket)
                     }
-                    Clinic.feed.novaDid(now(), "Lost sight of ticket $ticket, asked the team for help")
+                    Clinic.feed.ottoDid(now(), "Lost sight of ticket $ticket, asked the team for help")
                     RobotLog.w(LogSource.BRAIN, "Lost ${ticketOr()} near $near, asked the team for help")
                     setPhase(GuidePhase.LOST)
                     Clinic.flash(Mood.SORRY, 3_000)
@@ -664,8 +664,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             val near = nearestNow()
             val found = now() - presenceAt < PRESENCE_MS || (near != null && near <= CheckBack.FAR_M)
             if (found) {
-                patch(null, JourneyEvent.CHECK_BACK, if (timeline.hasReported) "Patient found again after the help call" else "Patient came back after Nova called")
-                Clinic.feed.novaDid(now(), "Found the patient again")
+                patch(null, JourneyEvent.CHECK_BACK, if (timeline.hasReported) "Patient found again after the help call" else "Patient came back after Otto called")
+                Clinic.feed.ottoDid(now(), "Found the patient again")
                 RobotLog.i(LogSource.VISION, "Found ${ticketOr()} again")
                 setPace(pace.slower(), announce = false, detail = "Patient fell behind, pace lowered")
                 Clinic.flash(Mood.RELIEVED, 3_000)
@@ -683,8 +683,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         patch(LegStatus.ARRIVED, JourneyEvent.ARRIVED, "Arrived at $destination")
         setPhase(GuidePhase.ARRIVED)
         Clinic.updateGuide { it.copy(progress = 1f, detour = false) }
-        NovaBrain.activity(RobotState.WALKING, "Arrived with ${ticketOr()} at $destination")
-        Clinic.feed.novaDid(now(), "Arrived at $destination")
+        OttoBrain.activity(RobotState.WALKING, "Arrived with ${ticketOr()} at $destination")
+        Clinic.feed.ottoDid(now(), "Arrived at $destination")
         Clinic.flash(Mood.EXCITED, 3_000)
         when {
             isExit() -> Clinic.speak(
@@ -717,13 +717,13 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     }
 
     private suspend fun failNav(why: NavFailure, where: String): Boolean {
-        val detail = "Nova could not reach $where: ${why.screen}"
+        val detail = "Otto could not reach $where: ${why.screen}"
         patch(LegStatus.FAILED, JourneyEvent.FAILED, detail)
         Clinic.net(quiet = true) {
-            Backend.help("Nova could not walk ticket $ticket to $where (${why.screen}). Please help.", "normal", journeyId, ticket)
+            Backend.help("Otto could not walk ticket $ticket to $where (${why.screen}). Please help.", "normal", journeyId, ticket)
         }
         RobotLog.e(LogSource.NAV, "$detail, the team was called")
-        NovaBrain.failed(detail)
+        OttoBrain.failed(detail)
         Clinic.updateGuide { it.copy(phase = GuidePhase.FAILED, note = why.screen, talk = null) }
         phase = GuidePhase.FAILED
         Clinic.flash(Mood.SORRY, 4_000)
@@ -744,7 +744,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         return result(GuideOutcome.CANCELLED)
     }
 
-    // staff may cancel or close the journey while nova is on it
+    // staff may cancel or close the journey while otto is on it
     private suspend fun watchJourney() {
         while (true) {
             delay(JOURNEY_CHECK_MS)
@@ -794,21 +794,21 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         } else {
             patch(null, JourneyEvent.WALKING, "Pace set to ${p.label.lowercase()}")
         }
-        if (announce) Clinic.feed.novaDid(now(), "Walking at ${p.label.lowercase()} now")
+        if (announce) Clinic.feed.ottoDid(now(), "Walking at ${p.label.lowercase()} now")
     }
 
     private suspend fun drive(spot: String, speed: Speed?): NavOutcome {
         Clinic.setWalking(true)
         targetSpot = spot
         try {
-            return Robot.goTo(spot, speed, stopWhen = { NovaBrain.helpActive() || cancelled }, onEvent = ::onNavEvent)
+            return Robot.goTo(spot, speed, stopWhen = { OttoBrain.helpActive() || cancelled }, onEvent = ::onNavEvent)
         } finally {
             targetSpot = null
             Clinic.setWalking(false)
         }
     }
 
-    // blocked: ask people in front to let nova pass (BlockedWatch decides when)
+    // blocked: ask people in front to let otto pass (BlockedWatch decides when)
     private fun onNavEvent(ev: NavEvent) {
         Clinic.onNavEvent(ev, lang)
     }
@@ -853,7 +853,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                 withContext(NonCancellable) { Clinic.net(quiet = true) { Backend.commandDone(cmd.id) } }
                 return GuideOutcome.FAILED
             }
-            // it may have waited in nova's queue: skip it when the team closed the journey meanwhile
+            // it may have waited in otto's queue: skip it when the team closed the journey meanwhile
             if (own == null) {
                 val j = Clinic.net(quiet = true) { Backend.journey(cmd.journeyId) }.getOrNull()
                 if (j != null && JourneyStatus.closed(j.status)) {

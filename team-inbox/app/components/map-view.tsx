@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { MapState, Place, PlaceKind } from "@/lib/types";
 import { normalizeName } from "@/lib/types";
 
-// the live map: robot spots as labelled dots, nova as an arrow with its trail, lidar points,
+// the live map: robot spots as labelled dots, otto as an arrow with its trail, lidar points,
 // the patient's estimated position and the target. drawn in svg from the latest map frame
 
 export type MapTheme = "auto" | "light" | "dark";
@@ -42,7 +42,7 @@ const KIND_COLOR: Record<PlaceKind, string> = {
   exit: "var(--m-exit)",
 };
 
-// what the view has to show. the small panel follows nova during a walk (nova, target, patient,
+// what the view has to show. the small panel follows otto during a walk (otto, target, patient,
 // the last metres of the trail), otherwise and on the full map: the whole floor
 function focusPoints(map: MapState, compact: boolean) {
   const pts: { x: number; y: number }[] = [map.pose];
@@ -50,7 +50,7 @@ function focusPoints(map: MapState, compact: boolean) {
   if (map.follower) pts.push(map.follower);
   if (compact && map.target) return [...pts, ...map.trail.slice(-12)];
   pts.push(...map.places, ...map.trail);
-  // walls close to nova give the picture context, far reflections would only zoom out
+  // walls close to otto give the picture context, far reflections would only zoom out
   for (const [x, y] of map.scan) if (Math.hypot(x - map.pose.x, y - map.pose.y) <= 6) pts.push({ x, y });
   return pts;
 }
@@ -359,7 +359,7 @@ function Drawing({
   for (let x = Math.ceil(left / step) * step; x <= right; x += step) xs.push(x);
   for (let y = Math.ceil(bottom / step) * step; y <= top; y += step) ys.push(y);
 
-  const nova = { x: X(map.pose.x), y: Y(map.pose.y) };
+  const otto = { x: X(map.pose.x), y: Y(map.pose.y) };
   // the shortest turn from the last angle, so a heading of 179 -> -179 does not spin around
   let deg = (-map.pose.theta * 180) / Math.PI;
   if (lastDeg.current !== null) deg = lastDeg.current + ((((deg - lastDeg.current) % 360) + 540) % 360) - 180;
@@ -373,7 +373,7 @@ function Drawing({
   // labels that would cover another label are left out (the dot stays and can still be picked).
   // the picked one and the target go first, then places set up in the dashboard, then plain spots
   const boxes: { x1: number; y1: number; x2: number; y2: number }[] = [
-    { x1: nova.x - 18, y1: nova.y - 30, x2: nova.x + 18, y2: nova.y + 18 },
+    { x1: otto.x - 18, y1: otto.y - 30, x2: otto.x + 18, y2: otto.y + 18 },
     // the scale bar in the bottom left corner
     { x1: 0, y1: size.h - 28, x2: 12 + step * view.s + 44, y2: size.h },
     ...spots.map((s) => ({ x1: X(s.x) - 10, y1: Y(s.y) - 10, x2: X(s.x) + 10, y2: Y(s.y) + 10 })),
@@ -430,13 +430,13 @@ function Drawing({
           />
         ))}
         {trail.length > 0 && (
-          <line x1={X(trail[trail.length - 1].x)} y1={Y(trail[trail.length - 1].y)} x2={nova.x} y2={nova.y} opacity={0.72} />
+          <line x1={X(trail[trail.length - 1].x)} y1={Y(trail[trail.length - 1].y)} x2={otto.x} y2={otto.y} opacity={0.72} />
         )}
       </g>
 
       {target && (
         <g aria-hidden>
-          <line x1={nova.x} y1={nova.y} x2={X(target.x)} y2={Y(target.y)} stroke="var(--m-target)" strokeWidth={1.5} strokeDasharray="5 6" opacity={0.6} />
+          <line x1={otto.x} y1={otto.y} x2={X(target.x)} y2={Y(target.y)} stroke="var(--m-target)" strokeWidth={1.5} strokeDasharray="5 6" opacity={0.6} />
           <circle cx={X(target.x)} cy={Y(target.y)} r={18} fill="none" stroke="var(--m-target)" strokeWidth={2} className="map-target-pulse" />
           <circle cx={X(target.x)} cy={Y(target.y)} r={12} fill="none" stroke="var(--m-target)" strokeWidth={2.5} />
           {!targetSpot && (
@@ -461,7 +461,7 @@ function Drawing({
             role="button"
             tabIndex={0}
             aria-pressed={on}
-            aria-label={`${name}${s.place?.room ? `, Room ${s.place.room}` : ""}. Select to send Nova here`}
+            aria-label={`${name}${s.place?.room ? `, Room ${s.place.room}` : ""}. Select to send Otto here`}
             onClick={(e) => {
               e.stopPropagation();
               onPick(on ? null : s.name);
@@ -495,7 +495,7 @@ function Drawing({
 
       {map.follower && (
         <g aria-hidden>
-          <line x1={nova.x} y1={nova.y} x2={X(map.follower.x)} y2={Y(map.follower.y)} stroke="var(--m-patient)" strokeWidth={1.5} strokeDasharray="2 4" />
+          <line x1={otto.x} y1={otto.y} x2={X(map.follower.x)} y2={Y(map.follower.y)} stroke="var(--m-patient)" strokeWidth={1.5} strokeDasharray="2 4" />
           <circle cx={X(map.follower.x)} cy={Y(map.follower.y)} r={9} fill="var(--m-patient)" opacity={0.18} />
           <circle cx={X(map.follower.x)} cy={Y(map.follower.y)} r={5} fill="var(--m-patient)" stroke="var(--m-bg)" strokeWidth={2} />
         </g>
@@ -503,26 +503,26 @@ function Drawing({
 
       <g
         aria-hidden
-        className={glide ? "map-nova" : undefined}
-        style={{ transform: `translate(${nova.x}px, ${nova.y}px) rotate(${deg}deg)` }}
+        className={glide ? "map-otto" : undefined}
+        style={{ transform: `translate(${otto.x}px, ${otto.y}px) rotate(${deg}deg)` }}
         opacity={stale ? 0.45 : 1}
       >
-        <path d="M0 0 L40 -23 A46 46 0 0 1 40 23 Z" fill="var(--m-nova)" opacity={0.12} />
-        <circle r={14} fill="var(--m-nova)" stroke="var(--m-bg)" strokeWidth={3} />
-        <path d="M8 0 L-5 -6.5 L-2 0 L-5 6.5 Z" fill="var(--m-nova-ink)" />
+        <path d="M0 0 L40 -23 A46 46 0 0 1 40 23 Z" fill="var(--m-otto)" opacity={0.12} />
+        <circle r={14} fill="var(--m-otto)" stroke="var(--m-bg)" strokeWidth={3} />
+        <path d="M8 0 L-5 -6.5 L-2 0 L-5 6.5 Z" fill="var(--m-otto-ink)" />
       </g>
       <text
         aria-hidden
-        x={nova.x}
-        y={nova.y - 22}
+        x={otto.x}
+        y={otto.y - 22}
         textAnchor="middle"
         fontSize={font}
         fontWeight={700}
-        fill="var(--m-nova)"
+        fill="var(--m-otto)"
         className="map-label"
         opacity={stale ? 0.6 : 1}
       >
-        Nova
+        Otto
       </text>
 
       <ScaleBar step={step} s={view.s} h={size.h} compact={compact} />
@@ -552,7 +552,7 @@ export function MapLegend({ follower, target }: { follower: boolean; target: boo
   return (
     <ul className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm text-muted">
       <li className={item}>
-        <span className="size-3 rounded-full bg-st-walking" aria-hidden /> Nova and its trail
+        <span className="size-3 rounded-full bg-st-walking" aria-hidden /> Otto and its trail
       </li>
       <li className={item}>
         <span className="flex gap-0.5" aria-hidden>

@@ -5,12 +5,12 @@ import com.ainirobot.agent.base.llm.LLMConfig
 import com.ainirobot.agent.base.llm.LLMMessage
 import com.ainirobot.agent.base.llm.Role
 
-// no phrase lists here: sentences nova starts by itself are written by the llm in the patient's language
+// no phrase lists here: sentences otto starts by itself are written by the llm in the patient's language
 object Voice {
 
     private const val SYSTEM =
-        "You are Nova, the friendly guide robot of a doctor's practice. You walk patients to the room the team chose, " +
-            "at their pace. Write exactly what Nova says out loud right now: one or two short, warm sentences of plain spoken text. " +
+        "You are Otto, the friendly guide robot of a doctor's practice. You walk patients to the room the team chose, " +
+            "at their pace. Write exactly what Otto says out loud right now: one or two short, warm sentences of plain spoken text. " +
             "No lists, no emojis, no quotation marks, no stage directions. " +
             "Never say or ask for a person's name: a patient is only a ticket number. " +
             "Never give medical advice and never talk about symptoms."
@@ -26,7 +26,7 @@ object Voice {
     suspend fun speak(task: String, lang: Lang): Boolean {
         val messages = listOf(
             LLMMessage(Role.SYSTEM, SYSTEM),
-            LLMMessage(Role.USER, "${lang.instruction()}\nWhat Nova has to say: $task"),
+            LLMMessage(Role.USER, "${lang.instruction()}\nWhat Otto has to say: $task"),
         )
         repeat(2) {
             val ok = runCatching {

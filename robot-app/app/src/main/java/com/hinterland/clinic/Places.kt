@@ -21,10 +21,10 @@ data class Place(
     val active: Boolean = true,
     val selfCheckIn: Boolean = false,
     val waitingPlaceId: String? = null,
-    // optional waypoint nova tries once when the way to this place is blocked (docs/journeys.md 6.6)
+    // optional waypoint otto tries once when the way to this place is blocked (docs/journeys.md 6.6)
     val viaSpot: String? = null,
 ) {
-    // what nova calls it: "Room B204" when it has a room number, else its name
+    // what otto calls it: "Room B204" when it has a room number, else its name
     val label: String get() = room?.let { "Room $it" } ?: name
 }
 
@@ -44,7 +44,7 @@ object Places {
     fun reception(places: List<Place>): Place? =
         places.firstOrNull { it.active && it.kind == PlaceKind.RECEPTION && it.spot.isNotBlank() }
 
-    // where nova waits between guides: the reception place, else robot.homeSpot from the build
+    // where otto waits between guides: the reception place, else robot.homeSpot from the build
     fun homeSpot(places: List<Place>, fallback: String): String =
         reception(places)?.spot?.trim()?.takeIf { it.isNotEmpty() } ?: fallback.trim()
 

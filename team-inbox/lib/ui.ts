@@ -80,7 +80,7 @@ export function stageOf(j: JourneyWithQueue, now: number): Stage {
       ? `${ordinal(j.queuePosition)} in line${j.estimatedWaitMinutes ? `, about ${j.estimatedWaitMinutes} min` : ", next"}`
       : "";
   if (leg.status === "failed") {
-    const why = lastEventAt(j, "failed")?.detail ?? lastEventAt(j, "lost_patient")?.detail ?? "Nova could not finish the walk";
+    const why = lastEventAt(j, "failed")?.detail ?? lastEventAt(j, "lost_patient")?.detail ?? "Otto could not finish the walk";
     return { key: "failed", title: "Needs you", detail: why, step: leg.startedAt ? 1 : 0 };
   }
   if (j.status === "with_staff") {
@@ -102,7 +102,7 @@ export function stageOf(j: JourneyWithQueue, now: number): Stage {
   const from = leg.fromName ?? "the pickup point";
   return {
     key: "pickup",
-    title: leg.status === "pickup" ? "Nova is picking up" : "Nova is coming",
+    title: leg.status === "pickup" ? "Otto is picking up" : "Otto is coming",
     detail: leg.status === "pickup" ? `at ${from}, going to ${leg.toName}` : `to ${from}, then ${leg.toName}`,
     step: 0,
   };

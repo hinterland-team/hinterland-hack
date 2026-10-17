@@ -16,7 +16,7 @@ export function RoomPicker() {
       <div className="max-w-3xl">
         <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Rooms</h1>
         <p className="mt-1 max-w-prose text-[15px] text-muted">
-          Pick your room. The room view shows who Nova brings to you, who waits, and has the buttons for the next room and the
+          Pick your room. The room view shows who Otto brings to you, who waits, and has the buttons for the next room and the
           exit. Open it on your phone and keep it open.
         </p>
 

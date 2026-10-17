@@ -3,14 +3,14 @@ package com.hinterland.clinic
 import java.util.Locale
 import java.util.concurrent.locks.ReentrantLock
 
-// the radar while nova guides someone (docs/journeys.md 6.3): turns the radar data on, finds out the
+// the radar while otto guides someone (docs/journeys.md 6.3): turns the radar data on, finds out the
 // frame and which angles the scan covers (logged on the first data), and tracks the follower behind.
 // the maths is in Lidar.kt (unit tested); this object only wires it to RobotApi data.
 object Radar {
 
     // the robot may send many frames a second; a few are plenty
     private const val MIN_FRAME_MS = 150L
-    // frames summed before nova decides whether she sees her back
+    // frames summed before otto decides whether someone is behind him
     private const val COVERAGE_FRAMES = 15
     private const val FRESH_MS = 1_000L
     private const val MAP_SCAN_FRESH_MS = 2_000L
@@ -48,7 +48,7 @@ object Radar {
     @Volatile var follower: FollowerFix? = null
         private set
     // for the staff menu
-    @Volatile var summary: String = "Off. Radar runs while Nova guides someone."
+    @Volatile var summary: String = "Off. Radar runs while Otto guides someone."
         private set
 
     fun start() {
@@ -168,7 +168,7 @@ object Radar {
     fun followerDistance(now: Long = System.currentTimeMillis()): Double? =
         follower?.takeIf { now - it.at <= FRESH_MS }?.distance
 
-    // nearest person-like shape in front (after nova turned around), null when none or no fresh data
+    // nearest person-like shape in front (after otto turned around), null when none or no fresh data
     fun nearestAhead(now: Long = System.currentTimeMillis()): Double? {
         val (at, pts) = robotScan ?: return null
         if (now - at > FRESH_MS) return null

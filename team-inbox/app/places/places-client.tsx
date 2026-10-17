@@ -27,8 +27,8 @@ const INPUT =
 const KIND_HELP: Record<PlaceKind, string> = {
   room: "A doctor's or treatment room. Staff send patients here.",
   waiting: "Patients sit here until the room calls them in.",
-  reception: "Where Nova picks patients up and waits. Only one.",
-  exit: "Where Nova says goodbye. Only one.",
+  reception: "Where Otto picks patients up and waits. Only one.",
+  exit: "Where Otto says goodbye. Only one.",
   other: "Lab, X-ray, pharmacy, toilets, anything else.",
 };
 
@@ -72,8 +72,8 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
   const rooms = places?.filter((p) => p.kind === "room").length ?? 0;
   const anyRoom = places?.some((p) => p.kind === "room" || p.kind === "other") ?? false;
   const steps = [
-    { done: has("reception"), label: "Reception", note: "where Nova picks patients up", kind: "reception" as const },
-    { done: has("exit"), label: "Exit", note: "where Nova says goodbye", kind: "exit" as const },
+    { done: has("reception"), label: "Reception", note: "where Otto picks patients up", kind: "reception" as const },
+    { done: has("exit"), label: "Exit", note: "where Otto says goodbye", kind: "exit" as const },
     {
       done: anyRoom,
       label: rooms > 0 ? `${rooms} ${rooms === 1 ? "room" : "rooms"}` : "Rooms",
@@ -89,7 +89,7 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
           <div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Places</h1>
             <p className="mt-1 max-w-prose text-[15px] text-muted">
-              Where Nova can walk. The map spot must match the spot name on Nova&apos;s map exactly.
+              Where Otto can walk. The map spot must match the spot name on Otto&apos;s map exactly.
             </p>
           </div>
           {!adding && (
@@ -156,7 +156,7 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
           !adding && (
             <div className="mt-6 rounded-2xl border border-dashed border-line-strong p-6 text-[15px] text-muted">
               No places yet. Start with the reception, then the exit and your rooms. A waiting room is optional: rooms that have
-              one let Nova seat the patient there until the doctor calls them in.
+              one let Otto seat the patient there until the doctor calls them in.
             </div>
           )
         ) : (
@@ -224,7 +224,7 @@ function PlaceRow({
   const teams = place.teamsWebhookUrl ? "Own Teams channel" : practiceChannel ? "Practice Teams channel" : "No Teams channel";
   const chips = [
     place.public ? "Patients can ask for it" : null,
-    place.selfCheckIn ? "Self check-in on Nova" : null,
+    place.selfCheckIn ? "Self check-in on Otto" : null,
     waiting ? `Waits in ${waiting.name}` : null,
     place.kind === "room" || place.kind === "other" ? `${place.avgMinutes} min per patient` : null,
     place.kind !== "exit" ? teams : null,
@@ -291,7 +291,7 @@ function PlaceRow({
       {confirm && (
         <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-danger-soft p-3">
           <span className="flex-1 basis-48 text-[15px] font-medium text-danger">
-            Delete {place.name}? Nova can&apos;t walk there any more.
+            Delete {place.name}? Otto can&apos;t walk there any more.
           </span>
           <Button kind="danger" onClick={remove}>
             Yes, delete
@@ -446,7 +446,7 @@ function PlaceForm({
 
       <div className="mt-4">
         <label htmlFor={`spot-${formId}`} className="text-sm font-semibold">
-          Map spot on Nova
+          Map spot on Otto
         </label>
         <input
           id={`spot-${formId}`}
@@ -459,7 +459,7 @@ function PlaceForm({
           aria-describedby={`spot-help-${formId}`}
         />
         <p id={`spot-help-${formId}`} className="mt-1 text-sm text-muted">
-          Exactly as the spot is called on Nova&apos;s map. Empty means the same as the name.
+          Exactly as the spot is called on Otto&apos;s map. Empty means the same as the name.
         </p>
       </div>
 
@@ -477,7 +477,7 @@ function PlaceForm({
           aria-describedby={`via-help-${formId}`}
         />
         <p id={`via-help-${formId}`} className="mt-1 text-sm text-muted">
-          A spot on Nova&apos;s map for another way there. When the normal way stays blocked, Nova tries it once before it
+          A spot on Otto&apos;s map for another way there. When the normal way stays blocked, Otto tries it once before it
           calls the team.
         </p>
       </div>
@@ -528,7 +528,7 @@ function PlaceForm({
             value={waitingId}
             onChange={(e) => setWaitingId(e.target.value)}
           >
-            <option value="">None, Nova walks straight in</option>
+            <option value="">None, Otto walks straight in</option>
             {waitingRooms.map((w) => (
               <option key={w.id} value={w.id}>
                 {w.name}
@@ -547,8 +547,8 @@ function PlaceForm({
             id={`self-${formId}`}
             checked={selfCheckIn}
             onChange={setSelfCheckIn}
-            label="Patients can check in for it on Nova"
-            description="Shown as a tile on the robot. Nova walks them to the waiting room and the room gets a Teams card."
+            label="Patients can check in for it on Otto"
+            description="Shown as a tile on the robot. Otto walks them to the waiting room and the room gets a Teams card."
           />
         )}
         <Switch
@@ -556,7 +556,7 @@ function PlaceForm({
           checked={alwaysPublic || isPublic}
           disabled={alwaysPublic}
           onChange={setPublic}
-          label="Patients can ask Nova for it"
+          label="Patients can ask Otto for it"
           description={
             alwaysPublic
               ? "Always on for the reception and the exit."
