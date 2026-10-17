@@ -175,9 +175,10 @@ private val HeroFace = DpRect(0.dp, 24.dp, DESIGN_WIDTH, DESIGN_HEIGHT)
 private val SideFace = DpRect(Space.page, Space.page + LOGO_HEIGHT, Space.page + Space.faceColumn, 432.dp)
 private val SideBelow = SideFace.bottom + Space.s
 private val InfoLeft = SideFace.right + Space.page
-// otto talking with the big face: he moves a little to the left, his words go in a bubble on the right
-private val TalkFace = DpRect(0.dp, 24.dp, 860.dp, DESIGN_HEIGHT)
-private val BUBBLE_LEFT = 770.dp
+// otto talking with the big face: he moves to the left, his words go in a bubble on the right.
+// the two never share space: even leaning in, tilting or hopping the face stays left of about 732 dp.
+private val TalkFace = DpRect(0.dp, 40.dp, 720.dp, DESIGN_HEIGHT)
+private val BUBBLE_LEFT = 752.dp
 
 @Composable
 private fun Stage(state: UiState, actions: ScreenActions, reduced: Boolean) {
@@ -244,7 +245,18 @@ private fun Stage(state: UiState, actions: ScreenActions, reduced: Boolean) {
             }
         }
 
-        // the bubble comes in once the face has made room, and goes first
+        // tap the big face to see what otto can do, tap the small one to get the big face back
+        Box(
+            Modifier
+                .offset(face.left, face.top)
+                .size(face.right - face.left, face.bottom - face.top)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { info = !info },
+        ) {
+            Mascot(state.mood(), Modifier.fillMaxSize(), talking = state.speaking)
+        }
+
+        // the bubble comes in once the face has made room, and goes first. it sits above the face,
+        // so no sparkle, ring or hop of the face ever covers a letter
         val bubble = ((talk - 0.35f) / 0.65f).coerceIn(0f, 1f) * (1f - t)
         if (bubble > 0f) {
             Box(
@@ -265,16 +277,6 @@ private fun Stage(state: UiState, actions: ScreenActions, reduced: Boolean) {
                     },
                 )
             }
-        }
-
-        // tap the big face to see what otto can do, tap the small one to get the big face back
-        Box(
-            Modifier
-                .offset(face.left, face.top)
-                .size(face.right - face.left, face.bottom - face.top)
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { info = !info },
-        ) {
-            Mascot(state.mood(), Modifier.fillMaxSize(), talking = state.speaking)
         }
 
         // on top of the face, so a long-press here never counts as a tap on the face
