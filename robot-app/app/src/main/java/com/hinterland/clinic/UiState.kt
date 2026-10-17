@@ -8,7 +8,30 @@ enum class Health { UNKNOWN, OK, DOWN }
 // what the agentos planner is doing (from OnAgentStatusChangedListener)
 enum class AgentMode { IDLE, LISTENING, THINKING }
 
-enum class Mood { IDLE, LISTENING, THINKING, SPEAKING, WALKING, HAPPY, SORRY }
+// how nova feels. talking is separate (UiState.speaking): she can talk happily, sorrily, sleepily...
+enum class Mood {
+    IDLE, LISTENING, THINKING, WALKING, HAPPY, SORRY,
+    // a big moment: arrived, "that's me"
+    EXCITED,
+    // thumbs up from the patient
+    LOVE,
+    SURPRISED,
+    // urgent help, a patient out of sight
+    CONCERNED,
+    // the robot itself is in trouble
+    CONFUSED,
+    // charging
+    SLEEPY,
+    // low battery
+    TIRED,
+    // a patient found again, the team informed
+    RELIEVED,
+    // nova greets someone walking up
+    GREETING,
+}
+
+// below this battery level nova looks tired (unless charging)
+const val LOW_BATTERY = 15
 
 // step = on-screen english for the current step, view = heartbeat screen.view
 enum class GuidePhase(val view: String) {
@@ -136,6 +159,10 @@ data class CheckInUi(
 // urgent help was called: nova stays and shows this
 data class HelpUi(val urgent: Boolean, val sent: Boolean?)
 
+// what the screen shows next to nova's face. a new key = something new happened, the face moves aside
+// and the info comes up. holds = the screen waits for a tap, so the info stays until it doesn't.
+data class Focus(val key: String, val holds: Boolean)
+
 data class UiState(
     val agent: AgentMode = AgentMode.IDLE,
     val agentNote: String? = null,
@@ -162,22 +189,49 @@ data class UiState(
     // the staff menu is open
     val staff: StaffUi? = null,
 ) {
-    // the face follows the walk: attentive while checking, concerned when someone is missing
+    // the face follows the walk: attentive while checking, worried when someone is missing.
+    // talking doesn't change the mood, the mouth moves on top of it.
     fun mood(): Mood = when {
         flash != null -> flash
-        speaking -> Mood.SPEAKING
-        help != null -> Mood.LISTENING
-        guide?.phase in setOf(GuidePhase.LOOKING, GuidePhase.LOST, GuidePhase.FAILED, GuidePhase.NOBODY_CAME) -> Mood.SORRY
+        help != null -> Mood.CONCERNED
+        guide?.phase in setOf(GuidePhase.LOOKING, GuidePhase.LOST) -> Mood.CONCERNED
+        guide?.phase in setOf(GuidePhase.FAILED, GuidePhase.NOBODY_CAME) -> Mood.SORRY
         guide?.talk != null -> Mood.LISTENING
         guide?.phase in setOf(GuidePhase.CHECKING, GuidePhase.WAITING, GuidePhase.PICKUP) -> Mood.LISTENING
         guide?.phase == GuidePhase.ARRIVED -> Mood.HAPPY
         walking -> Mood.WALKING
         working > 0 || agent == AgentMode.THINKING -> Mood.THINKING
         agent == AgentMode.LISTENING -> Mood.LISTENING
+        brain.state == RobotState.GREETING -> Mood.GREETING
+        brain.state == RobotState.ERROR -> Mood.CONFUSED
+        brain.state == RobotState.CHARGING && !speaking -> Mood.SLEEPY
+        !brain.charging && (brain.battery ?: 100) <= LOW_BATTERY -> Mood.TIRED
         else -> Mood.IDLE
     }
 
     val canSelfCheckIn get() = chassis == null && Places.selfCheckIn(places).isNotEmpty()
+
+    // null = nothing going on, the face fills the screen
+    fun focus(): Focus? {
+        if (help != null) return Focus("help", holds = true)
+        guide?.let { g ->
+            // the check-back question ("all good?") waits for an answer or a tap on Slower / Wait
+            g.talk?.let { return Focus("guide:${g.phase}:talk${it.id}", holds = true) }
+            val tap = when (g.phase) {
+                GuidePhase.PICKUP, GuidePhase.PACE, GuidePhase.PAUSED -> true
+                GuidePhase.ARRIVED -> g.feedback == null
+                else -> false
+            }
+            return Focus("guide:${g.phase}", holds = tap)
+        }
+        // out of service: shown when it starts, then the face again (a tap shows it again)
+        chassis?.let { return Focus("chassis:${it.name}", holds = false) }
+        checkIn?.let { return Focus("checkin:${it.step}", holds = it.step != CheckInStep.SENDING) }
+        return when (brain.state) {
+            RobotState.RETURNING, RobotState.CHARGING, RobotState.ERROR -> Focus("brain:${brain.state.wire}", holds = false)
+            else -> null
+        }
+    }
 
     // heartbeat `screen` for the dashboard's live mirror. ticket, never a name.
     fun mirror(): ScreenMirror {

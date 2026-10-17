@@ -96,16 +96,84 @@ class UiStateTest {
     @Test
     fun moods() {
         assertEquals(Mood.IDLE, UiState().mood())
-        assertEquals(Mood.SPEAKING, UiState(speaking = true, walking = true).mood())
+        // talking keeps the mood, only the mouth moves
+        assertEquals(Mood.WALKING, UiState(speaking = true, walking = true).mood())
+        assertEquals(Mood.IDLE, UiState(speaking = true).mood())
         assertEquals(Mood.WALKING, UiState(walking = true).mood())
         assertEquals(Mood.HAPPY, UiState(flash = Mood.HAPPY, speaking = true).mood())
         assertEquals(Mood.THINKING, UiState(working = 1).mood())
         assertEquals(Mood.LISTENING, UiState(agent = AgentMode.LISTENING).mood())
         // the face follows the walk
-        assertEquals(Mood.SORRY, UiState(guide = guide.copy(phase = GuidePhase.LOOKING), walking = true).mood())
+        assertEquals(Mood.CONCERNED, UiState(guide = guide.copy(phase = GuidePhase.LOOKING), walking = true).mood())
+        assertEquals(Mood.SORRY, UiState(guide = guide.copy(phase = GuidePhase.NOBODY_CAME)).mood())
         assertEquals(Mood.LISTENING, UiState(guide = guide.copy(phase = GuidePhase.CHECKING)).mood())
         assertEquals(Mood.HAPPY, UiState(guide = guide.copy(phase = GuidePhase.ARRIVED)).mood())
         assertEquals(Mood.WALKING, UiState(guide = guide, walking = true).mood())
-        assertEquals(Mood.LISTENING, UiState(help = HelpUi(urgent = true, sent = null)).mood())
+        assertEquals(Mood.CONCERNED, UiState(help = HelpUi(urgent = true, sent = null)).mood())
+    }
+
+    @Test
+    fun theRobotsOwnStateShowsWhenNothingElseIsGoingOn() {
+        assertEquals(Mood.GREETING, UiState(brain = BrainStatus(state = RobotState.GREETING), speaking = true).mood())
+        assertEquals(Mood.CONFUSED, UiState(brain = BrainStatus(state = RobotState.ERROR)).mood())
+        assertEquals(Mood.SLEEPY, UiState(brain = BrainStatus(state = RobotState.CHARGING, charging = true)).mood())
+        // someone talks to her while charging: she wakes up
+        assertEquals(Mood.IDLE, UiState(brain = BrainStatus(state = RobotState.CHARGING, charging = true), speaking = true).mood())
+        assertEquals(Mood.LISTENING, UiState(brain = BrainStatus(state = RobotState.CHARGING, charging = true), agent = AgentMode.LISTENING).mood())
+        assertEquals(Mood.TIRED, UiState(brain = BrainStatus(battery = LOW_BATTERY)).mood())
+        assertEquals(Mood.IDLE, UiState(brain = BrainStatus(battery = LOW_BATTERY, charging = true)).mood())
+        assertEquals(Mood.IDLE, UiState(brain = BrainStatus(battery = LOW_BATTERY + 1)).mood())
+        // a walk wins over a low battery
+        assertEquals(Mood.WALKING, UiState(brain = BrainStatus(battery = 5), walking = true).mood())
+    }
+
+    @Test
+    fun plainWaitingIsOnlyTheFace() {
+        assertNull(UiState().focus())
+        assertNull(UiState(brain = BrainStatus(state = RobotState.TALKING)).focus())
+    }
+
+    @Test
+    fun theInfoStaysWhileTheScreenWaitsForATap() {
+        for (p in listOf(GuidePhase.PICKUP, GuidePhase.PACE, GuidePhase.PAUSED, GuidePhase.ARRIVED)) {
+            assertTrue(p.name, UiState(guide = guide.copy(phase = p)).focus()!!.holds)
+        }
+        assertFalse(UiState(guide = guide.copy(phase = GuidePhase.ARRIVED, feedback = "up")).focus()!!.holds)
+        assertTrue(UiState(checkIn = CheckInUi(step = CheckInStep.WHO)).focus()!!.holds)
+        assertTrue(UiState(help = HelpUi(urgent = true, sent = null), guide = guide).focus()!!.holds)
+    }
+
+    @Test
+    fun passingMomentsShowAndThenLetTheFaceBack() {
+        for (p in listOf(GuidePhase.TO_PICKUP, GuidePhase.WALKING, GuidePhase.CHECKING, GuidePhase.LOST, GuidePhase.FAILED)) {
+            assertFalse(p.name, UiState(guide = guide.copy(phase = p)).focus()!!.holds)
+        }
+        assertFalse(UiState(checkIn = CheckInUi(step = CheckInStep.SENDING)).focus()!!.holds)
+        assertFalse(UiState(brain = BrainStatus(state = RobotState.RETURNING)).focus()!!.holds)
+    }
+
+    @Test
+    fun theWalkQuestionWaitsForAnAnswer() {
+        val asked = UiState(guide = guide.copy(phase = GuidePhase.CHECKING, talk = TalkUi("All good?", id = 1)))
+        assertTrue(asked.focus()!!.holds)
+        assertTrue(asked.focus()!!.key != UiState(guide = guide.copy(phase = GuidePhase.CHECKING)).focus()!!.key)
+        // a new question shows the info again
+        assertTrue(asked.focus()!!.key != UiState(guide = guide.copy(phase = GuidePhase.CHECKING, talk = TalkUi("All good?", id = 2))).focus()!!.key)
+        assertEquals(Mood.LISTENING, UiState(guide = guide.copy(phase = GuidePhase.WALKING, talk = TalkUi("All good?"))).mood())
+    }
+
+    @Test
+    fun outOfServiceShowsAndThenLetsTheFaceBack() {
+        assertFalse(UiState(chassis = ChassisIssue.NOT_STARTED).focus()!!.holds)
+        // help and a walk still come first, like on the screen
+        assertEquals("help", UiState(chassis = ChassisIssue.NOT_STARTED, help = HelpUi(urgent = true, sent = null)).focus()!!.key)
+    }
+
+    @Test
+    fun everyNewStepIsANewFocus() {
+        val walking = UiState(guide = guide).focus()!!.key
+        assertEquals(walking, UiState(guide = guide.copy(progress = 0.9f)).focus()!!.key)
+        assertTrue(walking != UiState(guide = guide.copy(phase = GuidePhase.CHECKING)).focus()!!.key)
+        assertTrue(UiState(checkIn = CheckInUi(step = CheckInStep.WHO)).focus()!!.key != UiState(checkIn = CheckInUi(step = CheckInStep.PACE)).focus()!!.key)
     }
 }
