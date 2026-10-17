@@ -58,6 +58,12 @@ val SCREENS: Map<String, UiState> = linkedMapOf(
         speaking = true,
         subtitle = "Good morning! I can walk you to your doctor's room, at your own pace. Just tell me your doctor's name, or tap the screen to check in.",
     ),
+    // the hardest cases for the bubble: leaning in with rings, and hopping with confetti
+    "speaking-listening" to UiState(
+        speaking = true, agent = AgentMode.LISTENING,
+        subtitle = "Of course. Dr. Blue is in Room B204, on this floor. I can walk you there at your own pace.",
+    ),
+    "speaking-excited" to UiState(speaking = true, flash = Mood.EXCITED, subtitle = "We made it! This is Room B204. Please take a seat."),
     // the welcome shows after a tap on the face
     "welcome" to UiState(places = ROOMS),
     "welcome-desk" to UiState(),
