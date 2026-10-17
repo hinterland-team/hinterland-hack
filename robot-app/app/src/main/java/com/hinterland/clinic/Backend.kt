@@ -102,7 +102,28 @@ object Backend {
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(2_000) }
             val ms = (System.nanoTime() - started) / 1_000_000
             val r = ServerList.judge(code, text) ?: HealthResult(false, ms)
-            return r.copy(ms = ms)
+            if (!r.up || token.isBlank()) return r.copy(ms = ms)
+            // it answers, but does it take our robot key? 17.10: a server with another key looked
+            // "up" and every real call got 401, so nova never tried the next one
+            return when (val key = runCatching { keyCheck(url) }.getOrNull()) {
+                401, 403 -> HealthResult(false, ms, "robot key not accepted ($key)")
+                else -> r.copy(ms = ms)
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    // GET /api/places with the bearer: the robot may read it, so 401/403 means the key is wrong
+    private fun keyCheck(url: String): Int {
+        val conn = URL(url.trimEnd('/') + "/api/places").openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 3_000
+            conn.readTimeout = 3_000
+            conn.setRequestProperty("Accept", "application/json")
+            conn.setRequestProperty("Authorization", "Bearer $token")
+            return conn.responseCode
         } finally {
             conn.disconnect()
         }
