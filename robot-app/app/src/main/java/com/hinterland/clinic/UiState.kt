@@ -96,6 +96,10 @@ data class CheckInUi(
 // urgent help was called: nova stays and shows this
 data class HelpUi(val urgent: Boolean, val sent: Boolean?)
 
+// what the screen shows next to nova's face. a new key = something new happened, the face moves aside
+// and the info comes up. holds = the screen waits for a tap, so the info stays until it doesn't.
+data class Focus(val key: String, val holds: Boolean)
+
 data class UiState(
     val agent: AgentMode = AgentMode.IDLE,
     val agentNote: String? = null,
@@ -133,6 +137,24 @@ data class UiState(
     }
 
     val canSelfCheckIn get() = Places.selfCheckIn(places).isNotEmpty()
+
+    // null = nothing going on, the face fills the screen
+    fun focus(): Focus? {
+        if (help != null) return Focus("help", holds = true)
+        guide?.let { g ->
+            val tap = when (g.phase) {
+                GuidePhase.PICKUP, GuidePhase.PACE, GuidePhase.PAUSED -> true
+                GuidePhase.ARRIVED -> g.feedback == null
+                else -> false
+            }
+            return Focus("guide:${g.phase}", holds = tap)
+        }
+        checkIn?.let { return Focus("checkin:${it.step}", holds = it.step != CheckInStep.SENDING) }
+        return when (brain.state) {
+            RobotState.RETURNING, RobotState.CHARGING, RobotState.ERROR -> Focus("brain:${brain.state.wire}", holds = false)
+            else -> null
+        }
+    }
 
     // heartbeat `screen` for the dashboard's live mirror. ticket, never a name.
     fun mirror(): ScreenMirror {

@@ -108,4 +108,37 @@ class UiStateTest {
         assertEquals(Mood.WALKING, UiState(guide = guide, walking = true).mood())
         assertEquals(Mood.LISTENING, UiState(help = HelpUi(urgent = true, sent = null)).mood())
     }
+
+    @Test
+    fun plainWaitingIsOnlyTheFace() {
+        assertNull(UiState().focus())
+        assertNull(UiState(brain = BrainStatus(state = RobotState.TALKING)).focus())
+    }
+
+    @Test
+    fun theInfoStaysWhileTheScreenWaitsForATap() {
+        for (p in listOf(GuidePhase.PICKUP, GuidePhase.PACE, GuidePhase.PAUSED, GuidePhase.ARRIVED)) {
+            assertTrue(p.name, UiState(guide = guide.copy(phase = p)).focus()!!.holds)
+        }
+        assertFalse(UiState(guide = guide.copy(phase = GuidePhase.ARRIVED, feedback = "up")).focus()!!.holds)
+        assertTrue(UiState(checkIn = CheckInUi(step = CheckInStep.WHO)).focus()!!.holds)
+        assertTrue(UiState(help = HelpUi(urgent = true, sent = null), guide = guide).focus()!!.holds)
+    }
+
+    @Test
+    fun passingMomentsShowAndThenLetTheFaceBack() {
+        for (p in listOf(GuidePhase.TO_PICKUP, GuidePhase.WALKING, GuidePhase.CHECKING, GuidePhase.LOST, GuidePhase.FAILED)) {
+            assertFalse(p.name, UiState(guide = guide.copy(phase = p)).focus()!!.holds)
+        }
+        assertFalse(UiState(checkIn = CheckInUi(step = CheckInStep.SENDING)).focus()!!.holds)
+        assertFalse(UiState(brain = BrainStatus(state = RobotState.RETURNING)).focus()!!.holds)
+    }
+
+    @Test
+    fun everyNewStepIsANewFocus() {
+        val walking = UiState(guide = guide).focus()!!.key
+        assertEquals(walking, UiState(guide = guide.copy(progress = 0.9f)).focus()!!.key)
+        assertTrue(walking != UiState(guide = guide.copy(phase = GuidePhase.CHECKING)).focus()!!.key)
+        assertTrue(UiState(checkIn = CheckInUi(step = CheckInStep.WHO)).focus()!!.key != UiState(checkIn = CheckInUi(step = CheckInStep.PACE)).focus()!!.key)
+    }
 }
