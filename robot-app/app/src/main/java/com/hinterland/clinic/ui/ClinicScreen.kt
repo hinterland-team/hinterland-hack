@@ -115,6 +115,9 @@ class ScreenActions(
     val staffTouched: () -> Unit = {},
     val recheckServers: () -> Unit = {},
     val setMode: (RobotMode) -> Unit = {},
+    // the staff menu's demo card: start / stop, Next
+    val demoStartStop: () -> Unit = {},
+    val demoNext: () -> Unit = {},
 )
 
 private enum class View { IDLE, CHECK_IN, GUIDE, HELP, OUT_OF_SERVICE }

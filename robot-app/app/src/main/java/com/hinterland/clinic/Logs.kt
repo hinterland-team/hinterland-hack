@@ -107,6 +107,47 @@ class ShipPace(private val everyMs: Long = EVERY_MS, private val maxMs: Long = M
     }
 }
 
+// one event that comes in bursts (field test b16: "being pushed" 36 times within a second after an emergency
+// stop): the first one goes to the log at once, the rest as one line with a count per everyMs. plain kotlin,
+// unit tested
+class BurstLog(private val everyMs: Long = EVERY_MS) {
+    private var loggedAt: Long? = null
+    private var held = 0
+
+    // an event at now: how many events the line written now stands for, null = held back for the next line
+    @Synchronized
+    fun note(now: Long): Int? {
+        val last = loggedAt
+        if (last == null || now - last >= everyMs) {
+            val n = held + 1
+            held = 0
+            loggedAt = now
+            return n
+        }
+        held++
+        return null
+    }
+
+    // the events held back, once everyMs are over since the last line (null = none, or not yet)
+    @Synchronized
+    fun flush(now: Long): Int? {
+        val last = loggedAt ?: return null
+        if (held == 0 || now - last < everyMs) return null
+        val n = held
+        held = 0
+        loggedAt = now
+        return n
+    }
+
+    // until the held back events may go out
+    @Synchronized
+    fun msToFlush(now: Long): Long = loggedAt?.let { (it + everyMs - now).coerceAtLeast(0) } ?: 0
+
+    companion object {
+        const val EVERY_MS = 10_000L
+    }
+}
+
 // the app's log: android logcat, the staff menu and the server
 object RobotLog {
 

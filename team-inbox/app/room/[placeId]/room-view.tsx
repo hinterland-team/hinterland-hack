@@ -4,17 +4,24 @@ import { ArrowLeft, Armchair, Footprints, UserCheck, Warning } from "@phosphor-i
 import Link from "next/link";
 import type { JourneyWithQueue, Place } from "@/lib/types";
 import { currentLeg, lineKey } from "@/lib/types";
-import { PAGE, STAGE_TONE, type Stage, placeText, stageOf } from "@/lib/ui";
+import { PAGE, STAGE_TONE, type Stage, isSimRobot, placeText, stageOf } from "@/lib/ui";
 import { Button, Dot } from "../../components/button";
 import { JourneyActions, type Run } from "../../components/journey-actions";
 import { PaceNote, StageLine, TicketBadge } from "../../components/journey-bits";
+import { ModeBlock } from "../../components/robot-mode";
+import { SimBadge } from "../../components/sim-badge";
+import { AlertsControl, useStaffAlerts } from "../../components/staff-alerts";
 import { useAction, useBoard } from "../../components/use-board";
+import { useNow } from "../../components/use-poll";
 
 type Row = { j: JourneyWithQueue; stage: Stage };
 
 export function RoomView({ placeId }: { placeId: string }) {
-  const { data, offline, now, reload } = useBoard(2500);
+  const { data, offline, reload } = useBoard(2500);
+  const now = useNow(15_000);
   const { run, busy, error, clearError } = useAction(reload);
+  // alerts for this room only: who arrived in its waiting room or at the door
+  useStaffAlerts(data?.journeys, data?.places, undefined, (j) => lineKey(j) === placeId || currentLeg(j).toPlaceId === placeId);
 
   if (!data || now === null) {
     return (
@@ -31,7 +38,7 @@ export function RoomView({ placeId }: { placeId: string }) {
     return (
       <main className={`${PAGE} pt-8 pb-16 *:max-w-3xl`}>
         <h1 className="text-2xl font-semibold">This room is not on the list</h1>
-        <p className="mt-2 text-[15px] text-muted">It may have been removed on the Places page.</p>
+        <p className="mt-2 text-[15px] text-muted">It may have been removed under Settings, Places.</p>
         <Link
           href="/room"
           className="mt-6 inline-flex h-12 items-center gap-2 rounded-xl bg-primary px-5 font-semibold text-on-primary"
@@ -75,10 +82,14 @@ export function RoomView({ placeId }: { placeId: string }) {
           Other room
         </Link>
       </div>
-      <p className={`mt-2 flex items-center gap-2 text-sm ${offline ? "text-danger" : "text-muted"}`}>
-        <Dot className={offline ? "bg-danger" : "bg-ok"} live={!offline} />
-        {offline ? "Can't reach the server, retrying" : "Live. Tickets only, no names."}
-      </p>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        <p className={`flex items-center gap-2 text-sm ${offline ? "text-danger" : "text-muted"}`}>
+          <Dot className={offline ? "bg-danger" : "bg-ok"} live={!offline} />
+          {offline ? "Can't reach the server, retrying" : "Live. Tickets only, no names."}
+        </p>
+        <AlertsControl what={`"A17 has arrived" for ${place.name}`} />
+      </div>
+      <ModeBlock className="mt-4" />
 
       {error && (
         <div
@@ -168,6 +179,7 @@ function Section({
                 <p className="flex flex-wrap items-center gap-2">
                   <span className={`text-lg font-semibold ${STAGE_TONE[stage.key].text}`}>{stage.title}</span>
                   <PaceNote journey={j} />
+                  {isSimRobot(j.robot) && <SimBadge />}
                 </p>
                 <p className="text-[15px] text-muted tabular">
                   {stage.detail || placeText({ name: currentLeg(j).toName, room: currentLeg(j).toRoom })}

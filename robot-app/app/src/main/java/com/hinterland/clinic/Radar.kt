@@ -247,6 +247,13 @@ object Radar {
         return LegDetector.nearest(pts, Sector.FRONT, AHEAD_MAX_M)?.distance
     }
 
+    // nearest person-like shape beside otto, either side (the demo's wait_close), null when none or no fresh data
+    fun nearestBeside(now: Long = System.currentTimeMillis()): Double? {
+        val (at, pts) = robotScan ?: return null
+        if (now - at > FRESH_MS) return null
+        return LegDetector.nearest(pts, Sector.SIDES)?.distance
+    }
+
     // pairs of legs and wide shapes in front (robot frame), for picking the patient after the turn
     fun aheadPoints(now: Long = System.currentTimeMillis()): List<Point> {
         val (at, pts) = robotScan ?: return emptyList()

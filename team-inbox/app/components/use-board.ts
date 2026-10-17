@@ -1,51 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import type { Board } from "@/lib/board";
-import { LoginNeeded, ROBOT, api } from "@/lib/ui";
+import { LoginNeeded, ROBOT } from "@/lib/ui";
+import { useAlertsOn } from "./staff-alerts";
+import { usePoll } from "./use-poll";
 
-// polls /api/board. pauses while the tab is hidden, catches up when it comes back
-export function useBoard(every = 2000) {
-  const [data, setData] = useState<Board | null>(null);
-  const [offline, setOffline] = useState(false);
-  const [now, setNow] = useState<number | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const stopped = useRef(false);
-
-  const load = useCallback(async () => {
-    try {
-      const b = await api<Board>(`/api/board?robot=${ROBOT}`);
-      setData(b);
-      setOffline(false);
-    } catch (e) {
-      if (!(e instanceof LoginNeeded)) setOffline(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    stopped.current = false;
-    const tick = async () => {
-      clearTimeout(timer.current);
-      if (document.visibilityState === "visible") await load();
-      if (!stopped.current) timer.current = setTimeout(tick, every);
-    };
-    tick();
-    const wake = () => document.visibilityState === "visible" && tick();
-    document.addEventListener("visibilitychange", wake);
-    return () => {
-      stopped.current = true;
-      clearTimeout(timer.current);
-      document.removeEventListener("visibilitychange", wake);
-    };
-  }, [load, every]);
-
-  useEffect(() => {
-    setNow(Date.now());
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  return { data, offline, now, reload: load };
+// polls /api/board (304 while nothing changed). pauses while the tab is hidden, unless alerts are on for this
+// device: then it looks every 15 s, so "A17 has arrived" still comes
+export function useBoard(every = 2000, robot = ROBOT) {
+  const alerts = useAlertsOn();
+  const { data, failed, reload } = usePoll<Board>(`/api/board?robot=${encodeURIComponent(robot)}`, {
+    every,
+    hiddenEvery: alerts ? 15_000 : null,
+    share: true,
+  });
+  return { data, offline: failed, reload };
 }
 
 // runs an action, shows its error, reloads the board
@@ -66,5 +36,6 @@ export function useAction(reload: () => Promise<void>) {
     },
     [reload],
   );
-  return { run, busy, error, clearError: () => setError(null) };
+  const clearError = useCallback(() => setError(null), []);
+  return { run, busy, error, clearError };
 }

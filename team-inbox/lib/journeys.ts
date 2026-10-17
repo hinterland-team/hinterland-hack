@@ -1,8 +1,11 @@
 import { notifyPlace } from "./channels";
 import { event, now, retention, robotName, today } from "./common";
+import { assertCanGuide } from "./config";
+import { checkSameFloor } from "./floors";
 import { ApiError, type Caller, text } from "./http";
 import { clearJourneyFeed } from "./live-feed";
 import { type CardLinks, onTheWayMessage, placeLabel, robotLabel, visitorMessage } from "./messages";
+import { isSimRobot } from "./robots";
 import { getStore } from "./store";
 import type { JourneyChange, StoredJourney } from "./store-types";
 import {
@@ -99,7 +102,9 @@ async function addEvents(id: string, events: JourneyEvent[]) {
 
 export const addJourneyEvents = addEvents;
 
-async function bump(placeId: string, delta: Partial<Counters>) {
+// anonymous counters for today's numbers. walks of the simulation (Virtual Otto) are not counted
+async function bump(robot: string, placeId: string, delta: Partial<Counters>) {
+  if (isSimRobot(robot)) return;
   await getStore().bumpStats(today(), placeId, delta);
 }
 
@@ -254,6 +259,11 @@ export async function createJourney(
   const pace = isOneOf(PACES, body.pace) ? body.pace : "normal";
   const wheelchair = body.wheelchair === true;
   const robot = robotName(body.robot);
+  // only in normal mode (otto's own check-in in demo mode too), and one floor per walk: otto can't take the
+  // elevator (robot-setup.md section 2)
+  await assertCanGuide(robot, who);
+  await checkSameFloor(robot, reception, to);
+  if (forPlace && forPlace.id !== to.id) await checkSameFloor(robot, to, forPlace);
   const forPlaceId = forPlace && forPlace.id !== to.id ? forPlace.id : undefined;
   const leg = newLegTo(to, { id: reception.id, name: reception.name, spot: reception.spot }, at);
   const how =
@@ -287,18 +297,23 @@ export async function createJourney(
   if (!created) throw new ApiError(503, "could not get a free ticket, please try again");
 
   const command = await queueGuide(created, leg);
-  await bump(forPlaceId ?? to.id, { journeys: 1 });
-  await bump(to.id, { guides: 1 });
+  await bump(robot, forPlaceId ?? to.id, { journeys: 1 });
+  await bump(robot, to.id, { guides: 1 });
   await notifyLeg(created, leg, base);
   return { journey: await getJourney(created.id), command: withWalkUrl(command, base) };
 }
 
 // ---------- robot and staff updates
 
+// demo mode (docs/demo-mode.md): otto can't cancel a walk, so on stop / restart it fails the open leg with this
+const DEMO_ENDED = /^the demo was ended by the team/i;
+
 export async function patchJourney(id: string, body: Record<string, unknown>, who: Caller, base: string) {
   await retention();
   const legId = text(body.legId, 80);
   const status = body.status;
+  const said = body.event && typeof body.event === "object" ? text((body.event as Record<string, unknown>).detail, 200) : undefined;
+  if (who === "robot" && status === "failed" && said && DEMO_ENDED.test(said)) return endDemoJourney(id, said);
   if (status !== undefined && status !== "with_staff" && !isOneOf(ROBOT_LEG_STATUSES, status)) {
     throw new ApiError(400, `status must be one of ${[...ROBOT_LEG_STATUSES, "with_staff"].join(", ")}`);
   }
@@ -358,14 +373,14 @@ export async function patchJourney(id: string, body: Record<string, unknown>, wh
     // a real walk: count it and tell the room. arrival at a waiting room = the visitor card
     if (status === "arrived" && prev.status !== "arrived") {
       const seconds = leg.startedAt && leg.arrivedAt ? (Date.parse(leg.arrivedAt) - Date.parse(leg.startedAt)) / 1000 : null;
-      if (seconds !== null) await bump(leg.toPlaceId, { walks: 1, walkSeconds: Math.round(seconds) });
+      if (seconds !== null) await bump(journey.robot, leg.toPlaceId, { walks: 1, walkSeconds: Math.round(seconds) });
       if (journey.forPlaceId && journey.forPlaceId !== leg.toPlaceId) await notifyVisitor(journey, leg, base);
     }
     if (status === "with_staff" && !FINAL_LEG_STATUSES.includes(prev.status)) {
       await getStore().closeJourneyCommands(id, at, true);
     }
-    if (extra?.type === "lost_patient") await bump(leg.toPlaceId, { lostPatients: 1 });
-    if (extra?.type === "feedback") await bump(leg.toPlaceId, extra.detail === "up" ? { feedbackUp: 1 } : { feedbackDown: 1 });
+    if (extra?.type === "lost_patient") await bump(journey.robot, leg.toPlaceId, { lostPatients: 1 });
+    if (extra?.type === "feedback") await bump(journey.robot, leg.toPlaceId, extra.detail === "up" ? { feedbackUp: 1 } : { feedbackDown: 1 });
   }
   return getJourney(id);
 }
@@ -395,6 +410,12 @@ export async function nextLeg(id: string, toId: unknown, base: string, via: "boa
   await retention();
   const places = await activePlaces();
   const to = mustPlace(places, toId, "to");
+  const before = await mustGet(id);
+  if (!isClosed(before.status)) {
+    await assertCanGuide(before.robot);
+    const here = (await getStore().listPlaces()).find((p) => p.id === currentLeg(before).toPlaceId);
+    await checkSameFloor(before.robot, here, to);
+  }
   const at = now();
   let leg: Leg | undefined;
   const { journey } = await mutate(id, (j) => {
@@ -417,7 +438,7 @@ export async function nextLeg(id: string, toId: unknown, base: string, via: "boa
   });
   if (!leg) throw new ApiError(500, "no leg");
   const command = await queueGuide(journey, leg);
-  await bump(to.id, { guides: 1 });
+  await bump(journey.robot, to.id, { guides: 1 });
   await notifyLeg(journey, leg, base);
   return { journey: await getJourney(id), command: withWalkUrl(command, base) };
 }
@@ -425,6 +446,8 @@ export async function nextLeg(id: string, toId: unknown, base: string, via: "boa
 // staff: otto gave up on a leg (nobody came, lost the patient). try the same walk again
 export async function retryLeg(id: string, base: string) {
   await retention();
+  const first = await mustGet(id);
+  if (!isClosed(first.status)) await assertCanGuide(first.robot);
   const at = now();
   let leg: Leg | undefined;
   const { journey } = await mutate(id, (j) => {
@@ -444,7 +467,7 @@ export async function retryLeg(id: string, base: string) {
   });
   if (!leg) throw new ApiError(500, "no leg");
   const command = await queueGuide(journey, leg);
-  await bump(leg.toPlaceId, { guides: 1 });
+  await bump(journey.robot, leg.toPlaceId, { guides: 1 });
   return { journey: await getJourney(id), command: withWalkUrl(command, base) };
 }
 
@@ -470,7 +493,7 @@ export async function finishJourney(id: string, via: "board" | "teams" = "board"
   });
   if (changed) {
     await getStore().closeJourneyCommands(id, at, true);
-    await bump(currentLeg(journey).toPlaceId, { done: 1 });
+    await bump(journey.robot, currentLeg(journey).toPlaceId, { done: 1 });
     await clearJourneyFeed(id);
   }
   return { journey: await getJourney(id), already: !changed };
@@ -486,7 +509,22 @@ export async function cancelJourney(id: string) {
   });
   if (changed) {
     await getStore().closeJourneyCommands(id, at, false);
-    await bump(lineKey(journey), { cancelled: 1 });
+    await bump(journey.robot, lineKey(journey), { cancelled: 1 });
+    await clearJourneyFeed(id);
+  }
+  return getJourney(id);
+}
+
+// a demo walk the team ended (stop / restart on the demo page): closed calmly like a cancel, no "needs you",
+// not counted as cancelled
+export async function endDemoJourney(id: string, detail = "The demo was ended by the team") {
+  const at = now();
+  const { changed } = await mutate(id, (j) => {
+    if (isClosed(j.status)) return null;
+    return { updatedAt: at, status: "cancelled", endedAt: at, events: [event("demo_ended", detail, at)] };
+  });
+  if (changed) {
+    await getStore().closeJourneyCommands(id, at, false);
     await clearJourneyFeed(id);
   }
   return getJourney(id);

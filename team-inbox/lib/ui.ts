@@ -1,9 +1,14 @@
 // browser helpers for the dashboard pages
+import { DEMO_OP_LABEL } from "./demo-script";
+import { REAL_ROBOT, robotDisplayName } from "./robots";
 import type { Journey, JourneyWithQueue, Pace, Place, PlaceKind, RobotCommand, WalkAction } from "./types";
 import { currentLeg } from "./types";
 
+export { SIM_ROBOT, isSimRobot } from "./robots";
+
 export const PAGE = "mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-8";
-export const ROBOT = "nova";
+// the real robot's api id. people read "Otto"
+export const ROBOT = REAL_ROBOT;
 
 export const PACE_LABEL: Record<Pace, string> = { normal: "Normal", slow: "Slow", very_slow: "Very slow" };
 
@@ -15,8 +20,9 @@ export const KIND_LABEL: Record<PlaceKind, string> = {
   other: "Other",
 };
 
+// "nova" -> "Otto", "otto-sim" -> "Virtual Otto"
 export function robotLabel(robot: string) {
-  return robot.charAt(0).toUpperCase() + robot.slice(1);
+  return robotDisplayName(robot);
 }
 
 export function placeText(p: Pick<Place, "name" | "room"> | { name: string; room?: string }) {
@@ -108,11 +114,13 @@ export function stageOf(j: JourneyWithQueue, now: number): Stage {
   };
 }
 
-export type CommandState = "queued" | "delivered" | "done" | "cancelled";
+export type CommandState = "queued" | "delivered" | "done" | "cancelled" | "refused";
 
-// closed before the robot fetched it = cancelled
+// closed before the robot fetched it = cancelled. otto answered ok false = refused (or it failed), with its detail
 export function commandState(c: RobotCommand): CommandState {
-  if (c.doneAt) return c.deliveredAt ? "done" : "cancelled";
+  if (c.ok === false) return "refused";
+  // an answer from otto means it had the command
+  if (c.doneAt) return c.deliveredAt || c.ok !== undefined ? "done" : "cancelled";
   return c.deliveredAt ? "delivered" : "queued";
 }
 
@@ -138,10 +146,22 @@ export function commandText(c: RobotCommand) {
   }
   if (c.type === "go_to") return `Go to ${c.spot}`;
   if (c.type === "walk_control") return `${WALK_ACTION_LABEL[c.action]} (${c.origin === "phone" ? "patient's phone" : "board"})`;
+  if (c.type === "switch_map") return `Switch to the map ${c.mapName}, standing at ${c.spot}`;
+  if (c.type === "config_changed") return "Fetch the new settings";
+  if (c.type === "recheck") return "Check the servers again";
+  if (c.type === "set_mode") return `Switch to ${c.mode} mode`;
+  if (c.type === "demo") return c.op === "say" ? `Demo: say "${c.text ?? ""}"` : `Demo: ${DEMO_OP_LABEL[c.op]}`;
   return `Guide ${c.ticket} to ${placeText({ name: c.to.name, room: c.to.room })}`;
 }
 
 export class LoginNeeded extends Error {}
+
+// the session ran out: to the login page, back here afterwards
+export function goToLogin(): never {
+  const next = window.location.pathname + window.location.search;
+  window.location.assign(`/login${next === "/" ? "" : `?next=${encodeURIComponent(next)}`}`);
+  throw new LoginNeeded("login needed");
+}
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -149,11 +169,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: init?.body ? { "Content-Type": "application/json", ...init.headers } : init?.headers,
   });
-  if (res.status === 401 && typeof window !== "undefined") {
-    const next = window.location.pathname + window.location.search;
-    window.location.assign(`/login${next === "/" ? "" : `?next=${encodeURIComponent(next)}`}`);
-    throw new LoginNeeded("login needed");
-  }
+  if (res.status === 401 && typeof window !== "undefined") goToLogin();
   const data = res.status === 204 ? null : await res.json().catch(() => null);
   if (!res.ok) throw new Error((data as { error?: string } | null)?.error ?? `request failed (${res.status})`);
   return data as T;

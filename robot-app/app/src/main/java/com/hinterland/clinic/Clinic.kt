@@ -93,8 +93,8 @@ object Clinic {
 
     fun onUserSpeech(text: String, final: Boolean) {
         if (text.isBlank()) return
-        // show / calm: the mic is off; anything that still comes in gets no reaction
-        if (Modes.current.silent) return
+        // show / calm / demo: the mic is off; anything that still comes in gets no reaction
+        if (Modes.current.micOff) return
         voiceAt = now()
         Speech.userSpeech(final)
         OttoBrain.heardUser()
@@ -111,7 +111,8 @@ object Clinic {
     fun onRobotSpeech(text: String, final: Boolean) {
         if (text.isBlank()) return
         val ours = Speech.robotSpeech(final)
-        if (Modes.current.silent) {
+        // show / calm say nothing; the demo shows only its own lines
+        if (Modes.current.silent || (Modes.current.micOff && !ours)) {
             // not from this app: the robot system talks by itself (the calm / show mode field test wants to know)
             if (!ours && now() - systemVoiceAt >= SYSTEM_VOICE_LOG_MS) {
                 systemVoiceAt = now()
@@ -163,16 +164,25 @@ object Clinic {
 
     // ---- modes (RobotModes.kt) ----
 
-    // show / calm: the face only, nothing to tap, nothing said. normal again: everything as before
+    // show / calm: the face only, nothing to tap, nothing said. demo: the normal screens, no self check-in, the
+    // demo's own cards. normal again: everything as before
     fun modeChanged(old: RobotMode, new: RobotMode) {
-        if (new.silent) {
-            speakingJob?.cancel()
-            _ui.update { it.copy(checkIn = null, subtitle = "", subtitleFromUser = false, speaking = false, task = null, mode = new) }
-            feed.ottoDid(now(), "${new.label} mode: Otto is silent")
-        } else {
-            _ui.update { it.copy(mode = new) }
-            feed.ottoDid(now(), "Normal mode again")
-            if (old.silent) refreshScreenInfo()
+        when {
+            new.silent -> {
+                speakingJob?.cancel()
+                _ui.update { it.copy(checkIn = null, subtitle = "", subtitleFromUser = false, speaking = false, task = null, mode = new) }
+                feed.ottoDid(now(), "${new.label} mode: Otto is silent")
+            }
+            new == RobotMode.DEMO -> {
+                _ui.update { it.copy(checkIn = null, subtitleFromUser = false, task = null, mode = new) }
+                feed.ottoDid(now(), "Demo mode: Otto follows the demo script")
+            }
+            else -> {
+                // the demo's ticket card goes with it (a walk of its own is ended by Demo)
+                _ui.update { if (old == RobotMode.DEMO && Guide.current == null) it.copy(mode = new, guide = null, task = null) else it.copy(mode = new) }
+                feed.ottoDid(now(), "Normal mode again")
+                if (old.micOff) refreshScreenInfo()
+            }
         }
         refreshStaff()
     }
@@ -223,6 +233,21 @@ object Clinic {
         refreshStaff()
     }
 
+    // the demo card: start / stop (with the last script the dashboard sent, else the built-in one) and Next
+    fun staffDemoStartStop() {
+        staffTouched()
+        val r = if (Modes.current == RobotMode.DEMO) Demo.stop("staff menu") else Demo.start(null, "staff menu")
+        RobotLog.i(LogSource.APP, "Staff menu: ${r.detail}")
+        refreshStaff()
+    }
+
+    fun staffDemoNext() {
+        staffTouched()
+        val r = Demo.next("staff menu")
+        RobotLog.i(LogSource.APP, "Staff menu: ${r.detail}")
+        refreshStaff()
+    }
+
     private fun refreshStaff() {
         _ui.update { s -> if (s.staff != null) s.copy(staff = staffSnapshot()) else s }
     }
@@ -257,6 +282,8 @@ object Clinic {
             perfOk = perf?.smooth ?: true,
             mode = Modes.current,
             modePending = Modes.pending,
+            demo = Demo.summary(),
+            demoRunning = Modes.current == RobotMode.DEMO,
             settings = Config.summary(),
             settingsOk = Config.ok,
             map = when {
@@ -303,8 +330,8 @@ object Clinic {
     fun guideStarted() {
         guideCardJob?.cancel()
         // the patient walks beside otto: the mic has to hear them without facing the robot (voice.openMicOnWalks).
-        // barge-in stays on (speaking over otto stops his tts, AgentOS default).
-        setWakeFree(!Config.current.openMicOnWalks)
+        // barge-in stays on (speaking over otto stops his tts, AgentOS default). the demo: no listening at all
+        if (!Modes.current.micOff) setWakeFree(!Config.current.openMicOnWalks)
         _ui.update { it.copy(checkIn = null) }
     }
 
@@ -322,7 +349,7 @@ object Clinic {
 
     // voice.openMicOnWalks changed: a walk under way gets it at once
     fun walkMicChanged() {
-        if (Guide.current != null) setWakeFree(!Config.current.openMicOnWalks)
+        if (Guide.current != null && !Modes.current.micOff) setWakeFree(!Config.current.openMicOnWalks)
     }
 
     fun showGuide(g: GuideUi?) {
@@ -812,12 +839,12 @@ object Clinic {
         }
     }
 
-    // say: the team typed it, otto says it as it is
+    // say: the team typed it, otto says it as it is (in demo mode as a demo line: never dropped)
     suspend fun sayFromTeam(cmd: RobotCommand) {
         try {
             val text = cmd.text?.trim().orEmpty()
             if (text.isEmpty()) return
-            Speech.say(SpeechKind.TEAM, text)
+            Speech.say(SpeechKind.TEAM, text, script = Modes.current == RobotMode.DEMO)
         } finally {
             commandDone(cmd.id)
         }
@@ -827,7 +854,7 @@ object Clinic {
     suspend fun askFromTeam(cmd: RobotCommand) {
         try {
             val text = cmd.text?.trim().orEmpty()
-            if (text.isEmpty() || Modes.current.silent) return
+            if (text.isEmpty() || Modes.current.micOff) return
             feed.ottoDid(now(), "Message from the team: $text")
             Voice.ask(text)
         } finally {
@@ -882,7 +909,7 @@ object Clinic {
     suspend fun askDuringWalk(cmd: RobotCommand) {
         try {
             val text = cmd.text?.trim().orEmpty()
-            if (text.isEmpty() || Modes.current.silent) return
+            if (text.isEmpty() || Modes.current.micOff) return
             // with a journey it comes from the walk page on the patient's phone
             if (cmd.journeyId != null) {
                 Guide.current?.takeIf { it.journeyId == cmd.journeyId }?.heard(text)
@@ -939,8 +966,9 @@ object Clinic {
     }
 
     // blocked: ask people to let otto pass, at most every OBSTACLE_TALK_EVERY_MS. ready = a walk's own
-    // line for it (6.7), said at once; without one the llm writes it. dropped when otto drives on before it is said
-    fun onNavEvent(ev: NavEvent, lang: Lang = Lang(null), ready: String? = null) {
+    // line for it (6.7), said at once; without one the llm writes it. dropped when otto drives on before it is said.
+    // own = the demo says it its own way instead (its obstacle part, or nothing on the way back)
+    fun onNavEvent(ev: NavEvent, lang: Lang = Lang(null), ready: String? = null, own: (() -> Unit)? = null) {
         when (ev) {
             NavEvent.BLOCKED -> {
                 setTask("Something is in my way")
@@ -948,12 +976,20 @@ object Clinic {
                 if (now - lastObstacleTalk >= OBSTACLE_TALK_EVERY_MS) {
                     lastObstacleTalk = now
                     val stillThere = { Robot.driving != null }
-                    if (ready != null) Speech.sayLater(SpeechKind.WAY, ready, stillThere)
-                    else scope.launch { Speech.speak(SpeechKind.WAY, "Politely ask the people in your way to let you pass.", lang, "Excuse me, may I pass, please?", fits = stillThere) }
+                    when {
+                        own != null -> own()
+                        ready != null -> Speech.sayLater(SpeechKind.WAY, ready, stillThere)
+                        else -> scope.launch { Speech.speak(SpeechKind.WAY, "Politely ask the people in your way to let you pass.", lang, "Excuse me, may I pass, please?", fits = stillThere) }
+                    }
                 }
             }
             NavEvent.CLEAR -> setTask(null)
         }
+    }
+
+    // the demo's screen: what otto does (the working face while the check-in runs)
+    fun demoTask(task: String?) {
+        setTask(task)
     }
 
     // ---- idle ----

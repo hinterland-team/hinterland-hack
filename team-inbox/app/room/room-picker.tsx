@@ -30,9 +30,9 @@ export function RoomPicker() {
           <div className="mt-6 rounded-2xl border border-line bg-surface p-6 shadow-panel">
             <MapPin size={28} aria-hidden className="text-primary" />
             <h2 className="mt-3 text-lg font-semibold">No rooms yet</h2>
-            <p className="mt-1 text-[15px] text-muted">Add your rooms on the Places page first.</p>
+            <p className="mt-1 text-[15px] text-muted">Add your rooms under Settings, Places first.</p>
             <Link
-              href="/places"
+              href="/settings/places"
               className="mt-4 inline-flex h-12 items-center gap-2 rounded-xl bg-primary px-5 font-semibold text-on-primary hover:bg-primary-hover"
             >
               Set up places <ArrowRight size={18} aria-hidden />

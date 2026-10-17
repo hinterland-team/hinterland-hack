@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Bell, CheckCircle, Info, MapPin, PaperPlaneTilt, PencilSimple, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
+import { ArrowRight, Bell, BellRinging, CheckCircle, Info, MapPin, PaperPlaneTilt, PencilSimple, Plug, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -15,9 +15,11 @@ import {
   channelChipName,
 } from "@/lib/channel-types";
 import type { Place } from "@/lib/types";
-import { KIND_LABEL, LoginNeeded, PAGE, api, clockTime, post } from "@/lib/ui";
-import { Button, Segmented, Switch } from "../components/button";
-import { ChannelIcon } from "../components/channel-icon";
+import { KIND_LABEL, LoginNeeded, api, clockTime, post } from "@/lib/ui";
+import { Button, Segmented, Switch } from "../../components/button";
+import { ChannelIcon } from "../../components/channel-icon";
+import { AlertsControl } from "../../components/staff-alerts";
+import { type AppsState, OAuthConnect, TelegramConnect } from "./connect";
 
 const INPUT =
   "h-12 w-full min-w-0 rounded-xl border border-line-strong bg-surface px-4 text-base placeholder:text-muted focus:border-primary focus:outline-none";
@@ -49,6 +51,27 @@ export function NotificationsClient() {
   const [adding, setAdding] = useState<ChannelType | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [apps, setApps] = useState<AppsState | null>(null);
+  // back from slack / discord: ?connected=<channel id> or ?oauth_error=<why>
+  const [back, setBack] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const loadApps = useCallback(async () => {
+    try {
+      setApps(await api<AppsState>("/api/integrations/apps"));
+    } catch {
+      // the connect buttons wait for it
+    }
+  }, []);
+
+  useEffect(() => {
+    loadApps();
+    const q = new URLSearchParams(window.location.search);
+    const connected = q.get("connected");
+    const failed = q.get("oauth_error");
+    if (connected) setBack({ ok: true, text: connected });
+    else if (failed) setBack({ ok: false, text: failed });
+    if (connected || failed) window.history.replaceState(null, "", window.location.pathname);
+  }, [loadApps]);
 
   const load = useCallback(async () => {
     try {
@@ -75,10 +98,12 @@ export function NotificationsClient() {
   }, [editing]);
 
   return (
-    <main className={`${PAGE} pb-16`}>
-      <div className="flex flex-wrap items-end justify-between gap-4 pt-6 pb-4">
+    <section aria-labelledby="notifications-title">
+      <div className="flex flex-wrap items-end justify-between gap-4 pb-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Notifications</h1>
+          <h2 id="notifications-title" className="text-xl font-semibold tracking-tight">
+            Notifications
+          </h2>
           <p className="mt-1 max-w-prose text-[15px] text-muted">
             Where the team hears about a patient on the way, a visitor in the waiting room and Otto asking for help. Every message
             has the ticket, the place, the pace and two links. Never a name.
@@ -100,11 +125,33 @@ export function NotificationsClient() {
 
       {error && <p className="mb-4 rounded-xl border border-danger bg-danger-soft px-4 py-3 text-[15px] text-danger">{error}</p>}
 
-      {view?.memoryStore && (
+      {back && (
+        <p
+          role="status"
+          className={`mb-4 flex max-w-4xl items-start gap-2 rounded-xl px-4 py-3 text-[15px] ${back.ok ? "bg-ok-soft text-ink" : "bg-danger-soft text-danger"}`}
+        >
+          {back.ok ? (
+            <CheckCircle size={20} weight="fill" aria-hidden className="mt-px shrink-0 text-ok" />
+          ) : (
+            <WarningCircle size={20} weight="fill" aria-hidden className="mt-px shrink-0" />
+          )}
+          <span className="min-w-0 flex-1">
+            {back.ok
+              ? `Connected: ${view?.channels.find((c) => c.id === back.text)?.label ?? "the new channel"}. Press Send test on its card to see it arrive.`
+              : back.text}
+          </span>
+          <Button kind="ghost" size="sm" onClick={() => setBack(null)}>
+            OK
+          </Button>
+        </p>
+      )}
+
+      {view && view.storage !== "postgres" && (
         <p className="mb-4 flex max-w-4xl items-start gap-2 rounded-xl bg-subtle px-4 py-3 text-[15px] text-muted">
           <Info size={20} aria-hidden className="mt-px shrink-0" />
-          This server keeps everything in memory, the channels too: after a restart add them again, or set DATABASE_URL to keep
-          them.
+          {view.storage === "file"
+            ? "This laptop keeps the channels, places and settings in a file (.data/store.json), so they are still here after a restart. Its secrets stay on this computer."
+            : "This server keeps everything in memory, the channels too (STORE_FILE=off): after a restart add them again."}
         </p>
       )}
 
@@ -130,6 +177,8 @@ export function NotificationsClient() {
             key={adding}
             initialType={adding}
             emailEnv={view.emailEnv}
+            apps={apps}
+            reloadApps={loadApps}
             onCancel={() => setAdding(null)}
             onSaved={async () => {
               setAdding(null);
@@ -191,7 +240,42 @@ export function NotificationsClient() {
       )}
 
       {view && places && <Routing view={view} places={places} reload={load} />}
-    </main>
+
+      <section aria-labelledby="alerts-title" className="mt-10">
+        <h2 id="alerts-title" className="flex items-center gap-2 text-sm font-semibold text-muted">
+          <BellRinging size={18} aria-hidden /> Alerts on this device
+        </h2>
+        <div className="mt-2 max-w-4xl rounded-2xl border border-line bg-surface p-4 shadow-panel sm:p-5">
+          <p className="max-w-prose text-[15px] text-muted">
+            The reception and the room view can also show browser alerts like &quot;A17 has arrived&quot; on this computer, while the page
+            is open (also in a background tab). Each device decides for itself. Phones and other computers need the dashboard on an
+            https address for this; on this laptop http://localhost works.
+          </p>
+          <div className="mt-3">
+            <AlertsControl what="alerts from Otto Clinic" wide />
+          </div>
+        </div>
+      </section>
+
+      {view && (
+        <section aria-labelledby="integration-title" className="mt-10">
+          <h2 id="integration-title" className="flex items-center gap-2 text-sm font-semibold text-muted">
+            <Plug size={18} aria-hidden /> Your clinic system
+          </h2>
+          <div className="mt-2 max-w-4xl rounded-2xl border border-line bg-surface p-4 shadow-panel sm:p-5">
+            <p className="text-[15px] font-semibold">{view.integration ? "On" : "Off"}: the nurse&apos;s system can send Otto</p>
+            <p className="mt-1 max-w-prose text-[15px] text-muted">
+              {view.integration
+                ? "Your system posts the room (and the pace) to this server and gets the ticket back, the same as the reception board. The key is INTEGRATION_KEY in .env.local, sent as the header X-Api-Key."
+                : "Set INTEGRATION_KEY in .env.local to let your own system send patients: it posts the room and gets the ticket back."}
+            </p>
+            <pre className="mt-3 overflow-x-auto rounded-xl bg-subtle p-3 text-sm">
+              {`POST /api/integrations/journeys\nX-Api-Key: <INTEGRATION_KEY>\n{ "to": "Dr. Blue", "pace": "slow" }`}
+            </pre>
+          </div>
+        </section>
+      )}
+    </section>
   );
 }
 
@@ -343,7 +427,7 @@ function ChannelCard({
             </Button>
           )}
           {channel.source === "place" && (
-            <Link href="/places" className={LINK}>
+            <Link href="/settings/places" className={LINK}>
               Edit on Places <ArrowRight size={16} aria-hidden />
             </Link>
           )}
@@ -449,6 +533,8 @@ function ChannelForm({
   title,
   initialType,
   emailEnv,
+  apps = null,
+  reloadApps,
   onCancel,
   onSaved,
 }: {
@@ -456,6 +542,8 @@ function ChannelForm({
   title?: string;
   initialType?: ChannelType;
   emailEnv: NotificationsView["emailEnv"];
+  apps?: AppsState | null;
+  reloadApps?: () => Promise<void>;
   onCancel: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -473,10 +561,15 @@ function ChannelForm({
   const optional = (f: ChannelField) =>
     Boolean(f.optional) || (type === "email" && ((f.key === "apiKey" && emailEnv.apiKey) || (f.key === "from" && emailEnv.from)));
 
-  const save = async (e: React.FormEvent) => {
+  const [tested, setTested] = useState<string | null>(null);
+  const connectable = !channel && (type === "slack" || type === "discord" || type === "telegram");
+
+  // the form's submit button (Add channel), or "Add and send a test" (testAfter)
+  const save = async (e: React.FormEvent, testAfter = false) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setTested(null);
     try {
       const config: Record<string, string | null> = {};
       for (const f of info.fields) {
@@ -485,7 +578,16 @@ function ChannelForm({
         else if (v || !f.secret) config[f.key] = v;
       }
       if (channel) await post("/api/channels", { id: channel.id, label: label.trim(), config, isDefault, active }, "PATCH");
-      else await post("/api/channels", { type, label: label.trim(), config, isDefault });
+      else {
+        const made = await post<ChannelView>("/api/channels", { type, label: label.trim(), config, isDefault });
+        if (testAfter) {
+          const r = await post<{ ok: boolean; text: string }>("/api/channels/test", { id: made.id });
+          if (!r.ok) {
+            // keep the form open with the reason; the channel is saved and can be fixed with Edit
+            setTested(`Saved, but the test did not go through: ${r.text}`);
+          }
+        }
+      }
       await onSaved();
     } catch (err) {
       if (!(err instanceof LoginNeeded)) setError(errorText(err, "Could not save"));
@@ -533,6 +635,16 @@ function ChannelForm({
             ))}
           </div>
         </fieldset>
+      )}
+
+      {!channel && (type === "slack" || type === "discord") && reloadApps && (
+        <OAuthConnect provider={type} apps={apps} isDefault={isDefault} reloadApps={reloadApps} />
+      )}
+      {!channel && type === "telegram" && <TelegramConnect isDefault={isDefault} onConnected={async () => onSaved()} />}
+      {connectable && (
+        <h3 className="mt-6 text-[15px] font-semibold">
+          {type === "telegram" ? "Or enter the chat id yourself" : "Or paste a webhook link"}
+        </h3>
       )}
 
       <div className="mt-4 rounded-xl bg-subtle p-4">
@@ -604,15 +716,20 @@ function ChannelForm({
         )}
       </div>
 
-      {error && (
+      {(error || tested) && (
         <p role="alert" className="mt-4 rounded-xl bg-danger-soft px-4 py-3 text-[15px] font-medium text-danger">
-          {error}
+          {error ?? tested}
         </p>
       )}
       <div className="mt-5 flex flex-wrap gap-2">
         <Button kind="primary" size="lg" type="submit" disabled={busy}>
           {busy ? "Saving" : channel ? "Save changes" : "Add channel"}
         </Button>
+        {!channel && type === "teams" && (
+          <Button size="lg" disabled={busy} onClick={(e) => save(e, true)}>
+            <PaperPlaneTilt size={18} aria-hidden /> Add and send a test
+          </Button>
+        )}
         <Button size="lg" onClick={onCancel}>
           Cancel
         </Button>
@@ -642,8 +759,8 @@ function Routing({ view, places, reload }: { view: NotificationsView; places: Pl
       ) : rows.length === 0 ? (
         <p className="mt-3 rounded-2xl border border-dashed border-line-strong p-5 text-[15px] text-muted">
           No places yet.{" "}
-          <Link href="/places" className="font-semibold text-primary hover:underline">
-            Add them on the Places page
+          <Link href="/settings/places" className="font-semibold text-primary hover:underline">
+            Add them under Places
           </Link>
           , then choose here who hears about them.
         </p>

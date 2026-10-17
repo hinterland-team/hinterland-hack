@@ -12,7 +12,7 @@ const RESEND_URL = "https://api.resend.com/emails";
 const TELEGRAM_URL = "https://api.telegram.org";
 // graph api version of meta's whatsapp cloud api docs (oct 2026)
 const WHATSAPP_URL = "https://graph.facebook.com/v25.0";
-const USER_AGENT = "NovaClinic/3.3";
+const USER_AGENT = "OttoClinic/3.4";
 
 export type SendResult = { ok: boolean; text: string; note?: string };
 
@@ -209,7 +209,7 @@ export function discordPayload(m: NotifyMessage, buttons = true) {
   const md = (s: string) => s.replace(/([\\*_~`|])/g, "\\$1");
   const links = m.links.map((l) => `[${md(l.label)}](${l.url})`).join("\n");
   return {
-    username: "Nova Clinic",
+    username: "Otto Clinic",
     allowed_mentions: { parse: [] },
     embeds: [
       {
@@ -515,7 +515,7 @@ export function cleanConfig(
       if (!out.apiKey && !emailEnv.apiKey) return { error: "The Resend API key is needed (this server has no RESEND_API_KEY)" };
       if (out.apiKey && !/^\S{8,300}$/.test(out.apiKey)) return { error: "The Resend API key has no spaces and starts with re_" };
       if (!out.from && !emailEnv.from) return { error: "The sender is needed (this server has no EMAIL_FROM)" };
-      if (out.from && !SENDER.test(out.from)) return { error: "The sender looks like Nova Clinic <nova@your-domain.example>" };
+      if (out.from && !SENDER.test(out.from)) return { error: "The sender looks like Otto Clinic <otto@your-domain.example>" };
       break;
     }
   }

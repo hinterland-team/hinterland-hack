@@ -1,4 +1,5 @@
 import { hoursAgo, now, robotName } from "./common";
+import { appliedFromLog, noteApplied } from "./config";
 import { ApiError, text } from "./http";
 import { cleanLogItems } from "./robot-data";
 import { getStore } from "./store";
@@ -13,7 +14,37 @@ export async function postLogs(body: Record<string, unknown>) {
   const cleaned = cleanLogItems(body.items, Date.now());
   if ("error" in cleaned) throw new ApiError(400, cleaned.error);
   const stored = await getStore().addLogs(robot, cleaned.items, now(), hoursAgo(LOG_KEEP_HOURS), LOG_MAX_ROWS);
+  // "Settings v12 applied": Settings -> Robot shows when otto took the new settings
+  for (const item of cleaned.items) {
+    const version = appliedFromLog(item.text);
+    if (version !== null) await noteApplied(robot, version, item.at);
+  }
   return { ok: true, stored, dropped: cleaned.dropped };
+}
+
+// the robot's "Perf (30 s): 58.2 fps, ..., 3 slow, 0 dropped, 0 freezes; CPU 23 % of one core (8 cores)" line
+export type Perf = { at: string; text: string; fps: number | null; slowFrames: number | null; dropped: number | null; freezes: number | null; cpu: number | null };
+
+export function parsePerf(text: string, at: string): Perf {
+  const n = (re: RegExp) => {
+    const m = re.exec(text);
+    return m ? Number(m[1]) : null;
+  };
+  return {
+    at,
+    text,
+    fps: n(/:\s*([\d.]+)\s*fps/),
+    slowFrames: n(/(\d+)\s+slow\b/),
+    dropped: n(/(\d+)\s+dropped\b/),
+    freezes: n(/(\d+)\s+freezes\b/),
+    cpu: n(/CPU\s+([\d.]+)\s*%/),
+  };
+}
+
+export async function latestPerf(robot: string): Promise<Perf | null> {
+  const lines = await getStore().listLogs({ robot, search: "Perf (", limit: 1 });
+  const line = lines.at(-1);
+  return line ? parsePerf(line.text, line.at) : null;
 }
 
 function cursor(value: string | null, name: string) {

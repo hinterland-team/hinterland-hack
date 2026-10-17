@@ -6,7 +6,7 @@ import { PasswordField } from "./password-field";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Staff sign-in - Nova Clinic" };
+export const metadata: Metadata = { title: "Staff sign-in - Otto Clinic" };
 
 type Search = Promise<Record<string, string | string[] | undefined>>;
 

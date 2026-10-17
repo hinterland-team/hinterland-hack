@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "dev:lan": "next dev -H 0.0.0.0 -p 3000",
+    "serve:lan": "next build && next start -H 0.0.0.0 -p 3000",
+    "start:lan": "next start -H 0.0.0.0 -p 3000",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

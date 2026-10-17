@@ -20,13 +20,43 @@ data class OwnRequest(val paceChosen: Boolean = false, val sample: String? = nul
 
 enum class GuideOutcome { ARRIVED, NOBODY_CAME, LOST, FAILED, CANCELLED, STOPPED }
 
+// what the demo (Demo.kt, docs/demo-mode.md) changes in a walk: the script's parts instead of the walk's own
+// lines (no llm at all), its walk as a fixed routine (field test b16: nothing guided by where the radar thinks
+// the patient is), the operator's hold and Next
+interface DemoWalk {
+    // the patient's side on the demo walk (the script's walkSide, not walk.walkSide)
+    val side: WalkSide
+
+    // firstCheck: the turn towards the walk side and back, 0 = no turn
+    val glanceDeg: Double
+
+    // when firstCheck and fellBack are due (driving time), and which ones were played
+    val plan: DemoWalkPlan
+
+    // plays a part to its end (otto's lines, the patient's waits, wait_close)
+    suspend fun play(part: String)
+
+    // a part said while the walk goes on (obstacle)
+    fun playLater(part: String)
+
+    // the operator holds the demo: otto stands until resume
+    fun held(): Boolean
+
+    // the operator pressed Next during the walk: a walk part waits to be played
+    fun nextWanted(): Boolean
+
+    // takes that part, null = none
+    fun takeNext(): String?
+}
+
 // one `guide` command (docs/journeys.md 4 and 6): pickup, pace, walking with check-backs, arrival.
 // the decisions (check-back schedule, the walk-beside watch, short stops, where the patient is, the
 // talk window, what to do per distance, blocked ways and detours, timelines, speeds) are plain kotlin in
 // Walk.kt, Stops.kt, PatientTrack.kt, Detours.kt, Lidar.kt, Pickup.kt and Pace.kt; this class does the
 // robot, the backend and the words. the walk's lines are made once per walk (WalkLines.kt).
 // legs and events go to PATCH /api/journeys/:id with the ticket only, never a name.
-class Guide private constructor(val cmd: RobotCommand, private val own: OwnRequest?) {
+// demo = the demo's walk (DemoWalk): its lines, its fixed routine, no llm; without a journey it is a local walk
+class Guide private constructor(val cmd: RobotCommand, private val own: OwnRequest?, private val demo: DemoWalk?) {
 
     // the live settings as they were when this walk started (docs/robot-setup.md 3): one walk, one set
     private val s: Settings = Config.current
@@ -73,8 +103,9 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     @Volatile private var cameraFix: Pair<Point, Long>? = null
     @Volatile private var talkIds = 0L
 
-    // v3.3 (docs/journeys.md 6.7): the side the patient walks on, the walk's ready lines, where the patient is
-    private val side = s.walkSide
+    // v3.3 (docs/journeys.md 6.7): the side the patient walks on (the demo: its script's), the walk's ready
+    // lines, where the patient is
+    private val side = demo?.side ?: s.walkSide
     private val lines = WalkLines(LineContext(ticket, destination, side, arrival(), own != null, own?.checkIn == true))
     private val track = PatientTrack()
     // the ticket was said with the pace question (asked at the robot): the start line does not say it again
@@ -174,6 +205,9 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         presenceAt = now()
     }
 
+    // "I'm here" was tapped since t (the demo's wait_close)
+    fun presentSince(t: Long): Boolean = presenceAt >= t
+
     fun rate(up: Boolean) {
         if (feedback == null) feedback = if (up) "up" else "down"
     }
@@ -223,6 +257,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     private suspend fun run(): GuideOutcome = coroutineScope {
         runScope = this
         val watcher = launch { watchJourney() }
+        // the demo has no llm lines: nobody waits for them (its own lines come from the script)
+        if (demo != null) lines.failed()
         try {
             Clinic.showGuide(
                 GuideUi(
@@ -236,11 +272,12 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                     pace = pace,
                     walkUrl = walkUrl,
                     side = side,
+                    checkedIn = demo != null && own?.checkIn == true,
                 ),
             )
             RobotLog.i(LogSource.BRAIN, "Guide ${ticketOr()} to $destination" + if (own != null) " (asked at the robot)" else "")
             // the person is right here: their lines now
-            if (own != null) requestLines("asked at the robot")
+            if (own != null && demo == null) requestLines("asked at the robot")
             if (!pickup()) return@coroutineScope outcome ?: GuideOutcome.NOBODY_CAME
             askPace()
             walk(this)
@@ -262,7 +299,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         if (own != null) {
             patch(LegStatus.PICKUP, JourneyEvent.PICKUP_STARTED, "Patient asked Otto directly")
             patch(null, JourneyEvent.PATIENT_CONFIRMED, "Patient is with Otto")
-            rememberStart("asked at the robot")
+            // the demo's walk does not follow the patient's position
+            if (demo == null) rememberStart("asked at the robot")
             return true
         }
         val fromSpot = cmd.from?.spot?.trim().orEmpty()
@@ -469,7 +507,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         // the ticket comes in the same line
         val startKeys = if (own != null && !ticketTold) listOf(LineKey.TICKET_IS, LineKey.START) else listOf(LineKey.START)
         ticketTold = true
-        say(startKeys, SpeechKind.WALK, waitMs = FIRST_LINE_WAIT_MS, llmTask = startTask(), fits = liveIn(GuidePhase.WALKING))
+        // the demo said its start in the reception part
+        if (demo == null) say(startKeys, SpeechKind.WALK, waitMs = FIRST_LINE_WAIT_MS, llmTask = startTask(), fits = liveIn(GuidePhase.WALKING))
 
         val schedule = CheckSchedule(firstMs = s.firstCheckS * 1000L, minMs = s.checkMinS * 1000L, maxMs = s.checkMaxS * 1000L)
         val watch = SideWatch(lostMs = s.besideLostS * 1000L)
@@ -479,6 +518,13 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             "Walk with ${ticketOr()} to $destination started, the patient walks on otto's ${side.wire}, " +
                 "first check-back in ${schedule.nextInMs() / 1000} s",
         )
+        demo?.let { d ->
+            RobotLog.i(
+                LogSource.APP,
+                "Demo walk: a fixed routine, firstCheck after ${s.firstCheckS} s of driving (glance %.0f deg to the %s), fellBack %.0f s of driving after it"
+                    .format(Locale.ROOT, d.glanceDeg, side.wire, d.plan.fellBackAfterMs / 1000.0),
+            )
+        }
         // the way: straight to the destination, or over a waypoint when it is blocked (detour steps)
         var target = to.spot
         try {
@@ -490,14 +536,23 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                     spot = target,
                     speed = PaceTable.speed(pace, s),
                     stopWhen = { OttoBrain.helpActive() || cancelled },
-                    // no check-back while otto stands at an obstacle with the patient: it comes once he drives on
-                    interrupt = { pauseWanted || wantedPace != null || (schedule.due(now()) != null && !legBlock.isBlocked) },
+                    // no check-back while otto stands at an obstacle with the patient: it comes once he drives on.
+                    // the demo: no check-backs of the schedule, its own walk parts, the operator's hold and Next
+                    interrupt = {
+                        val d = demo
+                        pauseWanted || wantedPace != null || if (d == null) {
+                            schedule.due(now()) != null && !legBlock.isBlocked
+                        } else {
+                            d.held() || d.nextWanted() || (d.plan.due() != null && !legBlock.isBlocked)
+                        }
+                    },
                     onTick = { blocked -> tick(blocked, schedule, watch, scope, targetPoint) },
                     onEvent = ::onNavEvent,
                     way = legBlock,
                 )
                 targetSpot = null
                 schedule.pause()
+                demo?.plan?.pause()
                 when (o) {
                     NavOutcome.Arrived -> {
                         if (target == to.spot) return arrive()
@@ -529,6 +584,12 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                         }
                     }
                     NavOutcome.Interrupted -> {
+                        val d = demo
+                        if (d != null) {
+                            demoInterrupted(d, scope)?.let { return it }
+                            watch.start(now())
+                            continue
+                        }
                         val newPace = wantedPace
                         val reason = schedule.due(now())
                         when {
@@ -568,22 +629,28 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     }
 
     // every quarter second while driving: the schedule, the walk-beside watch, the patient's position,
-    // the blocked count, and the check-backs that need no stop (the radar sees the patient beside)
+    // the blocked count, and the check-backs that need no stop (the radar sees the patient beside).
+    // the demo: its own driving time; the watch and the schedule only go to the log
     private fun tick(blocked: Boolean, schedule: CheckSchedule, watch: SideWatch, scope: CoroutineScope, targetPoint: Point?) {
         val t = now()
         schedule.tick(t, blocked, Robot.heading())
+        demo?.plan?.tick(t, blocked)
         // otto stands at an obstacle: the patient may step behind him, that is no reason for an alarm
         if (blocked) watch.hold() else if (watch.holding) watch.start(t)
         val beside = Radar.besideFix(t)
         if (beside != null) track.noteRadar(beside.robot, beside.map, beside.at)
-        if (beside != null && schedule.noteDistance(beside.distance)) {
+        if (demo == null && beside != null && schedule.noteDistance(beside.distance)) {
             RobotLog.i(LogSource.BRAIN, "Next check-back moved to ${schedule.nextInMs() / 1000} s (radar: patient %.1f m beside)".format(Locale.ROOT, beside.distance))
         }
         // sensors.radarWatch off: the radar does not call check-backs, the schedule alone decides
         if (s.radarWatch && watch.check(t, Radar.everSeen(), Radar.lastSeenAt())) {
-            sideLost = true
-            RobotLog.i(LogSource.LIDAR, "Nobody beside on the radar for ${watch.thresholdMs / 1000} s, checking back now")
-            schedule.followerLost()
+            if (demo != null) {
+                RobotLog.i(LogSource.LIDAR, "Nobody beside on the radar for ${watch.thresholdMs / 1000} s (demo walk: no check-back)")
+            } else {
+                sideLost = true
+                RobotLog.i(LogSource.LIDAR, "Nobody beside on the radar for ${watch.thresholdMs / 1000} s, checking back now")
+                schedule.followerLost()
+            }
         }
         // past the jam: the blocked count of this leg starts again
         if (legBlock.progress(t, targetPoint?.let { p -> here?.distanceTo(p) }, legDriven)) {
@@ -598,6 +665,12 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             RobotLog.i(LogSource.NAV, "Drove on past the jam, the detour steps are ready again")
         }
         val due = schedule.due(t) ?: return
+        // the demo's other check-backs: no stop, no turn, a log line
+        if (demo != null) {
+            RobotLog.i(LogSource.APP, "Demo: check-back (${due.detail}) not made, the demo walk is a fixed routine")
+            schedule.done(null, Robot.heading())
+            return
+        }
         if (due == CheckReason.FOLLOWER_LOST) return
         // the last meters: no turning around, the arrival itself is the check
         if (NearGoal.skipCheck(here, dest)) {
@@ -696,7 +769,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             false
         }
         val left = Radar.roomLeft() ?: (side == WalkSide.RIGHT)
-        val turned = Robot.turn(DETOUR_TURN_DEG, left)
+        val turned = turnOnSpot(if (left) DETOUR_TURN_DEG.toDouble() else -DETOUR_TURN_DEG.toDouble(), "detour step A, more room there") != null
         RobotLog.i(
             LogSource.NAV,
             "Detour step A: " + when {
@@ -713,7 +786,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         patch(null, JourneyEvent.WALKING, "The way was blocked, Otto takes another way")
         Clinic.feed.ottoDid(now(), "The way is blocked, taking another way")
         Clinic.updateGuide { it.copy(detour = true) }
-        say(LineKey.DETOUR, SpeechKind.WAY)
+        val d = demo
+        if (d != null) d.play(DemoPart.DETOUR) else say(LineKey.DETOUR, SpeechKind.WAY)
     }
 
     // detour step C: the way stays blocked. the patient hears it, the team gets a call (once), otto waits
@@ -814,9 +888,106 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             wantedPace = null
             setPace(it, announce = true)
         }
-        if (timedOut) return checkBack(CheckReason.REGULAR, null, scope).first
+        // the demo walk does not look for the patient: it simply goes on
+        if (timedOut && demo == null) return checkBack(CheckReason.REGULAR, null, scope).first
         setPhase(GuidePhase.WALKING)
         return null
+    }
+
+    // the demo's walk stopped on purpose: the operator's hold, Next, a walk part that is due, a pace change
+    private suspend fun demoInterrupted(d: DemoWalk, scope: CoroutineScope): GuideOutcome? {
+        if (d.held()) return holdForDemo()
+        val byHand = d.takeNext()
+        val part = byHand ?: d.plan.due()
+        val newPace = wantedPace
+        return when {
+            part != null -> demoStop(d, part, byHand != null, scope)
+            newPace != null -> {
+                wantedPace = null
+                setPace(newPace, announce = true)
+                null
+            }
+            pauseWanted -> pauseHere(scope)
+            else -> null
+        }
+    }
+
+    // the demo's walk parts as a fixed routine (docs/demo-mode.md flow 4, field test b16): nothing here follows
+    // where the radar thinks the patient is. firstCheck = stop, glanceDeg towards the walk side, the part, the
+    // same angle back; fellBack = stop facing forward, the part (its wait_close waits for the patient), skipped
+    // in the last meters
+    private suspend fun demoStop(d: DemoWalk, part: String, byHand: Boolean, scope: CoroutineScope): GuideOutcome? {
+        if (part == DemoPart.FELL_BACK && NearGoal.skipCheck(here, dest)) {
+            RobotLog.i(LogSource.APP, "Demo: fellBack skipped, Otto is within ${NearGoal.SKIP_WITHIN_M.toInt()} m of $destination")
+            d.plan.played(part)
+            return null
+        }
+        RobotLog.i(
+            LogSource.APP,
+            "Demo: $part" + if (byHand) " (Next)" else " after %.0f s of driving".format(Locale.ROOT, d.plan.drivenMs() / 1000.0),
+        )
+        delay(Robot.NAV_RELEASE_MS)
+        when (part) {
+            DemoPart.FIRST_CHECK -> {
+                setPhase(GuidePhase.CHECKING)
+                OttoBrain.activity(RobotState.WALKING, "Checking on ${ticketOr()}")
+                Clinic.feed.ottoDid(now(), "Turning to check on the patient")
+                val glance = if (d.glanceDeg > 0.0) turnOnSpot(side.sign * d.glanceDeg, "the demo's glance to the ${side.wire}") else null
+                d.play(part)
+                glance?.let { turnOnSpot(-it.signedDeg, "back from the glance") }
+                patch(null, JourneyEvent.CHECK_BACK, "Patient close, all fine")
+            }
+            DemoPart.FELL_BACK -> {
+                setPhase(GuidePhase.WAITING)
+                OttoBrain.activity(RobotState.WALKING, "Waiting for ${ticketOr()}")
+                Clinic.feed.ottoDid(now(), "Waiting for the patient to catch up")
+                patch(null, JourneyEvent.WAITING_FOR_PATIENT, "Patient fell behind, Otto waits")
+                d.play(part)
+                patch(null, JourneyEvent.CHECK_BACK, "Patient is back with Otto")
+            }
+            else -> d.play(part)
+        }
+        d.plan.played(part)
+        checks++
+        if (cancelled) return cancelledNow()
+        wantedPace?.let {
+            wantedPace = null
+            setPace(it, announce = false)
+        }
+        if (pauseWanted) return pauseHere(scope)
+        setPhase(GuidePhase.WALKING)
+        OttoBrain.activity(RobotState.WALKING, Brain.guideGoal(ticket, destination))
+        return null
+    }
+
+    // the demo operator holds: otto stands until resume (no journey event, it is the team's own pause)
+    private suspend fun holdForDemo(): GuideOutcome? {
+        val before = phase
+        setPhase(GuidePhase.PAUSED)
+        RobotLog.i(LogSource.APP, "Demo: walk held by the operator, Otto stands")
+        while (demo?.held() == true) {
+            if (cancelled) return cancelledNow()
+            delay(250)
+        }
+        RobotLog.i(LogSource.APP, "Demo: walk goes on")
+        setPhase(if (before == GuidePhase.PAUSED) GuidePhase.WALKING else before)
+        return null
+    }
+
+    // every turn on the spot in a walk goes here: the one rule (TurnPlan.choose with walk.turnSide: more than
+    // 90 deg via his right side by default, smaller turns the shorter way), logged. the turn made, null = none
+    // needed or the robot did not take it
+    private suspend fun turnOnSpot(signedDeg: Double, why: String): Turn? {
+        val t = TurnPlan.choose(signedDeg, s.turnSide) ?: return null
+        return if (turnOnSpot(t, why)) t else null
+    }
+
+    private suspend fun turnOnSpot(t: Turn, why: String): Boolean {
+        RobotLog.d(
+            LogSource.NAV,
+            "Turn %s %.0f deg (%s, walk.turnSide %s)".format(Locale.ROOT, if (t.left) "left" else "right", t.degrees, why, s.turnSide.wire),
+        )
+        return Robot.turn(t.degrees, t.left)
     }
 
     // ---- check-backs (docs/journeys.md 4.3, 6.3, 6.7) ----
@@ -839,7 +1010,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     // a stop: turn towards where the patient was last seen (not a blind half turn), take the person nearest
     // that spot, look a bit to each side once when nobody is there, then a short line (QUICK) or a yes/no
     // question with at most 5 s of listening (ASK). no turn back: the navigation turns otto to the path.
-    // first = null to walk on, else the end of the guide; second = how far the patient was
+    // first = null to walk on, else the end of the guide; second = how far the patient was. not in the demo walk
+    // (its own routine: demoStop)
     private suspend fun checkBack(reason: CheckReason, watch: SideWatch?, scope: CoroutineScope): Pair<GuideOutcome?, Double?> {
         val stopAt = now()
         val no = checks + 1
@@ -859,7 +1031,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         )
         delay(Robot.NAV_RELEASE_MS)
         val predicted = track.predict(now(), Robot.latestPose())
-        val turn = TurnPlan.toward(predicted?.bearingDeg, side)
+        val turn = TurnPlan.toward(predicted?.bearingDeg, side, s.turnSide)
         // the radar saw them beside just now: the question already while otto turns to them
         val question = if (kind == StopKind.ASK) questionKey() else null
         var askedAt = 0L
@@ -870,9 +1042,10 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             asking = scope.launch { say(listOf(question), SpeechKind.QUESTION, question = true, fits = liveIn(GuidePhase.CHECKING)) }
         }
         // the chassis may still be held right after stopNavigation: one more try
-        val turned = turn == null || Robot.turn(turn.degrees, turn.left) || run {
+        val towards = if (reason == CheckReason.FOLLOWER_LOST) "to where the patient was" else "to the patient"
+        val turned = turn == null || turnOnSpot(turn, towards) || run {
             delay(TURN_RETRY_MS)
-            Robot.turn(turn.degrees, turn.left)
+            turnOnSpot(turn, "$towards, once more")
         }
         val target = TurnPlan.target(predicted, if (turned) turn else null, Robot.latestPose(), side)
         var look = look(target)
@@ -1002,17 +1175,17 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     // nobody near the spot: a little to one side (the spot's side first), then the other, once
     private suspend fun lookAround(target: Target): Look {
         val firstLeft = if (target.bearingDeg == 0.0) side == WalkSide.LEFT else target.bearingDeg > 0
-        val a = TurnPlan.ASIDE_DEG.toFloat()
+        val first = if (firstLeft) TurnPlan.ASIDE_DEG else -TurnPlan.ASIDE_DEG
         var turnedDeg = 0.0
-        if (Robot.turn(a, left = firstLeft)) turnedDeg += if (firstLeft) a else -a
+        turnOnSpot(first, "a look to one side")?.let { turnedDeg += it.signedDeg }
         var acc = look(TurnPlan.shifted(target, turnedDeg))
         if (acc.match != null) return acc.also { RobotLog.i(LogSource.VISION, "Found someone at the spot after looking ${if (firstLeft) "left" else "right"}") }
-        if (Robot.turn(2 * a, left = !firstLeft)) turnedDeg += if (firstLeft) -2.0 * a else 2.0 * a
+        turnOnSpot(-2.0 * first, "a look to the other side")?.let { turnedDeg += it.signedDeg }
         val other = look(TurnPlan.shifted(target, turnedDeg))
         acc = acc.plus(other)
         if (other.match != null) return acc.also { RobotLog.i(LogSource.VISION, "Found someone at the spot after looking ${if (firstLeft) "right" else "left"}") }
         // back towards the spot for what comes next (waiting, calling out)
-        Robot.turn(a, left = firstLeft)
+        turnOnSpot(first, "back towards the spot")
         RobotLog.i(LogSource.VISION, "Nobody at the spot, also not to the sides")
         return acc
     }
@@ -1145,6 +1318,13 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         OttoBrain.activity(RobotState.WALKING, "Arrived with ${ticketOr()} at $destination")
         Clinic.feed.ottoDid(now(), "Arrived at $destination")
         Clinic.flash(Mood.EXCITED, 3_000)
+        // the demo: its arrive part, then it drives back (no wait for the thumbs)
+        val d = demo
+        if (d != null) {
+            d.play(DemoPart.ARRIVE)
+            delay(DEMO_ARRIVED_MS)
+            return GuideOutcome.ARRIVED
+        }
         // the arrival line was written with the others (room, waiting area or exit)
         say(LineKey.ARRIVED, SpeechKind.ARRIVAL, liveIn(GuidePhase.ARRIVED))
         // optional thumbs up / down on the screen, only the anonymous count goes out
@@ -1187,8 +1367,9 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         return result(GuideOutcome.CANCELLED)
     }
 
-    // staff may cancel or close the journey while otto is on it
+    // staff may cancel or close the journey while otto is on it (a local demo walk has none)
     private suspend fun watchJourney() {
+        if (journeyId.isEmpty()) return
         while (true) {
             delay(JOURNEY_CHECK_MS)
             val j = Clinic.net(quiet = true) { Backend.journey(journeyId) }.getOrNull() ?: continue
@@ -1257,9 +1438,12 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         }
     }
 
-    // blocked: ask people in front to let otto pass (the leg's count decides when), with the walk's ready line
+    // blocked: ask people in front to let otto pass (the leg's count decides when), with the walk's ready line.
+    // the demo: its obstacle part
     private fun onNavEvent(ev: NavEvent) {
-        Clinic.onNavEvent(ev, lang, ready = lines.text(LineKey.EXCUSE_ME))
+        val d = demo
+        if (d != null) Clinic.onNavEvent(ev, own = { d.playLater(DemoPart.OBSTACLE) })
+        else Clinic.onNavEvent(ev, lang, ready = lines.text(LineKey.EXCUSE_ME))
     }
 
     private suspend fun patch(status: String?, event: String?, detail: String?) {
@@ -1309,21 +1493,26 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         private const val BLOCKED_RETRY_MS = 40_000L
         private const val BLOCKED_WAIT_MS = 3 * 60_000L
         private const val RETRY_LIMIT_MS = 10_000L
+        // the demo: a moment at the door after its arrive part
+        private const val DEMO_ARRIVED_MS = 1_500L
 
         // the guide that runs right now, for the actions and the screen
         @Volatile var current: Guide? = null
             private set
 
-        // runs one guide command to its end. the command is closed (done) on every path.
-        suspend fun run(cmd: RobotCommand, own: OwnRequest?): GuideOutcome {
-            if (cmd.to == null || cmd.journeyId.isNullOrBlank() || cmd.legId.isNullOrBlank()) {
+        // runs one guide command to its end. the command is closed (done) on every path. demo = the demo's walk;
+        // it may be local (no journey: the check-in did not reach the server), then nothing goes to the server
+        suspend fun run(cmd: RobotCommand, own: OwnRequest?, demo: DemoWalk? = null): GuideOutcome {
+            val local = demo != null && cmd.journeyId.isNullOrBlank()
+            if (cmd.to == null || (!local && (cmd.journeyId.isNullOrBlank() || cmd.legId.isNullOrBlank()))) {
                 RobotLog.w(LogSource.BRAIN, "Guide command without journey, leg or destination")
-                withContext(NonCancellable) { Clinic.net(quiet = true) { Backend.commandDone(cmd.id) } }
+                if (!local) withContext(NonCancellable) { Clinic.net(quiet = true) { Backend.commandDone(cmd.id) } }
                 return GuideOutcome.FAILED
             }
+            val journeyId = cmd.journeyId.orEmpty()
             // it may have waited in otto's queue: skip it when the team closed the journey meanwhile
             if (own == null) {
-                val j = Clinic.net(quiet = true) { Backend.journey(cmd.journeyId) }.getOrNull()
+                val j = Clinic.net(quiet = true) { Backend.journey(journeyId) }.getOrNull()
                 if (j != null && JourneyStatus.closed(j.status)) {
                     RobotLog.i(LogSource.BRAIN, "Guide for ${cmd.ticket ?: "a patient"} skipped: the journey is ${j.status}")
                     withContext(NonCancellable) { Clinic.net(quiet = true) { Backend.commandDone(cmd.id) } }
@@ -1335,13 +1524,15 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             if (!Floors.onMap(placeMap, MapSync.current)) {
                 val why = "${cmd.to.label} is on the map $placeMap and Otto is on ${MapSync.current}: he cannot take the elevator"
                 RobotLog.w(LogSource.BRAIN, "Guide for ${cmd.ticket ?: "a patient"} refused: $why")
-                withContext(NonCancellable) {
-                    Clinic.net(quiet = true) { Backend.patchJourney(cmd.journeyId, cmd.legId, LegStatus.FAILED, JourneyEvent.FAILED, why) }
-                    Clinic.commandDone(cmd.id, CommandResult(false, why))
+                if (!local) {
+                    withContext(NonCancellable) {
+                        Clinic.net(quiet = true) { Backend.patchJourney(journeyId, cmd.legId, LegStatus.FAILED, JourneyEvent.FAILED, why) }
+                        Clinic.commandDone(cmd.id, CommandResult(false, why))
+                    }
                 }
                 return GuideOutcome.FAILED
             }
-            val g = Guide(cmd, own)
+            val g = Guide(cmd, own, demo)
             current = g
             Clinic.guideStarted()
             return try {
@@ -1349,7 +1540,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             } finally {
                 current = null
                 withContext(NonCancellable) {
-                    Clinic.net(quiet = true) { Backend.commandDone(cmd.id) }
+                    if (!local) Clinic.net(quiet = true) { Backend.commandDone(cmd.id) }
                     Clinic.guideEnded()
                 }
             }

@@ -78,10 +78,12 @@ data class GuideUi(
     val detour: Boolean = false,
     // the side the patient walks on, next to otto (6.7)
     val side: WalkSide = WalkSide.LEFT,
+    // the demo's ticket card: checked in right here, so the pickup screen shows the ticket without "That's me"
+    val checkedIn: Boolean = false,
 ) {
     fun step(): String = when (phase) {
         GuidePhase.TO_PICKUP -> "Coming to pick you up"
-        GuidePhase.PICKUP -> "Please come to me"
+        GuidePhase.PICKUP -> if (checkedIn) "You're checked in" else "Please come to me"
         GuidePhase.PACE -> "How shall I walk?"
         GuidePhase.WALKING -> if (detour) "Taking another way" else "Walking with you"
         GuidePhase.CHECKING -> if (talk != null) "All good?" else "Checking on you"
@@ -137,6 +139,9 @@ data class StaffUi(
     // the mode switch at the top (RobotModes.kt); pending = asked for during a walk
     val mode: RobotMode = RobotMode.NORMAL,
     val modePending: RobotMode? = null,
+    // the demo card (docs/demo-mode.md): where the demo is, and whether it runs
+    val demo: String = "",
+    val demoRunning: Boolean = false,
     // docs/robot-setup.md: "Settings v4, applied 18:42" and "Map Hinterland 2, floor 1, localised"
     val settings: String = "",
     val settingsOk: Boolean = true,

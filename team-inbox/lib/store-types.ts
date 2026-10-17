@@ -1,6 +1,7 @@
 import type { NotifyChannel } from "./channel-types";
 import type { MapFrame, NewLog } from "./robot-data";
 import type {
+  CommandResult,
   Counters,
   FeedItem,
   HelpRequest,
@@ -26,6 +27,8 @@ export type PlacePatch = Partial<Pick<Place, "name" | "spot" | "kind" | "public"
   waitingPlaceId?: string | null;
   viaSpot?: string | null;
   notifyEmail?: string | null;
+  // null = any floor
+  mapName?: string | null;
   // null = back to the default channels
   channelIds?: string[] | null;
 };
@@ -95,7 +98,8 @@ export interface Store {
 
   createCommand<C extends RobotCommand>(command: C): Promise<C>;
   takeNextCommand(robot: string, now: string): Promise<RobotCommand | null>;
-  finishCommand(id: string, now: string): Promise<RobotCommand | null>;
+  // result: otto's answer, kept from the first answer only
+  finishCommand(id: string, now: string, result?: CommandResult): Promise<RobotCommand | null>;
   // closes open commands of a journey. onlyUndelivered = leave the one the robot already has
   closeJourneyCommands(journeyId: string, now: string, onlyUndelivered: boolean): Promise<void>;
   // newest first

@@ -78,8 +78,12 @@ data class RobotCommand(
     val walkUrl: String? = null,
     // switch_map: the map to switch to (spot = where otto stands on it, in `spot`)
     val mapName: String? = null,
-    // set_mode: normal | show | calm
+    // set_mode: normal | show | calm | demo
     val mode: String? = null,
+    // demo: start | next | hold | resume | restart | stop | say (docs/demo-mode.md)
+    val op: String? = null,
+    // demo start: the script as raw json (DemoScripts.parse), null = the last one or the built-in one
+    val script: String? = null,
 ) {
     companion object {
         const val GUIDE = "guide"
@@ -93,6 +97,8 @@ data class RobotCommand(
         const val RECHECK = "recheck"
         // the modes (RobotModes.kt)
         const val SET_MODE = "set_mode"
+        // demo mode (docs/demo-mode.md, Demo.kt)
+        const val DEMO = "demo"
     }
 }
 
@@ -273,6 +279,9 @@ object Json {
             walkUrl = o.str("walkUrl"),
             mapName = o.str("mapName"),
             mode = o.str("mode")?.lowercase(Locale.ROOT),
+            op = o.str("op")?.lowercase(Locale.ROOT),
+            // an object as sent; a script sent as a json string is read too
+            script = o.optJSONObject("script")?.toString() ?: o.str("script"),
         )
     }
 
@@ -316,6 +325,7 @@ object Json {
         version: String? = null,
         pose: RobotPose? = null,
         setup: SetupState? = null,
+        demo: DemoState? = null,
     ): JSONObject {
         val o = JSONObject()
             .put("robot", robot)
@@ -339,8 +349,22 @@ object Json {
             st.modePending?.let { o.put("modePending", it.wire) }
             if (st.maps.isNotEmpty()) o.put("maps", floors(st.maps))
         }
+        // docs/demo-mode.md: where the demo is, for the operator page
+        demo?.let { o.put("demo", demo(it)) }
         return o
     }
+
+    // the heartbeat's demo object; unknown values go as json null
+    fun demo(d: DemoState): JSONObject = JSONObject()
+        .put("running", d.running)
+        .put("part", d.part ?: JSONObject.NULL)
+        .put("step", d.step)
+        .put("total", d.total)
+        .put("waitingFor", d.waitingFor ?: JSONObject.NULL)
+        .put("line", d.line ?: JSONObject.NULL)
+        .put("nextPatientLine", d.nextPatientLine ?: JSONObject.NULL)
+        .put("ticket", d.ticket ?: JSONObject.NULL)
+        .put("runs", d.runs)
 
     private fun floors(maps: List<FloorMap>): JSONArray {
         val arr = JSONArray()

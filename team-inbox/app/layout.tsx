@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Nova Clinic",
+  title: "Otto Clinic",
   description: "Reception board for Otto, the robot that walks patients to their room. Only tickets, no names.",
   robots: { index: false, follow: false },
 };

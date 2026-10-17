@@ -42,7 +42,7 @@ export function cardToEmail(card: unknown): Email {
   const links = (content?.actions ?? []).filter(
     (a): a is { title: string; url: string } => a.type === "Action.OpenUrl" && Boolean(a.title && a.url),
   );
-  const [subject = "Nova Clinic", ...lines] = blocks;
+  const [subject = "Otto Clinic", ...lines] = blocks;
 
   const text = [
     subject,
@@ -51,7 +51,7 @@ export function cardToEmail(card: unknown): Email {
     ...(facts.length ? ["", ...facts.map((f) => `${f.title}: ${f.value}`)] : []),
     ...(links.length ? ["", ...links.map((l) => `${l.title}: ${l.url}`)] : []),
     "",
-    "Sent by Nova Clinic.",
+    "Sent by Otto Clinic.",
   ].join("\n");
 
   const html = `<div style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:15px;line-height:22px;color:#0f1b2d;max-width:520px">
@@ -73,7 +73,7 @@ ${links
       `<p style="margin:8px 0"><a href="${esc(l.url)}" style="display:inline-block;background:#2361d4;color:#ffffff;text-decoration:none;font-weight:600;padding:10px 16px;border-radius:10px">${esc(l.title)}</a></p>`,
   )
   .join("\n")}
-<p style="margin:16px 0 0;font-size:13px;color:#56667c">Sent by Nova Clinic.</p>
+<p style="margin:16px 0 0;font-size:13px;color:#56667c">Sent by Otto Clinic.</p>
 </div>`;
   return { subject, text, html };
 }

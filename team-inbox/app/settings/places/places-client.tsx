@@ -12,16 +12,17 @@ import {
   PencilSimple,
   Plus,
   SignOut as ExitIcon,
+  Stack,
   Trash,
   UsersThree,
 } from "@phosphor-icons/react";
 import Link from "next/link";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { type NotificationsView, channelChipName } from "@/lib/channel-types";
-import type { MapState, Place, PlaceKind } from "@/lib/types";
+import type { FloorInfo, MapState, Place, PlaceKind } from "@/lib/types";
 import { ALWAYS_PUBLIC, DEFAULT_MINUTES, MAX_MINUTES, MIN_MINUTES, PLACE_KINDS, ROOM_KINDS } from "@/lib/types";
-import { KIND_LABEL, LoginNeeded, PAGE, ROBOT, api, post } from "@/lib/ui";
-import { Button, Switch } from "../components/button";
+import { KIND_LABEL, LoginNeeded, ROBOT, api, post } from "@/lib/ui";
+import { Button, Switch } from "../../components/button";
 
 const INPUT =
   "h-12 w-full min-w-0 rounded-xl border border-line-strong bg-surface px-4 text-base placeholder:text-muted focus:border-primary focus:outline-none";
@@ -55,6 +56,7 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
   const [places, setPlaces] = useState<Place[] | null>(null);
   const [notify, setNotify] = useState<NotificationsView | null>(null);
   const [map, setMap] = useState<MapState | null>(null);
+  const [floors, setFloors] = useState<FloorInfo[]>([]);
   const [adding, setAdding] = useState<PlaceKind | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,11 +67,12 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
       const [list, n, m] = await Promise.all([
         api<Place[]>("/api/places"),
         api<NotificationsView>("/api/channels").catch(() => null),
-        api<{ map: MapState | null }>(`/api/robot/map?robot=${ROBOT}`).catch(() => null),
+        api<{ map: MapState | null; floors?: FloorInfo[] }>(`/api/robot/map?robot=${ROBOT}`).catch(() => null),
       ]);
       setPlaces(list);
       setNotify(n);
       setMap(m?.map ?? null);
+      setFloors(m?.floors ?? []);
       setError(null);
     } catch (e) {
       if (!(e instanceof LoginNeeded)) setError(e instanceof Error ? e.message : "Could not load the places");
@@ -77,6 +80,17 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
   }, []);
 
   const spots = map?.places.length ? new Set(map.places.map((s) => s.name)) : null;
+  // floors: more than one map, or places that already have one. then the list is grouped by floor
+  const byFloor = floors.length > 1 || Boolean(places?.some((p) => p.mapName));
+  const floorNames = [...new Set([...floors.map((f) => f.name), ...(places ?? []).flatMap((p) => (p.mapName ? [p.mapName] : []))])];
+  const sections: { key: string; title: string | null; current: boolean; list: Place[] }[] = !places
+    ? []
+    : byFloor
+      ? [
+          ...floorNames.map((f) => ({ key: f, title: f, current: floors.some((x) => x.name === f && x.current), list: places.filter((p) => p.mapName === f) })),
+          { key: "", title: "Any floor", current: false, list: places.filter((p) => !p.mapName) },
+        ].filter((s) => s.list.length > 0)
+      : [{ key: "", title: null, current: false, list: places }];
 
   useEffect(() => {
     load();
@@ -97,11 +111,13 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
   ];
 
   return (
-    <main className={`${PAGE} pb-16`}>
+    <section aria-labelledby="places-title">
       <div>
-        <div className="flex flex-wrap items-end justify-between gap-4 pt-6 pb-4">
+        <div className="flex flex-wrap items-end justify-between gap-4 pb-4">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Places</h1>
+            <h2 id="places-title" className="text-xl font-semibold tracking-tight">
+              Places
+            </h2>
             <p className="mt-1 max-w-prose text-[15px] text-muted">
               Where Otto can walk. The map spot must match the spot name on Otto&apos;s map exactly.
             </p>
@@ -151,6 +167,7 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
               places={places ?? []}
               practiceChannel={practiceChannel}
               emailOn={emailOn}
+              floors={floors}
               onCancel={() => setAdding(null)}
               onSaved={async () => {
                 setAdding(null);
@@ -174,12 +191,21 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
             </div>
           )
         ) : (
-          GROUPS.map((g) => {
-            const list = places.filter((p) => p.kind === g.kind);
+          sections.map((sec) => (
+          <div key={sec.key || "any"} className={sec.title ? "mt-10 border-t border-line pt-6 first:mt-6" : ""}>
+            {sec.title && (
+              <h3 className="flex flex-wrap items-center gap-2 text-[17px] font-semibold">
+                <Stack size={20} aria-hidden className="text-primary" />
+                {sec.key ? `Floor: ${sec.title}` : sec.title}
+                {sec.current && <span className="rounded-full bg-primary-soft px-2.5 py-0.5 text-xs font-semibold text-primary-ink">Otto is on this floor</span>}
+              </h3>
+            )}
+          {GROUPS.map((g) => {
+            const list = sec.list.filter((p) => p.kind === g.kind);
             if (!list.length) return null;
             return (
-              <section key={g.kind} className="mt-8" aria-labelledby={`group-${g.kind}`}>
-                <h2 id={`group-${g.kind}`} className="flex items-center gap-2 text-sm font-semibold text-muted">
+              <section key={g.kind} className="mt-8" aria-labelledby={`group-${sec.key}-${g.kind}`}>
+                <h2 id={`group-${sec.key}-${g.kind}`} className="flex items-center gap-2 text-sm font-semibold text-muted">
                   <KindIcon kind={g.kind} size={18} /> {g.title}
                 </h2>
                 <ul className="mt-2 grid gap-3 xl:grid-cols-2">
@@ -191,6 +217,7 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
                           places={places}
                           practiceChannel={practiceChannel}
                           emailOn={emailOn}
+                          floors={floors}
                           onCancel={() => setEditing(null)}
                           onSaved={async () => {
                             setEditing(null);
@@ -207,6 +234,7 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
                         messages={messageLine(p, notify)}
                         onMap={spots ? spots.has(p.spot) : null}
                         mapName={map?.mapName}
+                        floorShown={byFloor}
                         onEdit={() => setEditing(p.id)}
                         reload={load}
                       />
@@ -215,10 +243,12 @@ export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: bo
                 </ul>
               </section>
             );
-          })
+          })}
+          </div>
+          ))
         )}
       </div>
-    </main>
+    </section>
   );
 }
 
@@ -251,6 +281,7 @@ function PlaceRow({
   messages,
   onMap,
   mapName,
+  floorShown = false,
   onEdit,
   reload,
 }: {
@@ -261,6 +292,7 @@ function PlaceRow({
   // is the map spot on otto's map. null = otto has not sent its map yet
   onMap: boolean | null;
   mapName?: string;
+  floorShown?: boolean;
   onEdit: () => void;
   reload: () => Promise<void>;
 }) {
@@ -280,6 +312,9 @@ function PlaceRow({
   const usedBy = place.kind === "waiting" ? places.filter((p) => p.waitingPlaceId === place.id) : [];
   const anyWaiting = places.some((p) => p.kind === "waiting" && p.active);
   const mapText = mapName ? `Otto's map (${mapName})` : "Otto's map";
+  // a spot on another floor can't be checked against the map otto is on now
+  const otherFloor = Boolean(place.mapName && mapName && place.mapName !== mapName);
+  const checkMap = otherFloor ? null : onMap;
 
   const remove = async () => {
     try {
@@ -308,14 +343,15 @@ function PlaceRow({
           <p className="mt-0.5 text-sm text-muted">
             Map spot <span className="font-mono text-ink">{place.spot}</span>
           </p>
-          {(chips.length > 0 || (onMap === false && place.kind !== "waiting")) && (
+          {floorShown && !place.mapName && <p className="mt-0.5 text-sm text-muted">On every floor</p>}
+          {(chips.length > 0 || (checkMap === false && place.kind !== "waiting")) && (
             <ul className="mt-2 flex flex-wrap gap-1.5">
               {chips.map((c) => (
                 <li key={c} className="max-w-full truncate rounded-full bg-subtle px-2.5 py-1 text-xs font-semibold text-muted">
                   {c}
                 </li>
               ))}
-              {onMap === false && place.kind !== "waiting" && (
+              {checkMap === false && place.kind !== "waiting" && (
                 <li className="max-w-full truncate rounded-full bg-warn-soft px-2.5 py-1 text-xs font-semibold text-warn">
                   Spot not on {mapText}
                 </li>
@@ -359,10 +395,10 @@ function PlaceRow({
         </Hint>
       )}
       {place.kind === "waiting" && (
-        <Hint warn={onMap === false || usedBy.length === 0} icon={<MapPin size={18} aria-hidden />}>
-          {onMap === true
+        <Hint warn={checkMap === false || usedBy.length === 0} icon={<MapPin size={18} aria-hidden />}>
+          {checkMap === true
             ? `The spot ${place.spot} is on ${mapText}.`
-            : onMap === false
+            : checkMap === false
               ? `The spot ${place.spot} is not on ${mapText} yet. The team adds it on the robot, this page can't.`
               : `Otto needs the spot ${place.spot} on its map. The team adds it on the robot, this page can't.`}{" "}
           {usedBy.length
@@ -392,6 +428,7 @@ function PlaceForm({
   places,
   practiceChannel,
   emailOn,
+  floors = [],
   onCancel,
   onSaved,
 }: {
@@ -400,6 +437,7 @@ function PlaceForm({
   places: Place[];
   practiceChannel: boolean;
   emailOn: boolean;
+  floors?: FloorInfo[];
   onCancel: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -417,6 +455,8 @@ function PlaceForm({
   const [dropHook, setDropHook] = useState(false);
   const [email, setEmail] = useState(place?.notifyEmail ?? "");
   const [via, setVia] = useState(place?.viaSpot ?? "");
+  const [floor, setFloor] = useState(place?.mapName ?? "");
+  const floorChoices = [...new Set([...floors.map((f) => f.name), ...(place?.mapName ? [place.mapName] : [])])];
   const [active, setActive] = useState(place?.active ?? true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -443,6 +483,7 @@ function PlaceForm({
       waitingPlaceId: roomKind ? waitingId : "",
       selfCheckIn: roomKind && selfCheckIn,
       active,
+      mapName: floor,
     };
     if (!webhook.trim()) {
       if (place && savedHook && dropHook) body.teamsWebhookUrl = "";
@@ -456,6 +497,7 @@ function PlaceForm({
         if (!email.trim()) delete body.notifyEmail;
         if (!via.trim()) delete body.viaSpot;
         if (!body.waitingPlaceId) delete body.waitingPlaceId;
+        if (!floor) delete body.mapName;
         await post("/api/places", body);
       }
       await onSaved();
@@ -552,6 +594,26 @@ function PlaceForm({
           {kind === "waiting" && " The team adds the spot on the robot's map, this page can't."}
         </p>
       </div>
+
+      {floorChoices.length > 0 && (
+        <div className="mt-4">
+          <label htmlFor={`floor-${formId}`} className="text-sm font-semibold">
+            Floor
+          </label>
+          <select id={`floor-${formId}`} className={`${INPUT} mt-2`} value={floor} onChange={(e) => setFloor(e.target.value)}>
+            <option value="">Any floor</option>
+            {floorChoices.map((f) => (
+              <option key={f} value={f}>
+                {f}
+                {floors.find((x) => x.name === f)?.current ? " (Otto is here)" : ""}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-sm text-muted">
+            The map of Otto&apos;s this place is on. Otto can&apos;t take the elevator: walks to another floor are refused.
+          </p>
+        </div>
+      )}
 
       <div className="mt-4">
         <label htmlFor={`via-${formId}`} className="text-sm font-semibold">
@@ -698,11 +760,11 @@ function PlaceForm({
               : practiceChannel
                 ? "Empty means the practice channel gets the cards."
                 : "Empty means no own Teams channel for this place."}{" "}
-            Slack, Telegram, WhatsApp, Discord and more are on the{" "}
-            <Link href="/notifications" className="font-semibold text-primary hover:underline">
+            Slack, Telegram, WhatsApp, Discord and more are under{" "}
+            <Link href="/settings/notifications" className="font-semibold text-primary hover:underline">
               Notifications
-            </Link>{" "}
-            page.
+            </Link>
+            .
           </p>
         </div>
       )}

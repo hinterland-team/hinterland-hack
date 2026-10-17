@@ -29,7 +29,8 @@ object Speech {
         scope.launch { loop() }
     }
 
-    // a ready line, said as it is (starts at once, no llm). suspends until it was said, replaced or dropped
+    // a ready line, said as it is (starts at once, no llm). suspends until it was said, replaced or dropped.
+    // script = a demo line: never dropped, and in demo mode the only kind that is said
     suspend fun say(
         kind: SpeechKind,
         text: String,
@@ -37,10 +38,11 @@ object Speech {
         urgent: Boolean = false,
         topic: String? = null,
         fits: () -> Boolean = { true },
+        script: Boolean = false,
     ): TurnOutcome {
         val t = text.trim()
         if (t.isEmpty()) return TurnOutcome.SAID
-        return offer(SpeechLine(kind, t, question = question, urgent = urgent, topic = topic, fits = fits))
+        return offer(SpeechLine(kind, t, question = question, urgent = urgent, topic = topic, fits = fits, script = script))
     }
 
     fun sayLater(kind: SpeechKind, text: String, fits: () -> Boolean = { true }) {
@@ -97,6 +99,18 @@ object Speech {
     }
 
     val silent: Boolean get() = turns.silent
+
+    // demo mode: only the script's lines (and the team's say); a line that plays now and is none stops
+    fun setScriptOnly(on: Boolean, why: String) {
+        if (turns.setScriptOnly(on, why)) stopNow()
+        wake.trySend(Unit)
+    }
+
+    // the demo stops or starts its run again: its waiting lines go and the one that plays stops
+    fun stopScript(why: String) {
+        if (turns.dropScript(why)) stopNow()
+        wake.trySend(Unit)
+    }
 
     fun clear(why: String) {
         turns.clear(why)

@@ -2,12 +2,14 @@
 
 import { ArrowRight, Footprints } from "@phosphor-icons/react";
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { JourneyWithQueue, Place } from "@/lib/types";
 import { currentLeg, lineKey } from "@/lib/types";
-import { STAGE_TONE, type Stage, type StageKey, placeText, stageOf } from "@/lib/ui";
+import { STAGE_TONE, type Stage, type StageKey, isSimRobot, placeText, stageOf } from "@/lib/ui";
 import { JourneyActions, type Run } from "../components/journey-actions";
 import { NotifyLine, PaceNote, StageLine, TicketBadge } from "../components/journey-bits";
+import { useNow } from "../components/use-poll";
+import { SimBadge } from "../components/sim-badge";
 
 const ORDER: StageKey[] = ["failed", "staff", "room", "waiting", "walking", "pickup"];
 
@@ -54,19 +56,19 @@ function counts(rows: Group["rows"]) {
     .join(", ");
 }
 
-export function JourneysPanel({
+export const JourneysPanel = memo(function JourneysPanel({
   journeys,
   places,
-  now,
   run,
   busy,
 }: {
   journeys: JourneyWithQueue[];
   places: Place[];
-  now: number;
   run: Run;
   busy: string | null;
 }) {
+  // "for 5 min" texts: a slow clock of its own
+  const now = useNow(15_000) ?? Date.parse(journeys[0]?.updatedAt ?? "") ?? 0;
   const seen = useRef<Set<string> | null>(null);
   const fresh = new Set<string>();
   if (seen.current) for (const j of journeys) if (!seen.current.has(j.id)) fresh.add(j.id);
@@ -130,6 +132,7 @@ export function JourneysPanel({
                       <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
                         <span className={`text-[17px] font-semibold ${STAGE_TONE[stage.key].text}`}>{stage.title}</span>
                         <PaceNote journey={j} />
+                        {isSimRobot(j.robot) && <SimBadge />}
                       </p>
                       <p className="mt-0.5 text-[15px] text-muted tabular">{stage.detail}</p>
                       <div className="mt-2 max-w-60">
@@ -149,4 +152,4 @@ export function JourneysPanel({
       )}
     </section>
   );
-}
+});

@@ -113,6 +113,21 @@ data class Turn(val degrees: Float, val left: Boolean) {
     val signedDeg: Double get() = if (left) degrees.toDouble() else -degrees.toDouble()
 }
 
+// which way otto turns on the spot during a walk (walk.turnSide, docs/demo-mode.md): right = the shorter way,
+// except a real turn-around (the target more than TURN_AROUND_DEG away on the left, behind) goes via his right;
+// left mirrors it; shortest = always the shorter way. never more than MAX_TURN_DEG (field test b16: radar-guided
+// turns of 251 and 257 deg looked like spinning)
+enum class TurnSide(val wire: String) {
+    RIGHT("right"),
+    LEFT("left"),
+    SHORTEST("shortest"),
+    ;
+
+    companion object {
+        fun of(raw: String?): TurnSide = entries.firstOrNull { it.wire == raw?.trim()?.lowercase(java.util.Locale.ROOT) } ?: RIGHT
+    }
+}
+
 object TurnPlan {
     // closer to straight ahead than this: no turn needed
     const val MIN_DEG = 20.0
@@ -120,12 +135,34 @@ object TurnPlan {
     const val DEFAULT_DEG = 135.0
     // nobody near the spot: look this far to each side once
     const val ASIDE_DEG = 35.0
+    // further than this away on the other side is a real turn-around: it goes the walk.turnSide way
+    const val TURN_AROUND_DEG = 150.0
+    // a turn on the spot is never more than this
+    const val MAX_TURN_DEG = 210.0
 
     // the turn that faces a bearing (+ = left). no bearing = the walk side. null = already facing it
-    fun toward(bearingDeg: Double?, side: WalkSide): Turn? {
+    fun toward(bearingDeg: Double?, side: WalkSide, turnSide: TurnSide = TurnSide.SHORTEST): Turn? {
         val b = Bearing.wrap(bearingDeg ?: (DEFAULT_DEG * side.sign))
         if (abs(b) < MIN_DEG) return null
-        return Turn(abs(b).toFloat().coerceAtMost(180f), left = b > 0)
+        return choose(b, turnSide)
+    }
+
+    // the one rule for every turn on the spot during a walk: signedDeg = where to face, + = left. the shorter way,
+    // except a turn-around of more than TURN_AROUND_DEG on the other side goes the walk.turnSide way ("right":
+    // the target at +160 deg = 200 deg to the right). never more than MAX_TURN_DEG. null = nothing to turn
+    fun choose(signedDeg: Double, turnSide: TurnSide): Turn? {
+        val b = Bearing.wrap(signedDeg)
+        val a = abs(b)
+        if (a < 0.5) return null
+        val shorterLeft = b > 0
+        val left = when {
+            a <= TURN_AROUND_DEG || turnSide == TurnSide.SHORTEST -> shorterLeft
+            turnSide == TurnSide.RIGHT -> false
+            else -> true
+        }
+        // the way round: the shorter angle, or the rest of the circle for a turn-around the other way
+        val deg = if (left == shorterLeft) a else 360.0 - a
+        return Turn(deg.coerceAtMost(MAX_TURN_DEG).toFloat().coerceAtLeast(1f), left)
     }
 
     // the predicted spot in the robot frame after the turn. a map point is placed again with the new pose;

@@ -13,11 +13,12 @@ import {
   X,
 } from "@phosphor-icons/react";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { GuideCommand, JourneyWithQueue, Pace, Place } from "@/lib/types";
-import { matchScore, placeWait } from "@/lib/types";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import type { GuideCommand, JourneyWithQueue, Pace, Place, RobotStatus } from "@/lib/types";
+import { matchScore, normalizeName, placeWait } from "@/lib/types";
 import { PACE_LABEL, placeText, post } from "@/lib/ui";
 import { Button, Kbd, Segmented, Switch } from "../components/button";
+import { ModeBlock, useRobotMode } from "../components/robot-mode";
 
 const PACE_OPTIONS: { value: Pace; label: string; key: string }[] = [
   { value: "normal", label: "Normal", key: "1" },
@@ -32,10 +33,28 @@ function texts(p: Place) {
   return [p.name, p.room, p.spot];
 }
 
-export function GuidePanel({ places, open, onSent }: { places: Place[]; open: JourneyWithQueue[]; onSent: () => Promise<void> }) {
-  const active = places.filter((p) => p.active);
+const same = (a?: string | null, b?: string | null) => Boolean(a && b && normalizeName(a) === normalizeName(b));
+
+export const GuidePanel = memo(function GuidePanel({
+  places,
+  open,
+  robotStatus,
+  onSent,
+}: {
+  places: Place[];
+  open: JourneyWithQueue[];
+  robotStatus: RobotStatus;
+  onSent: () => Promise<void>;
+}) {
+  const active = useMemo(() => places.filter((p) => p.active), [places]);
   const reception = active.find((p) => p.kind === "reception");
-  const destinations = active.filter((p) => p.kind !== "reception");
+  const destinations = useMemo(() => active.filter((p) => p.kind !== "reception"), [active]);
+  const mode = useRobotMode();
+  const blocked = Boolean(mode && mode.mode !== "normal");
+  // a place on another floor than otto (or than the reception) can't be walked to: otto can't take the elevator
+  const robotMap = robotStatus.mapName ?? null;
+  const otherFloor = (p: Place) =>
+    p.mapName ? (reception?.mapName && !same(reception.mapName, p.mapName) ? reception.mapName : robotMap && !same(robotMap, p.mapName) ? robotMap : null) : null;
 
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
@@ -81,7 +100,7 @@ export function GuidePanel({ places, open, onSent }: { places: Place[]; open: Jo
   };
 
   const send = async () => {
-    if (!selected || busy) return;
+    if (!selected || busy || blocked || otherFloor(selected)) return;
     setBusy(true);
     setError(null);
     try {
@@ -150,6 +169,7 @@ export function GuidePanel({ places, open, onSent }: { places: Place[]; open: Jo
         </h2>
         {reception && <p className="truncate text-sm text-muted">Pickup at {reception.name}</p>}
       </div>
+      <ModeBlock className="mt-4" />
 
       {active.length === 0 ? (
         <SetupHint
@@ -229,12 +249,13 @@ export function GuidePanel({ places, open, onSent }: { places: Place[]; open: Jo
                 waiting={p.waitingPlaceId ? active.find((w) => w.id === p.waitingPlaceId) : undefined}
                 wait={placeWait(open, p)}
                 selected={selected?.id === p.id}
+                floorNote={otherFloor(p) ? `On ${p.mapName}, Otto is on ${otherFloor(p)}` : null}
                 onPick={() => setPicked(p.id)}
               />
             ))}
             {shown.length === 0 && (
               <p className="col-span-2 rounded-xl border border-dashed border-line-strong px-4 py-6 text-center text-[15px] text-muted">
-                No place matches &quot;{query}&quot;. Check the spelling, or add it on Places.
+                No place matches &quot;{query}&quot;. Check the spelling, or add it under Settings, Places.
               </p>
             )}
           </div>
@@ -254,7 +275,7 @@ export function GuidePanel({ places, open, onSent }: { places: Place[]; open: Jo
               <p className="mt-2 text-sm text-muted">
                 {straight
                   ? `Otto walks the patient right into ${placeText(selected)}.`
-                  : `The patient waits in ${waitingRoom.name}. ${selected.name} gets a Teams card and calls them in.`}
+                  : `The patient waits in ${waitingRoom.name}. ${selected.name} gets a message and calls them in.`}
               </p>
             </div>
           )}
@@ -281,13 +302,17 @@ export function GuidePanel({ places, open, onSent }: { places: Place[]; open: Jo
             />
           </div>
 
-          <Button kind="primary" size="xl" className="mt-5 w-full" disabled={!selected || busy} onClick={send}>
+          <Button kind="primary" size="xl" className="mt-5 w-full" disabled={!selected || busy || blocked || Boolean(selected && otherFloor(selected))} onClick={send}>
             <NavigationArrow size={24} weight="fill" aria-hidden />
             {busy ? "Sending Otto" : selected ? `Send Otto to ${goesVia ? goesVia.name : selected.name}` : "Send Otto"}
           </Button>
           <p className="mt-2 min-h-5 text-sm text-muted" role="status">
             {error ? (
               <span className="font-medium text-danger">{error}</span>
+            ) : selected && otherFloor(selected) ? (
+              <span className="font-medium text-warn">
+                {selected.name} is on another floor ({selected.mapName}). Otto can&apos;t take the elevator: switch Otto&apos;s floor on the Map page first.
+              </span>
             ) : selected ? (
               `${PACE_LABEL[pace]} pace${wheelchair ? ", wheelchair" : ""}. Otto only gets a ticket and the room.`
             ) : (
@@ -298,7 +323,7 @@ export function GuidePanel({ places, open, onSent }: { places: Place[]; open: Jo
       )}
     </section>
   );
-}
+});
 
 function SetupHint({ title, text }: { title: string; text: string }) {
   return (
@@ -307,7 +332,7 @@ function SetupHint({ title, text }: { title: string; text: string }) {
       <h3 className="mt-3 text-lg font-semibold">{title}</h3>
       <p className="mt-1 max-w-prose text-[15px] text-muted">{text}</p>
       <Link
-        href="/places"
+        href="/settings/places"
         className="press mt-4 inline-flex h-12 items-center gap-2 rounded-xl bg-primary px-5 font-semibold text-on-primary hover:bg-primary-hover"
       >
         Set up places <ArrowRight size={18} aria-hidden />
@@ -328,12 +353,14 @@ function DestinationCard({
   waiting,
   wait,
   selected,
+  floorNote,
   onPick,
 }: {
   place: Place;
   waiting?: Place;
   wait: { ahead: number; busy: boolean; minutes: number };
   selected: boolean;
+  floorNote: string | null;
   onPick: () => void;
 }) {
   const room = place.kind === "room" || place.kind === "other";
@@ -371,8 +398,8 @@ function DestinationCard({
         </span>
       </span>
       <span className="block w-full text-sm">
-        <span className={`block font-semibold ${line.tone}`}>{line.text}</span>
-        {why.length > 0 && <span className="block text-muted">{why.join(", ")}</span>}
+        <span className={`block font-semibold ${floorNote ? "text-warn" : line.tone}`}>{floorNote ? "Other floor" : line.text}</span>
+        {floorNote ? <span className="block text-muted">{floorNote}</span> : why.length > 0 && <span className="block text-muted">{why.join(", ")}</span>}
       </span>
       {selected && (
         <span className="absolute top-3 right-3 flex size-6 items-center justify-center rounded-full bg-primary text-on-primary">
@@ -421,8 +448,8 @@ function TicketShown({
           `The patient taps "That's me" on Otto, or says the ticket.`,
           `Otto walks with them${slow ? " slowly" : ""} to ${via ? via.name : room.name} and checks they keep up.`,
           via
-            ? `${room.name} gets a Teams card and taps Call in when ready. Otto brings them over.`
-            : `${room.name} sees ${journey.ticket} coming on the room view and in Teams.`,
+            ? `${room.name} gets a message and taps Call in when ready. Otto brings them over.`
+            : `${room.name} sees ${journey.ticket} coming on the room view and in its channels.`,
         ].map((t, i) => (
           <li key={i} className="grid grid-cols-[32px_minmax(0,1fr)] items-start gap-3 text-[15px]">
             <span className="flex size-8 items-center justify-center rounded-full bg-subtle text-sm font-semibold text-muted">

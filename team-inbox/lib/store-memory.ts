@@ -84,6 +84,29 @@ export function resetMemoryStore() {
   Object.assign(data, fresh());
 }
 
+export type MemoryData = Data;
+
+// the live data object, for the json copy on the laptop (store-file.ts). read only for the caller
+export function memoryData(): Readonly<Data> {
+  return data;
+}
+
+// replaces everything with what store-file.ts read from disk. parts that are missing or have the wrong shape start empty
+export function restoreMemoryData(saved: unknown) {
+  const base = fresh();
+  const src = saved && typeof saved === "object" && !Array.isArray(saved) ? (saved as Record<string, unknown>) : {};
+  for (const [key, empty] of Object.entries(base)) {
+    const v = src[key];
+    const ok = Array.isArray(empty)
+      ? Array.isArray(v)
+      : typeof empty === "number"
+        ? typeof v === "number" && Number.isFinite(v)
+        : Boolean(v) && typeof v === "object" && !Array.isArray(v);
+    if (ok) (base as Record<string, unknown>)[key] = v;
+  }
+  Object.assign(data, base);
+}
+
 export const memoryStore: Store = {
   kind: "memory",
 
@@ -106,7 +129,7 @@ export const memoryStore: Store = {
     for (const key of ["name", "spot", "kind", "public", "avgMinutes", "active", "selfCheckIn"] as const) {
       if (patch[key] !== undefined) (p as Record<string, unknown>)[key] = patch[key];
     }
-    for (const key of ["room", "teamsWebhookUrl", "waitingPlaceId", "viaSpot", "notifyEmail"] as const) {
+    for (const key of ["room", "teamsWebhookUrl", "waitingPlaceId", "viaSpot", "notifyEmail", "mapName"] as const) {
       if (patch[key] === undefined) continue;
       if (patch[key]) p[key] = patch[key] as string;
       else delete p[key];
@@ -184,10 +207,14 @@ export const memoryStore: Store = {
     if (c.type === "ask" && c.origin === "phone") c.text = "";
     return out;
   },
-  async finishCommand(id, now) {
+  async finishCommand(id, now, result) {
     const c = data.commands.find((x) => x.id === id);
     if (!c) return null;
     c.doneAt ??= now;
+    if (result && c.ok === undefined) {
+      c.ok = result.ok;
+      if (result.detail) c.detail = result.detail;
+    }
     return copy(c);
   },
   async closeJourneyCommands(journeyId, now, onlyUndelivered) {
@@ -364,6 +391,8 @@ export const memoryStore: Store = {
     };
     const name = f.mapName ?? before?.mapName;
     if (name) map.mapName = name;
+    const maps = f.maps ?? before?.maps;
+    if (maps) map.maps = maps;
     if (f.follower) map.follower = f.follower;
     if (f.target) map.target = f.target;
     if (f.remainingMeters !== undefined) map.remainingMeters = f.remainingMeters;

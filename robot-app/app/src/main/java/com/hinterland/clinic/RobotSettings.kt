@@ -16,6 +16,8 @@ data class Settings(
     val speedSlow: Double = 0.4,
     val speedVerySlow: Double = 0.25,
     val walkSide: WalkSide = WalkSide.LEFT,
+    // turns on the spot during a walk: right = the shorter way, a real turn-around via the right; left; shortest
+    val turnSide: TurnSide = TurnSide.RIGHT,
     val firstCheckS: Int = 10,
     val checkMinS: Int = 10,
     val checkMaxS: Int = 30,
@@ -254,6 +256,10 @@ object SettingsSpec {
             "walk", "walkSide", "The side the patient walks on, next to Otto (the radar sees the sides, not the back).",
             listOf("left", "right"), { it.walkSide.wire }, { s, v -> s.copy(walkSide = WalkSide.of(v)) },
         ),
+        ChoiceField(
+            "walk", "turnSide", "Turns on the spot during a walk: right = the shorter way, but a real turn-around (more than 150 deg, behind on the left) via his right; left mirrors it; shortest = always the shorter way. Never more than 210 deg.",
+            TurnSide.entries.map { it.wire }, { it.turnSide.wire }, { s, v -> s.copy(turnSide = TurnSide.of(v)) },
+        ),
         NumberField(
             "walk", "firstCheckS", "First check on the patient after this much walking.",
             3.0, 60.0, "s", true, { it.firstCheckS.toDouble() }, { s, v -> s.copy(firstCheckS = v.toInt()) },
@@ -388,7 +394,7 @@ object SettingsSpec {
         ),
         // ---- the mode (settings.mode, also the command set_mode and the staff menu) ----
         ModeField(
-            "", "mode", "normal = receptionist; show = lively face, small turns, silent, no walks; calm = quiet and passive, no automatic driving.",
+            "", "mode", "normal = receptionist; show = lively face, small turns, silent, no walks; calm = quiet and passive, no automatic driving; demo = the demo script, mic off.",
             { it.mode }, { s, v -> s.copy(mode = v) },
         ),
     )

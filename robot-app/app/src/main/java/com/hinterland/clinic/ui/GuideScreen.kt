@@ -121,9 +121,26 @@ private fun Pickup(g: GuideUi, actions: ScreenActions) {
                 PhoneCard(url)
             }
         }
+        // checked in right here (the demo's ticket card): the room, no "That's me"
+        if (g.checkedIn) {
+            Say("You're checked in for ${listOfNotNull(g.destinationNote, g.destination).first()}.")
+            Spacer(Modifier.weight(1f))
+            TicketPrivacy()
+            return@Column
+        }
         Say("Is this you? Please come to me.")
         Spacer(Modifier.weight(1f))
         BigButton("That's me", GlyphKind.CHECK, onClick = actions.thatsMe, pulse = true, height = Big.button)
+    }
+}
+
+// under the ticket card: otto only knows the number
+@Composable
+private fun TicketPrivacy() {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Glyph(GlyphKind.CHECK, Nova.Teal, 40.dp)
+        Spacer(Modifier.width(Space.s))
+        Text("I only use this number, never your name.", style = text(Big.line, FontWeight.SemiBold, Nova.Teal), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

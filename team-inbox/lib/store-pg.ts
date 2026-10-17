@@ -1,5 +1,6 @@
 // postgres store (neon). only type imports here so the sql can be tested outside next
 import type { ChannelType, NotifyChannel } from "./channel-types";
+import type { DemoOp, DemoScript, DemoState } from "./demo-script";
 import type { MapFrame } from "./robot-data";
 import type {
   ChannelPatch,
@@ -35,6 +36,8 @@ import type {
 } from "./types";
 
 type Row = Record<string, unknown>;
+// the demo command's ops (lib/demo-script.ts DEMO_OPS), here as text so this file keeps type imports only
+const DEMO_OP_LIST = ["start", "next", "hold", "resume", "restart", "stop", "say"];
 export type SqlClient = { query(text: string, params?: unknown[]): Promise<Row[]> };
 
 function iso(value: unknown): string {
@@ -72,6 +75,7 @@ function toPlace(r: Row): Place {
   if (r.notify_email) p.notifyEmail = String(r.notify_email);
   const ids = json<unknown>(r.channel_ids);
   if (Array.isArray(ids)) p.channelIds = ids.map(String);
+  if (r.map_name) p.mapName = String(r.map_name);
   return p;
 }
 
@@ -151,6 +155,27 @@ function toCommand(r: Row): RobotCommand {
     if (r.journey_id) c.journeyId = String(r.journey_id);
     if (r.origin === "phone" || r.origin === "staff") c.origin = r.origin;
   } else if (r.type === "go_to") c = { id, robot, type: "go_to", spot: String(r.spot), createdAt };
+  // switch_map keeps the map name in the text column (no extra column)
+  else if (r.type === "switch_map") c = { id, robot, type: "switch_map", mapName: String(r.text ?? ""), spot: String(r.spot ?? ""), createdAt };
+  else if (r.type === "config_changed") c = { id, robot, type: "config_changed", createdAt };
+  else if (r.type === "recheck") c = { id, robot, type: "recheck", createdAt };
+  else if (r.type === "set_mode") {
+    const mode = r.action === "show" || r.action === "calm" ? r.action : "normal";
+    c = { id, robot, type: "set_mode", mode, createdAt };
+  } else if (r.type === "demo") {
+    // the op in the action column, the say text or the start's script (json) in text
+    const op = DEMO_OP_LIST.includes(String(r.action)) ? (String(r.action) as DemoOp) : "next";
+    const d: RobotCommand = { id, robot, type: "demo", op, createdAt };
+    if (op === "say" && r.text) d.text = String(r.text);
+    if (op === "start" && r.text) {
+      try {
+        d.script = JSON.parse(String(r.text)) as DemoScript;
+      } catch {
+        // a broken script: otto uses its built-in one
+      }
+    }
+    c = d;
+  }
   else if (r.type === "walk_control") {
     c = { id, robot, type: "walk_control", journeyId: String(r.journey_id), action: String(r.action) as WalkAction, createdAt };
     if (r.origin === "phone" || r.origin === "staff") c.origin = r.origin;
@@ -179,6 +204,8 @@ function toCommand(r: Row): RobotCommand {
   const done = isoOrUndefined(r.done_at);
   if (delivered) c.deliveredAt = delivered;
   if (done) c.doneAt = done;
+  if (r.done_ok !== null && r.done_ok !== undefined) c.ok = Boolean(r.done_ok);
+  if (r.done_detail) c.detail = String(r.done_detail);
   return c;
 }
 
@@ -194,6 +221,12 @@ function toHeartbeat(r: Row): RobotHeartbeat {
     screen: r.screen === null || r.screen === undefined ? null : json<RobotScreen>(r.screen),
     server: textOrNull(r.server),
     version: textOrNull(r.app_version),
+    mapName: textOrNull(r.map_name),
+    localised: r.localised === null || r.localised === undefined ? null : Boolean(r.localised),
+    configVersion: r.config_version === null || r.config_version === undefined ? null : Number(r.config_version),
+    mode: textOrNull(r.mode),
+    modePending: textOrNull(r.mode_pending),
+    demo: r.demo === null || r.demo === undefined ? null : json<DemoState>(r.demo),
     at: iso(r.updated_at),
   };
 }
@@ -222,6 +255,8 @@ function toMap(r: Row): MapState {
   if (r.follower) m.follower = json<NonNullable<MapState["follower"]>>(r.follower);
   if (r.target) m.target = json<NonNullable<MapState["target"]>>(r.target);
   if (r.remaining_meters !== null && r.remaining_meters !== undefined) m.remainingMeters = Number(r.remaining_meters);
+  const maps = json<MapState["maps"] | null>(r.maps);
+  if (Array.isArray(maps)) m.maps = maps;
   return m;
 }
 
@@ -311,8 +346,8 @@ export function createPgStore(sql: SqlClient): Store {
     },
     async createPlace(p) {
       const rows = await sql.query(
-        `insert into places (id, name, room, spot, kind, public, avg_minutes, teams_webhook_url, active, waiting_place_id, self_check_in, created_at, via_spot, notify_email, channel_ids)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13, $14, $15::jsonb) returning *`,
+        `insert into places (id, name, room, spot, kind, public, avg_minutes, teams_webhook_url, active, waiting_place_id, self_check_in, created_at, via_spot, notify_email, channel_ids, map_name)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13, $14, $15::jsonb, $16) returning *`,
         [
           p.id,
           p.name,
@@ -329,6 +364,7 @@ export function createPgStore(sql: SqlClient): Store {
           p.viaSpot ?? null,
           p.notifyEmail ?? null,
           p.channelIds ? JSON.stringify(p.channelIds) : null,
+          p.mapName ?? null,
         ],
       );
       return toPlace(rows[0]);
@@ -348,7 +384,8 @@ export function createPgStore(sql: SqlClient): Store {
            waiting_place_id = case when $13::boolean then $14::text else waiting_place_id end,
            via_spot = case when $15::boolean then $16::text else via_spot end,
            notify_email = case when $17::boolean then $18::text else notify_email end,
-           channel_ids = case when $19::boolean then $20::jsonb else channel_ids end
+           channel_ids = case when $19::boolean then $20::jsonb else channel_ids end,
+           map_name = case when $21::boolean then $22::text else map_name end
          where id = $1 returning *`,
         [
           id,
@@ -371,6 +408,8 @@ export function createPgStore(sql: SqlClient): Store {
           patch.notifyEmail || null,
           patch.channelIds !== undefined,
           patch.channelIds ? JSON.stringify(patch.channelIds) : null,
+          patch.mapName !== undefined,
+          patch.mapName || null,
         ],
       );
       return rows[0] ? toPlace(rows[0]) : null;
@@ -543,12 +582,23 @@ export function createPgStore(sql: SqlClient): Store {
           g?.to.name ?? null,
           g?.to.spot ?? null,
           g?.to.room ?? null,
-          c.type === "go_to" ? c.spot : null,
-          c.type === "say" || c.type === "ask" ? c.text : null,
+          c.type === "go_to" || c.type === "switch_map" ? c.spot : null,
+          // demo: the say text, or the script of a start as json (no extra column)
+          c.type === "say" || c.type === "ask"
+            ? c.text
+            : c.type === "switch_map"
+              ? c.mapName
+              : c.type === "demo"
+                ? c.op === "start"
+                  ? c.script
+                    ? JSON.stringify(c.script)
+                    : null
+                  : (c.text ?? null)
+                : null,
           c.createdAt,
           g?.to.viaSpot ?? null,
           g?.walkCode ?? null,
-          c.type === "walk_control" ? c.action : null,
+          c.type === "walk_control" ? c.action : c.type === "set_mode" ? c.mode : c.type === "demo" ? c.op : null,
           c.type === "walk_control" || c.type === "ask" ? (c.origin ?? null) : null,
         ],
       );
@@ -572,10 +622,14 @@ export function createPgStore(sql: SqlClient): Store {
       );
       return rows[0] ? toCommand(rows[0]) : null;
     },
-    async finishCommand(id, now) {
+    async finishCommand(id, now, result) {
+      // the first answer stays (done_ok on the right side is the value before this update)
       const rows = await sql.query(
-        `update robot_commands set done_at = coalesce(done_at, $2::timestamptz) where id = $1 returning *`,
-        [id, now],
+        `update robot_commands set done_at = coalesce(done_at, $2::timestamptz),
+           done_ok = coalesce(done_ok, $3::boolean),
+           done_detail = case when done_ok is null then $4::text else done_detail end
+         where id = $1 returning *`,
+        [id, now, result ? result.ok : null, result?.detail ?? null],
       );
       return rows[0] ? toCommand(rows[0]) : null;
     },
@@ -604,13 +658,15 @@ export function createPgStore(sql: SqlClient): Store {
     async saveHeartbeat(h) {
       await sql.query(
         `with s as (
-           insert into robot_status (robot, battery, charging, state, position, goal, detail, screen, updated_at, server, app_version)
-           values ($1, $2, $3, $4, $5, $6, $7, $9::jsonb, $8::timestamptz, $10, $11)
+           insert into robot_status (robot, battery, charging, state, position, goal, detail, screen, updated_at, server, app_version, map_name, localised, config_version, mode, mode_pending, demo)
+           values ($1, $2, $3, $4, $5, $6, $7, $9::jsonb, $8::timestamptz, $10, $11, $12, $13, $14, $15, $16, $17::jsonb)
            on conflict (robot) do update set
              battery = excluded.battery, charging = excluded.charging, state = excluded.state,
              position = excluded.position, goal = excluded.goal, detail = excluded.detail,
              screen = excluded.screen, updated_at = excluded.updated_at, server = excluded.server,
-             app_version = excluded.app_version
+             app_version = excluded.app_version, map_name = excluded.map_name, localised = excluded.localised,
+             config_version = excluded.config_version, mode = excluded.mode, mode_pending = excluded.mode_pending,
+             demo = excluded.demo
            returning robot
          )
          insert into robots (name, last_seen_at) select robot, $8::timestamptz from s
@@ -627,12 +683,18 @@ export function createPgStore(sql: SqlClient): Store {
           h.screen ? JSON.stringify(h.screen) : null,
           h.server,
           h.version,
+          h.mapName ?? null,
+          h.localised ?? null,
+          h.configVersion ?? null,
+          h.mode ?? null,
+          h.modePending ?? null,
+          h.demo ? JSON.stringify(h.demo) : null,
         ],
       );
     },
     async getRobot(name): Promise<RobotRecord> {
       const rows = await sql.query(
-        `select r.last_seen_at, s.robot as status_robot, s.battery, s.charging, s.state, s.position, s.goal, s.detail, s.screen, s.server, s.app_version, s.updated_at
+        `select r.last_seen_at, s.robot as status_robot, s.battery, s.charging, s.state, s.position, s.goal, s.detail, s.screen, s.server, s.app_version, s.map_name, s.localised, s.config_version, s.mode, s.mode_pending, s.demo, s.updated_at
          from (select $1::text as name) q
          left join robots r on r.name = q.name
          left join robot_status s on s.robot = q.name`,
@@ -819,8 +881,8 @@ export function createPgStore(sql: SqlClient): Store {
     async saveMap(f: MapFrame, trailMax) {
       const pose = JSON.stringify({ x: f.pose.x, y: f.pose.y, at: f.at });
       const rows = await sql.query(
-        `insert into robot_maps (robot, map_name, pose, places, scan, follower, target, remaining_meters, trail, updated_at)
-         values ($1, $2, $3::jsonb, coalesce($4::jsonb, '[]'::jsonb), $5::jsonb, $6::jsonb, $7::jsonb, $8, jsonb_build_array($9::jsonb), $10::timestamptz)
+        `insert into robot_maps (robot, map_name, pose, places, scan, follower, target, remaining_meters, trail, updated_at, maps)
+         values ($1, $2, $3::jsonb, coalesce($4::jsonb, '[]'::jsonb), $5::jsonb, $6::jsonb, $7::jsonb, $8, jsonb_build_array($9::jsonb), $10::timestamptz, $12::jsonb)
          on conflict (robot) do update set
            map_name = coalesce(excluded.map_name, robot_maps.map_name),
            pose = excluded.pose,
@@ -832,6 +894,7 @@ export function createPgStore(sql: SqlClient): Store {
            follower = excluded.follower,
            target = excluded.target,
            remaining_meters = excluded.remaining_meters,
+           maps = coalesce(excluded.maps, robot_maps.maps),
            trail = case
              when excluded.map_name is not null and robot_maps.map_name is distinct from excluded.map_name then excluded.trail
              when jsonb_array_length(robot_maps.trail) > 0
@@ -858,6 +921,7 @@ export function createPgStore(sql: SqlClient): Store {
           pose,
           f.at,
           trailMax,
+          f.maps ? JSON.stringify(f.maps) : null,
         ],
       );
       return toMap(rows[0]);

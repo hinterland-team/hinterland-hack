@@ -1,5 +1,6 @@
 // what staff get told: a patient on the way, a visitor in the waiting room, otto asking for help, a test.
 // every channel renders this same message its own way (lib/notify.ts). only the ticket and places, never a name
+import { isSimRobot, robotDisplayName } from "./robots";
 import type { HelpRequest, Journey, Pace, Place } from "./types";
 
 // clock time for messages. CLINIC_TIMEZONE (e.g. Europe/Berlin) matters on servers that run in UTC
@@ -12,9 +13,14 @@ export function clock(isoTime: string) {
   }).format(new Date(isoTime));
 }
 
+// the robot's api id stays "nova", people read "Otto" (and "Virtual Otto" for the simulation)
 export function robotLabel(robot: string) {
-  return robot.charAt(0).toUpperCase() + robot.slice(1);
+  return robotDisplayName(robot);
 }
+
+// a walk of the simulation (/simulate) says so in every message: there is no real patient
+const SIM_TEXT = "A test run with Virtual Otto from the dashboard. No real patient.";
+const simTitle = (sim: boolean, title: string) => (sim ? `Simulation: ${title}` : title);
 
 export const PACE_TEXT: Record<Pace, string> = { normal: "Normal", slow: "Slow", very_slow: "Very slow" };
 
@@ -47,18 +53,19 @@ function paceText(j: Pick<Journey, "pace" | "wheelchair">) {
 
 // "A17 is on the way" to the place otto walks to
 export function onTheWayMessage(
-  j: Pick<Journey, "ticket" | "pace" | "wheelchair">,
+  j: Pick<Journey, "ticket" | "pace" | "wheelchair"> & { robot?: string },
   to: Pick<Place, "name" | "room">,
   expected: string,
   links: CardLinks,
 ): NotifyMessage {
+  const sim = isSimRobot(j.robot);
   const out: MessageLink[] = [];
   if (links.exit) out.push({ label: "Done - guide to exit", url: links.exit, primary: true });
   out.push({ label: "Done - finished here", url: links.done });
   return {
     kind: "on_the_way",
-    title: `${j.ticket} is on the way`,
-    text: "Otto is walking this patient to you. Otto only knows the ticket and the room.",
+    title: simTitle(sim, `${j.ticket} is on the way`),
+    text: sim ? SIM_TEXT : "Otto is walking this patient to you. Otto only knows the ticket and the room.",
     facts: [
       ["Ticket", j.ticket],
       ["To", placeLabel(to)],
@@ -73,24 +80,28 @@ export function onTheWayMessage(
       pace: j.pace,
       wheelchair: j.wheelchair,
       expected,
+      ...(sim ? { simulation: true } : {}),
     },
   };
 }
 
 // self check-in or "via the waiting room": the visitor sits there, the room calls them in
 export function visitorMessage(
-  j: Pick<Journey, "ticket" | "pace" | "wheelchair">,
+  j: Pick<Journey, "ticket" | "pace" | "wheelchair"> & { robot?: string },
   room: Pick<Place, "name" | "room">,
   waiting: Pick<Place, "name" | "room">,
   links: CardLinks,
 ): NotifyMessage {
+  const sim = isSimRobot(j.robot);
   const out: MessageLink[] = [];
   if (links.callIn) out.push({ label: "Call in", url: links.callIn, primary: true });
   out.push({ label: links.exit ? "Done - guide to exit" : "Done - finished here", url: links.exit ?? links.done });
   return {
     kind: "visitor",
-    title: `Your visitor has arrived - ticket ${j.ticket}, waiting in ${waiting.name}`,
-    text: "Tap Call in when you are ready. Otto picks the ticket up in the waiting room and walks them to you.",
+    title: simTitle(sim, `Your visitor has arrived - ticket ${j.ticket}, waiting in ${waiting.name}`),
+    text: sim
+      ? `${SIM_TEXT} Tap Call in to see Virtual Otto fetch the ticket.`
+      : "Tap Call in when you are ready. Otto picks the ticket up in the waiting room and walks them to you.",
     facts: [
       ["Ticket", j.ticket],
       ["Waiting in", placeLabel(waiting)],
@@ -105,19 +116,21 @@ export function visitorMessage(
       waitingRoom: waiting.name,
       pace: j.pace,
       wheelchair: j.wheelchair,
+      ...(sim ? { simulation: true } : {}),
     },
   };
 }
 
 export function helpMessage(help: HelpRequest, boardUrl: string): NotifyMessage {
   const urgent = help.urgency === "urgent";
+  const sim = isSimRobot(help.robot);
   const facts: [string, string][] = [["Robot", robotLabel(help.robot)]];
   if (help.ticket) facts.push(["Ticket", help.ticket]);
   facts.push(["Time", clock(help.createdAt)]);
   return {
     kind: "help",
-    title: urgent ? "Urgent: help needed at reception" : "Help needed at reception",
-    text: help.summary,
+    title: simTitle(sim, urgent ? "Urgent: help needed at reception" : "Help needed at reception"),
+    text: sim ? `${help.summary} (${SIM_TEXT})` : help.summary,
     textStrong: true,
     urgent,
     facts,
@@ -130,7 +143,7 @@ export function helpMessage(help: HelpRequest, boardUrl: string): NotifyMessage 
 export function testMessage(channel: string, base: string, at: string): NotifyMessage {
   return {
     kind: "test",
-    title: "Test message from Nova Clinic",
+    title: "Test message from Otto Clinic",
     text: "This channel works. Real messages look like this one: the ticket, the place, the pace and two links. Never a name.",
     facts: [
       ["Channel", channel],

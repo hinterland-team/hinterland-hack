@@ -76,6 +76,8 @@ sealed interface Plan {
     data class Refuse(val command: RobotCommand, val why: String) : Plan
     // show mode: a small turn on the spot
     data class Turn(val turn: ShowTurn) : Plan
+    // demo mode: the demo run (Demo.kt) has the body until the demo ends
+    data object Demo : Plan
     // urgent help was called: stay put and keep talking
     data object StayWithPerson : Plan
     // a command is waiting until the person talking to otto is done (at most QUIET_WAIT_MS)
@@ -118,6 +120,9 @@ object Brain {
 
         // a command this mode does not take is answered at once (a walk in show / calm mode)
         s.commands.firstNotNullOfOrNull { c -> ModeRules.refuses(s.mode, c.type)?.let { Plan.Refuse(c, it) } }?.let { return it }
+
+        // the demo: its run drives, talks and walks; nothing else of its own (the poll answers the team at once)
+        if (s.mode == RobotMode.DEMO) return if (s.robotReady) Plan.Demo else Plan.Wait
 
         // 2. the person in front asked otto to walk them somewhere: go now
         s.commands.firstOrNull { it.id in s.ownCommandIds }?.let { return Plan.RunCommand(it, excuse = false) }
@@ -205,15 +210,17 @@ object Brain {
             s.now - s.returnFailedAt >= RETRY_RETURN_MS
 
     // a running ReturnHome, GoCharge or show turn gives way to these (a guide, the person's own request, go_to,
-    // a map switch, urgent help). a mode change stops the drives the new mode does not allow (stopsFor)
+    // a map switch, urgent help). a mode change stops the drives the new mode does not allow (stopsFor).
+    // the demo's run keeps the body: commands left from before wait until the demo is over
     fun shouldPreempt(s: Snapshot): Boolean =
-        s.helpActive || s.commands.any { needsBody(it) }
+        s.helpActive || (s.mode != RobotMode.DEMO && s.commands.any { needsBody(it) })
 
     // the task of this plan stops when otto changes to this mode (calm: no drive home, no drive to the charger)
     fun stopsFor(plan: Plan, mode: RobotMode): Boolean = when (plan) {
         Plan.ReturnHome -> !ModeRules.drivesHome(mode)
         Plan.GoCharge -> !ModeRules.drivesToCharger(mode)
         is Plan.Turn -> !ModeRules.idleTurns(mode)
+        Plan.Demo -> mode != RobotMode.DEMO
         else -> false
     }
 
@@ -236,10 +243,12 @@ object Brain {
     fun goal(plan: Plan, s: Snapshot): String = when (plan) {
         is Plan.Refuse -> "Saying no to a task (${s.mode.label} mode)"
         is Plan.Turn -> "Show mode"
+        Plan.Demo -> "Running the demo"
         Plan.Wait -> when (s.mode) {
             RobotMode.NORMAL -> "Waiting for patients"
             RobotMode.SHOW -> "Show mode"
             RobotMode.CALM -> "Calm mode"
+            RobotMode.DEMO -> "Demo mode"
         }
         Plan.StayWithPerson -> "Staying with someone who needs help"
         is Plan.WaitForQuiet -> "Finishing this talk, then " + commandGoal(plan.command, s.homeSpot).replaceFirstChar { it.lowercase() }
@@ -253,7 +262,7 @@ object Brain {
     }
 
     fun state(plan: Plan, homeSpot: String): RobotState = when (plan) {
-        is Plan.Refuse, is Plan.Turn -> RobotState.IDLE
+        is Plan.Refuse, is Plan.Turn, Plan.Demo -> RobotState.IDLE
         Plan.StayWithPerson, is Plan.WaitForQuiet, Plan.Talk -> RobotState.TALKING
         is Plan.RunCommand -> commandState(plan.command, homeSpot)
         is Plan.Greet -> RobotState.GREETING

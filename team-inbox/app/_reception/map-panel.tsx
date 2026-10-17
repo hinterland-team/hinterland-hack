@@ -2,42 +2,44 @@
 
 import { ArrowRight } from "@phosphor-icons/react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { Place, RobotStatus } from "@/lib/types";
-import { MapEmpty, MapStats, SpotPanel, useLiveMap } from "../components/live-map";
+import { isSimRobot } from "@/lib/ui";
+import { type LiveMap, MapEmpty, MapStats, SpotPanel, imageHref, useStale } from "../components/live-map";
 import { MapLegend, MapView, spotsOf } from "../components/map-view";
+import { SimBadge } from "../components/sim-badge";
 
-export function MapPanel({ places, robot }: { places: Place[]; robot: RobotStatus }) {
-  const { map, loaded, failed, now, stale } = useLiveMap();
+export const MapPanel = memo(function MapPanel({ places, robot, live }: { places: Place[]; robot: RobotStatus; live: LiveMap }) {
+  const { map, image, loaded, failed } = live;
   const [picked, setPicked] = useState<string | null>(null);
   const spots = useMemo(() => (map ? spotsOf(map, places) : []), [map, places]);
+  const plan = useMemo(() => (image ? { ...image, href: imageHref(robot.robot, image) } : null), [image, robot.robot]);
+  const stale = useStale(map);
   const spot = spots.find((s) => s.name === picked);
 
   return (
     <section aria-labelledby="map-title" className="rounded-2xl border border-line bg-surface p-4 shadow-panel sm:p-6">
       <div className="flex items-baseline justify-between gap-4">
-        <h2 id="map-title" className="text-xl font-semibold tracking-tight">
-          Live map
+        <h2 id="map-title" className="flex flex-wrap items-center gap-2 text-xl font-semibold tracking-tight">
+          Live map {isSimRobot(robot.robot) && <SimBadge />}
         </h2>
-        <Link
-          href="/map"
-          className="flex h-10 items-center gap-1 rounded-lg px-2 text-sm font-semibold text-primary hover:bg-primary-soft"
-        >
+        <Link href="/map" className="flex h-10 items-center gap-1 rounded-lg px-2 text-sm font-semibold text-primary hover:bg-primary-soft">
           Full map <ArrowRight size={16} aria-hidden />
         </Link>
       </div>
       {!map ? (
         <div className="mt-3">
-          <MapEmpty failed={failed} loaded={loaded} />
+          <MapEmpty failed={failed} loaded={loaded} robot={robot.robot} />
         </div>
       ) : (
         <>
           <div className="mt-3">
-            <MapStats map={map} now={now} stale={stale} />
+            <MapStats map={map} />
           </div>
           <div className="mt-3">
             <MapView
               map={map}
+              plan={plan}
               spots={spots}
               picked={picked}
               onPick={setPicked}
@@ -61,4 +63,4 @@ export function MapPanel({ places, robot }: { places: Place[]; robot: RobotStatu
       )}
     </section>
   );
-}
+});

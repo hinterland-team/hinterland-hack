@@ -7,7 +7,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 // the mode otto is in (RobotModes.kt): set from the staff menu, by the command set_mode or by settings.mode.
-// a change during a walk waits until the walk is over (the patient must not lose otto's voice half way)
+// a change during a walk waits until the walk is over (the patient must not lose otto's voice half way);
+// leaving the demo is at once, the demo ends its own walk cleanly (Demo.kt)
 object Modes {
 
     private val _flow = MutableStateFlow(RobotMode.NORMAL)
@@ -28,7 +29,7 @@ object Modes {
 
     // staff menu, set_mode, settings
     fun request(mode: RobotMode, source: String): CommandResult {
-        if (Guide.current != null && mode != current) {
+        if (Guide.current != null && mode != current && current != RobotMode.DEMO) {
             pending = mode
             pendingSource = source
             RobotLog.i(LogSource.APP, "${mode.label} mode asked for ($source): it starts when this walk is over")
@@ -61,8 +62,10 @@ object Modes {
         this.source = source
         RobotLog.i(LogSource.APP, "Mode: ${mode.wire} (was ${old.wire}, from $source). ${ModeRules.describe(mode)}")
         Speech.setSilent(mode.silent, "${mode.label} mode, Otto is silent")
+        Speech.setScriptOnly(mode == RobotMode.DEMO, "Demo mode, Otto only says the script's lines")
         // calm: the robot system's own push warning off too, back on after
         Robot.pushWarning(mode != RobotMode.CALM)
+        Demo.modeChanged(old, mode)
         Clinic.modeChanged(old, mode)
         OttoBrain.modeChanged(old, mode)
         Screen.apply()
@@ -70,7 +73,7 @@ object Modes {
 }
 
 // what only works while otto's screen is in front: the mic, the system voice bar and the page's speaking style.
-// AgentOS opens the mic by itself when the app comes to the front (SDK 4.1), so show and calm close it again
+// AgentOS opens the mic by itself when the app comes to the front (SDK 4.1), so show, calm and demo close it again
 object Screen {
 
     @Volatile var resumed = false
@@ -94,18 +97,18 @@ object Screen {
         voiceBar(true)
     }
 
-    // the mode and the settings: voice bar hidden (voice.hideVoiceBar, always in show / calm), mic off in show / calm.
-    // normal mode only opens the mic again when show / calm closed it (it never touches it otherwise)
+    // the mode and the settings: voice bar hidden (voice.hideVoiceBar, always in show / calm / demo), mic off in
+    // show / calm / demo. normal mode only opens the mic again when one of them closed it (it never touches it otherwise)
     fun apply() {
         if (!resumed) return
-        val silent = Modes.current.silent
-        voiceBar(!(silent || Config.current.hideVoiceBar))
-        if (silent || mutedByUs) mic(muted = silent)
+        val off = Modes.current.micOff
+        voiceBar(!(off || Config.current.hideVoiceBar))
+        if (off || mutedByUs) mic(muted = off)
     }
 
     // every second from the brain
     fun enforce() {
-        if (resumed && Modes.current.silent) mic(muted = true)
+        if (resumed && Modes.current.micOff) mic(muted = true)
     }
 
     fun settingsChanged(old: Settings, new: Settings) {

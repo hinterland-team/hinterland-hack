@@ -94,6 +94,8 @@ fun StaffMenu(staff: StaffUi, actions: ScreenActions, modifier: Modifier = Modif
                 Modifier.width(430.dp).fillMaxHeight().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Space.s),
             ) {
+                // docs/demo-mode.md: start / stop, Next and where the demo is
+                DemoCard(staff, actions)
                 // docs/robot-setup.md: the settings version and the map / floor
                 StatusCard("Setup") {
                     StatusRow(if (staff.settingsOk) Nova.Done else Nova.Amber, staff.settings.ifBlank { "Settings: not known" })
@@ -142,7 +144,30 @@ fun StaffMenu(staff: StaffUi, actions: ScreenActions, modifier: Modifier = Modif
 
 private val SMALL = 20.sp
 
-// three segments: the mode otto is in is filled; a mode asked for during a walk has an amber ring
+// the demo (docs/demo-mode.md): start with the last script the dashboard sent (else the built-in one), stop,
+// Next for the wait under way, and the step it is at
+@Composable
+private fun DemoCard(staff: StaffUi, actions: ScreenActions) {
+    StatusCard("Demo") {
+        StatusRow(if (staff.demoRunning) Nova.Blue else Nova.InkFaint, staff.demo.ifBlank { "Off" })
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+            BigButton(
+                if (staff.demoRunning) "Stop" else "Start",
+                onClick = actions.demoStartStop,
+                modifier = Modifier.weight(1f),
+                primary = !staff.demoRunning,
+                height = 72.dp,
+            )
+            if (staff.demoRunning) {
+                BigButton("Next", onClick = actions.demoNext, modifier = Modifier.weight(1f), height = 72.dp)
+            }
+        }
+    }
+}
+
+// three segments: the mode otto is in is filled; a mode asked for during a walk has an amber ring. the demo has
+// its own card
 @Composable
 private fun ModeSwitch(staff: StaffUi, actions: ScreenActions) {
     val shape = RoundedCornerShape(36.dp)
@@ -156,7 +181,7 @@ private fun ModeSwitch(staff: StaffUi, actions: ScreenActions) {
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RobotMode.entries.forEach { m ->
+        RobotMode.entries.filter { it != RobotMode.DEMO }.forEach { m ->
             val on = m == staff.mode
             val waiting = m == staff.modePending
             val seg = RoundedCornerShape(30.dp)

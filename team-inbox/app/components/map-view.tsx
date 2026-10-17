@@ -1,7 +1,8 @@
 "use client";
 
 import { CornersOut, Desktop, MagnifyingGlassMinus, MagnifyingGlassPlus, Moon, Sun } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { type FloorImage, imageBounds } from "@/lib/map-geo";
 import type { MapState, Place, PlaceKind } from "@/lib/types";
 import { normalizeName } from "@/lib/types";
 
@@ -10,6 +11,8 @@ import { normalizeName } from "@/lib/types";
 
 export type MapTheme = "auto" | "light" | "dark";
 export type SpotInfo = { name: string; x: number; y: number; place?: Place };
+// the real floor plan from otto (robot-setup.md section 1): the png and where it sits in map meters
+export type FloorPlan = FloorImage & { href: string };
 type View = { cx: number; cy: number; s: number };
 type Size = { w: number; h: number };
 
@@ -44,12 +47,18 @@ const KIND_COLOR: Record<PlaceKind, string> = {
 
 // what the view has to show. the small panel follows otto during a walk (otto, target, patient,
 // the last metres of the trail), otherwise and on the full map: the whole floor
-function focusPoints(map: MapState, compact: boolean) {
+function focusPoints(map: MapState, compact: boolean, plan?: FloorPlan | null) {
   const pts: { x: number; y: number }[] = [map.pose];
   if (map.target) pts.push(map.target);
   if (map.follower) pts.push(map.follower);
   if (compact && map.target) return [...pts, ...map.trail.slice(-12)];
   pts.push(...map.places, ...map.trail);
+  // the whole floor plan when there is one
+  if (plan) {
+    const b = imageBounds(plan);
+    pts.push({ x: b.minX, y: b.minY }, { x: b.maxX, y: b.maxY });
+    return pts;
+  }
   // walls close to otto give the picture context, far reflections would only zoom out
   for (const [x, y] of map.scan) if (Math.hypot(x - map.pose.x, y - map.pose.y) <= 6) pts.push({ x, y });
   return pts;
@@ -69,8 +78,8 @@ function boundsOf(pts: { x: number; y: number }[]) {
   return { minX, maxX, minY, maxY };
 }
 
-function fit(map: MapState, size: Size, compact: boolean): View {
-  const b = boundsOf(focusPoints(map, compact));
+function fit(map: MapState, size: Size, compact: boolean, plan?: FloorPlan | null): View {
+  const b = boundsOf(focusPoints(map, compact, plan));
   const min = compact && map.target ? 9 : 4;
   const bw = Math.max(min, b.maxX - b.minX);
   const bh = Math.max(min * 0.6, b.maxY - b.minY);
@@ -85,15 +94,20 @@ function fit(map: MapState, size: Size, compact: boolean): View {
 }
 
 // the camera only moves when something it should show gets close to the edge
-function stillFits(view: View, fitted: View, map: MapState, size: Size, compact: boolean) {
+function stillFits(view: View, fitted: View, map: MapState, size: Size, compact: boolean, plan?: FloorPlan | null) {
   if (fitted.s > view.s * 1.8 || fitted.s < view.s / 1.25) return false;
   const inside = (p: { x: number; y: number }) => {
     const x = (p.x - view.cx) * view.s + size.w / 2;
     const y = size.h / 2 - (p.y - view.cy) * view.s;
     return x >= size.w * 0.12 && x <= size.w * 0.88 && y >= size.h * 0.12 && y <= size.h * 0.88;
   };
-  const pts = compact ? focusPoints(map, compact) : [map.pose, ...map.places];
+  const pts = compact ? focusPoints(map, compact, plan) : [map.pose, ...map.places];
   return pts.every(inside);
+}
+
+// the label over the arrow: "Otto" or "Virtual Otto"
+function robotLabelOf(robot: string) {
+  return robot === "otto-sim" ? "Virtual Otto" : "Otto";
 }
 
 // grid step in meters so lines are at least 36 px apart
@@ -150,8 +164,13 @@ export function MapView({
   className = "",
   label,
   toolbarStart,
+  plan = null,
+  robotVisible = true,
 }: {
   map: MapState;
+  plan?: FloorPlan | null;
+  // false: a floor otto is not on (no arrow, trail, lidar or patient)
+  robotVisible?: boolean;
   spots: SpotInfo[];
   picked: string | null;
   onPick: (name: string | null) => void;
@@ -188,14 +207,14 @@ export function MapView({
   const autoSize = useRef<Size | null>(null);
   useEffect(() => {
     if (!size || !auto) return;
-    const fitted = fit(map, size, compact);
+    const fitted = fit(map, size, compact, plan);
     setAutoView((prev) => {
       const sameSize = autoSize.current?.w === size.w && autoSize.current?.h === size.h;
       autoSize.current = size;
-      return prev && sameSize && stillFits(prev, fitted, map, size, compact) ? prev : fitted;
+      return prev && sameSize && stillFits(prev, fitted, map, size, compact, plan) ? prev : fitted;
     });
-  }, [map, size, compact, auto]);
-  const v = auto || !view ? (autoView ?? (size ? fit(map, size, compact) : null)) : view;
+  }, [map, size, compact, auto, plan]);
+  const v = auto || !view ? (autoView ?? (size ? fit(map, size, compact, plan) : null)) : view;
 
   const zoomAt = useCallback(
     (factor: number, px?: number, py?: number) => {
@@ -314,7 +333,7 @@ export function MapView({
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
           >
-            <Drawing map={map} spots={spots} view={v} size={size} picked={picked} onPick={onPick} stale={stale} compact={compact} glide={!dragging} lastDeg={lastDeg} />
+            <Drawing map={map} plan={plan} spots={spots} view={v} size={size} picked={picked} onPick={onPick} stale={stale} compact={compact} glide={!dragging} lastDeg={lastDeg} robotVisible={robotVisible} />
           </svg>
         )}
       </div>
@@ -322,8 +341,10 @@ export function MapView({
   );
 }
 
-function Drawing({
+// memoized: a parent that re-renders for other reasons does not redraw 240 lidar points
+const Drawing = memo(function Drawing({
   map,
+  plan,
   spots,
   view,
   size,
@@ -333,8 +354,11 @@ function Drawing({
   compact,
   glide,
   lastDeg,
+  robotVisible,
 }: {
   map: MapState;
+  plan: FloorPlan | null;
+  robotVisible: boolean;
   spots: SpotInfo[];
   view: View;
   size: Size;
@@ -365,9 +389,9 @@ function Drawing({
   if (lastDeg.current !== null) deg = lastDeg.current + ((((deg - lastDeg.current) % 360) + 540) % 360) - 180;
   lastDeg.current = deg;
 
-  const trail = map.trail;
+  const trail = robotVisible ? map.trail : [];
   const font = compact ? 12 : 13;
-  const target = map.target;
+  const target = robotVisible ? map.target : undefined;
   const targetSpot = target ? spots.find((s) => s.name === target.name) : undefined;
 
   // labels that would cover another label are left out (the dot stays and can still be picked).
@@ -400,10 +424,28 @@ function Drawing({
     }
   }
 
+  // the floor plan: its lower-left corner sits at origin, one pixel is resolution meters (y flipped)
+  const floor = plan
+    ? { x: X(plan.originX), y: Y(plan.originY + plan.height * plan.resolution), w: plan.width * plan.resolution * view.s, h: plan.height * plan.resolution * view.s }
+    : null;
+
   return (
     <g>
       <rect width={size.w} height={size.h} fill="var(--m-bg)" />
-      <g aria-hidden>
+      {plan && floor && (
+        <image
+          href={plan.href}
+          x={floor.x}
+          y={floor.y}
+          width={floor.w}
+          height={floor.h}
+          preserveAspectRatio="none"
+          className="map-floor"
+          style={{ imageRendering: plan.resolution * view.s > 3 ? "pixelated" : "auto" }}
+          aria-hidden
+        />
+      )}
+      <g aria-hidden opacity={plan ? 0.35 : 1}>
         {xs.map((x) => (
           <line key={`x${x}`} x1={X(x)} x2={X(x)} y1={0} y2={size.h} stroke={Math.abs(x) < 1e-6 ? "var(--m-grid-strong)" : "var(--m-grid)"} strokeWidth={1} />
         ))}
@@ -413,7 +455,7 @@ function Drawing({
       </g>
 
       <g aria-hidden>
-        {map.scan.map(([x, y], i) => (
+        {(robotVisible ? map.scan : []).map(([x, y], i) => (
           <circle key={i} cx={X(x)} cy={Y(y)} r={compact ? 1.5 : 1.8} fill="var(--m-scan)" opacity={0.7} />
         ))}
       </g>
@@ -493,7 +535,7 @@ function Drawing({
         );
       })}
 
-      {map.follower && (
+      {robotVisible && map.follower && (
         <g aria-hidden>
           <line x1={otto.x} y1={otto.y} x2={X(map.follower.x)} y2={Y(map.follower.y)} stroke="var(--m-patient)" strokeWidth={1.5} strokeDasharray="2 4" />
           <circle cx={X(map.follower.x)} cy={Y(map.follower.y)} r={9} fill="var(--m-patient)" opacity={0.18} />
@@ -501,6 +543,8 @@ function Drawing({
         </g>
       )}
 
+      {robotVisible && (
+      <>
       <g
         aria-hidden
         className={glide ? "map-otto" : undefined}
@@ -522,13 +566,15 @@ function Drawing({
         className="map-label"
         opacity={stale ? 0.6 : 1}
       >
-        Otto
+        {robotLabelOf(map.robot)}
       </text>
+      </>
+      )}
 
       <ScaleBar step={step} s={view.s} h={size.h} compact={compact} />
     </g>
   );
-}
+});
 
 function ScaleBar({ step, s, h, compact }: { step: number; s: number; h: number; compact: boolean }) {
   const len = step * s;

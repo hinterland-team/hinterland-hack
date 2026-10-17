@@ -141,6 +141,8 @@ export async function createPlace(body: Record<string, unknown>) {
   if (email) place.notifyEmail = email;
   const channelIds = await cleanChannelIds(body.channelIds);
   if (channelIds) place.channelIds = channelIds;
+  const mapName = text(body.mapName, 80);
+  if (mapName) place.mapName = mapName;
   return publicPlace(await store.createPlace(place));
 }
 
@@ -181,6 +183,8 @@ export async function updatePlace(body: Record<string, unknown>) {
   const webhook = maskedBack ? undefined : cleanWebhook(body.teamsWebhookUrl);
   if (webhook !== undefined) patch.teamsWebhookUrl = webhook;
   if (body.viaSpot !== undefined) patch.viaSpot = text(body.viaSpot, 80) ?? null;
+  // the floor (robot map). "" = any floor
+  if (body.mapName !== undefined) patch.mapName = text(body.mapName, 80) ?? null;
   const email = cleanEmail(body.notifyEmail);
   if (email !== undefined) patch.notifyEmail = email;
   const channelIds = await cleanChannelIds(body.channelIds);

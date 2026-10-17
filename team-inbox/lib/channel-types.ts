@@ -108,7 +108,7 @@ export const CHANNEL_INFO: Record<ChannelType, ChannelInfo> = {
         help: "Up to 5 addresses, separated by commas.",
       },
       { key: "apiKey", label: "Resend API key", secret: true, placeholder: "re_" },
-      { key: "from", label: "Sender", placeholder: "Nova Clinic <nova@your-domain.example>" },
+      { key: "from", label: "Sender", placeholder: "Otto Clinic <otto@your-domain.example>" },
     ],
   },
   webhook: {
@@ -116,7 +116,7 @@ export const CHANNEL_INFO: Record<ChannelType, ChannelInfo> = {
     short: "Webhook",
     what: "The message as JSON, posted to your own system.",
     how: [
-      "Nova Clinic sends a POST with a JSON body: kind, title, text, facts, links and data (ticket, place, room, pace, wheelchair, expected).",
+      "Otto Clinic sends a POST with a JSON body: kind, title, text, facts, links and data (ticket, place, room, pace, wheelchair, expected).",
       "With a secret it adds the header Authorization: Bearer <secret>.",
     ],
     fields: [
@@ -171,8 +171,12 @@ export type NotificationsView = {
   help: string[];
   // RESEND_API_KEY / EMAIL_FROM set on the server: an email channel may leave them empty
   emailEnv: { apiKey: boolean; from: boolean };
-  // no DATABASE_URL: the channels are gone after a restart of the server
+  // no DATABASE_URL and STORE_FILE=off: the channels are gone after a restart of the server
   memoryStore: boolean;
+  // where everything is kept: the database, a file on this computer (.data/store.json) or only in memory
+  storage: "postgres" | "file" | "memory";
+  // POST /api/integrations/journeys is on (INTEGRATION_KEY is set)
+  integration: boolean;
 };
 
 // journey events about messages: <channel>_notified / _sent / _failed / _skipped.

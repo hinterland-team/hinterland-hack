@@ -78,6 +78,8 @@ class MainActivity : AppCompatActivity() {
             staffTouched = Clinic::staffTouched,
             recheckServers = Clinic::staffRecheckServers,
             setMode = Clinic::staffSetMode,
+            demoStartStop = Clinic::staffDemoStartStop,
+            demoNext = Clinic::staffDemoNext,
         )
 
         setContent {
@@ -106,7 +108,7 @@ class MainActivity : AppCompatActivity() {
     // other apps get the bar back when we leave
     override fun onStart() {
         super.onStart()
-        runCatching { AgentCore.isEnableVoiceBar = !Config.current.hideVoiceBar && !Modes.current.silent }
+        runCatching { AgentCore.isEnableVoiceBar = !Config.current.hideVoiceBar && !Modes.current.micOff }
     }
 
     override fun onResume() {

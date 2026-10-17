@@ -11,6 +11,8 @@ const ROBOT_ROUTES: [string, RegExp][] = [
   ["POST", /^\/api\/robot\/feed$/],
   ["POST", /^\/api\/robot\/logs$/],
   ["POST", /^\/api\/robot\/map$/],
+  ["POST", /^\/api\/robot\/map\/image$/],
+  ["GET", /^\/api\/robot\/config$/],
   ["POST", /^\/api\/help$/],
   // checks X-Api-Key = INTEGRATION_KEY itself
   ["POST", /^\/api\/integrations\/journeys$/],
@@ -54,5 +56,5 @@ export async function middleware(req: NextRequest) {
 // default middleware runtime is enough: lib/session only uses web crypto.
 // vercel.json pins the framework, without it vercel ran this file as plain routing middleware
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|icon.svg|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|icon.svg|favicon.ico|otto-alerts-sw.js).*)"],
 };

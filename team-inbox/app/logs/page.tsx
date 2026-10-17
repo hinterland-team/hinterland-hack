@@ -4,7 +4,7 @@ import { LogsClient } from "./logs-client";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Logs - Nova Clinic" };
+export const metadata: Metadata = { title: "Logs - Otto Clinic" };
 
 // /logs?level=error&source=nav,voice&q=blocked opens with these filters
 export default async function LogsPage({

@@ -205,7 +205,7 @@ export function LogsClient({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Logs</h1>
           <p className="mt-1 max-w-prose text-[15px] text-muted">
-            What the Nova Clinic app reports. Kept 24 hours, at most 5000 lines. Never what patients say.
+            What Otto&apos;s app (Nova Clinic) reports. Kept 24 hours, at most 5000 lines. Never what patients say.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -315,7 +315,7 @@ export function LogsClient({
             <p className="max-w-prose text-[15px] text-muted">
               {filtered
                 ? "No lines match these filters."
-                : "No log lines yet. The Nova Clinic app sends its log here while it runs. New lines show up within 3 seconds."}
+                : "No log lines yet. Otto's app sends its log here while it runs. New lines show up within 3 seconds."}
             </p>
             {filtered && (
               <Button

@@ -11,6 +11,7 @@ import java.util.Locale
 //  - while the patient talks otto waits, and timing.afterUserMs after their last word
 //  - a short pause (timing.pauseMs) between two lines; while otto's own agent talks, our lines wait
 //  - show and calm mode: nothing is said at all
+//  - demo mode: only script lines (the demo's own and the team's say), and those are never dropped or replaced
 // plain kotlin, every call gets the time, unit tested. Speech runs it on the robot.
 
 // priority decides who waits when the queue is full; the same kind replaces a waiting line
@@ -19,6 +20,8 @@ enum class SpeechKind(val wire: String, val priority: Int) {
     ALERT("alert", 6),
     // the team's say command
     TEAM("team", 5),
+    // a line of the demo script (docs/demo-mode.md)
+    SCRIPT("script", 4),
     QUESTION("question", 4),
     // calling a ticket, calling a patient who is out of sight
     CALL("call", 4),
@@ -71,6 +74,9 @@ class SpeechLine(
     val urgent: Boolean = false,
     val topic: String? = null,
     val fits: () -> Boolean = { true },
+    // a demo line (the script's or the team's say in demo mode): never dropped or replaced, always fits, no pause
+    // before it (the demo keeps its own pace), and in demo mode the only lines that are said
+    val script: Boolean = false,
 ) {
     val llm: Boolean get() = task != null
 }
@@ -85,6 +91,7 @@ class Utterance internal constructor(val id: Long, val queuedAt: Long) {
     // a question is always the last part (the join rule)
     val question: Boolean get() = parts.lastOrNull()?.turn?.question == true
     val urgent: Boolean get() = parts.any { it.turn.urgent }
+    val script: Boolean get() = parts.any { it.turn.script }
     val text: String get() = parts.joinToString(" ") { it.turn.text.trim() }
     // the llm line, when this is one (llm lines are never joined)
     val llm: SpeechLine? get() = parts.singleOrNull()?.turn?.takeIf { it.llm }
@@ -120,6 +127,10 @@ class SpeechTurns(
         private set
     private var silentWhy = ""
 
+    // demo mode: only script lines are said
+    var scriptOnly = false
+        private set
+
     @Synchronized
     fun offer(turn: SpeechLine, now: Long, done: (TurnOutcome) -> Unit = {}): Offered {
         if (silent) {
@@ -127,14 +138,21 @@ class SpeechTurns(
             done(TurnOutcome.SILENT)
             return Offered(queued = false, cut = false)
         }
+        if (scriptOnly && !turn.script) {
+            log("Not said (${turn.kind.wire}, demo mode: only the script's lines): ${short(turn)}")
+            done(TurnOutcome.SILENT)
+            return Offered(queued = false, cut = false)
+        }
         val part = Part(turn, done)
-        // a newer line of the same kind takes the place of the waiting one
-        for (u in waiting) {
-            val old = u.parts.filter { it.turn.kind == turn.kind }
-            old.forEach { p ->
-                u.parts.remove(p)
-                log("Replaced ${p.turn.kind.wire} by a newer one: ${short(p.turn)}")
-                p.done(TurnOutcome.REPLACED)
+        // a newer line of the same kind takes the place of the waiting one (script lines never take or give a place)
+        if (!turn.script) {
+            for (u in waiting) {
+                val old = u.parts.filter { it.turn.kind == turn.kind && !it.turn.script }
+                old.forEach { p ->
+                    u.parts.remove(p)
+                    log("Replaced ${p.turn.kind.wire} by a newer one: ${short(p.turn)}")
+                    p.done(TurnOutcome.REPLACED)
+                }
             }
         }
         waiting.removeAll { it.parts.isEmpty() }
@@ -148,14 +166,15 @@ class SpeechTurns(
         }
         val cap = timing().maxWaiting.coerceAtLeast(1)
         if (waiting.size >= cap) {
-            val lowest = waiting.sortedWith(compareBy<Utterance> { it.priority }.thenBy { it.queuedAt }).first()
-            if (turn.kind.priority >= lowest.priority) {
+            // script lines are never dropped: the lowest other line goes, or the new one when it is no script line
+            val lowest = waiting.filter { !it.script }.sortedWith(compareBy<Utterance> { it.priority }.thenBy { it.queuedAt }).firstOrNull()
+            if (lowest != null && (turn.script || turn.kind.priority >= lowest.priority)) {
                 waiting.remove(lowest)
                 lowest.parts.forEach { p ->
                     log("Dropped ${p.turn.kind.wire}: a newer or more important line came (${turn.kind.wire}): ${short(p.turn)}")
                     p.done(TurnOutcome.DROPPED)
                 }
-            } else {
+            } else if (!turn.script) {
                 log("Dropped ${turn.kind.wire}: ${waiting.size} line${if (waiting.size == 1) "" else "s"} waiting already (max $cap): ${short(turn)}")
                 done(TurnOutcome.DROPPED)
                 return Offered(queued = false, cut = false)
@@ -173,7 +192,7 @@ class SpeechTurns(
         val each = waiting.iterator()
         while (each.hasNext()) {
             val u = each.next()
-            val stale = u.parts.filter { p -> !runCatching { p.turn.fits() }.getOrDefault(false) }
+            val stale = u.parts.filter { p -> !p.turn.script && !runCatching { p.turn.fits() }.getOrDefault(false) }
             stale.forEach { p ->
                 u.parts.remove(p)
                 log("Dropped ${p.turn.kind.wire}: no longer fits: ${short(p.turn)}")
@@ -194,7 +213,7 @@ class SpeechTurns(
         }
         // the patient talks: their turn first, also before urgent lines
         if (userAt > 0) hold(userAt + (if (userFinal) t.afterUserMs else PARTIAL_GAP_MS + t.afterUserMs), "the patient is talking")
-        if (!head.urgent) {
+        if (!head.urgent && !head.script) {
             if (agentUntil > 0) hold(agentUntil + t.pauseMs, "Otto's agent is talking")
             if (questionUntil > 0) hold(questionUntil, "waiting for an answer")
             if (lastEndAt > 0) hold(lastEndAt + t.pauseMs, "a short pause")
@@ -268,6 +287,32 @@ class SpeechTurns(
         return playing != null
     }
 
+    // demo mode: everything but script lines is left out from now on. true = a line that is no script line
+    // plays right now (the caller stops the speech)
+    @Synchronized
+    fun setScriptOnly(on: Boolean, why: String): Boolean {
+        scriptOnly = on
+        if (!on) return false
+        val others = waiting.filter { !it.script }
+        val n = others.sumOf { it.parts.size }
+        if (n > 0) log("Dropped $n waiting line${if (n == 1) "" else "s"}: $why")
+        others.forEach { u -> u.parts.forEach { it.done(TurnOutcome.SILENT) } }
+        waiting.removeAll(others.toSet())
+        questionUntil = 0
+        return playing?.script == false
+    }
+
+    // the demo stops or starts again: its waiting lines go. true = a script line plays right now
+    @Synchronized
+    fun dropScript(why: String): Boolean {
+        val mine = waiting.filter { it.script }
+        val n = mine.sumOf { it.parts.size }
+        if (n > 0) log("Dropped $n waiting line${if (n == 1) "" else "s"}: $why")
+        mine.forEach { u -> u.parts.forEach { it.done(TurnOutcome.DROPPED) } }
+        waiting.removeAll(mine.toSet())
+        return playing?.script == true
+    }
+
     // everything that waits goes (back to the welcome screen)
     @Synchronized
     fun clear(why: String) = drop(why, TurnOutcome.DROPPED)
@@ -295,6 +340,8 @@ class SpeechTurns(
     // or lines of one topic
     private fun canJoin(u: Utterance, t: SpeechLine): Boolean {
         if (t.llm || u.parts.any { it.turn.llm }) return false
+        // a demo line is said on its own, word for word
+        if (t.script || u.script) return false
         if (u.question || u.urgent != t.urgent || u.parts.size >= MAX_PARTS) return false
         if (u.text.length + 1 + t.text.trim().length > MAX_JOINED_CHARS) return false
         val sameTopic = t.topic != null && u.parts.all { it.turn.topic == t.topic }

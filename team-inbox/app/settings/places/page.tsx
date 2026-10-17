@@ -4,7 +4,7 @@ import { PlacesClient } from "./places-client";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Places - Nova Clinic" };
+export const metadata: Metadata = { title: "Places - Settings - Otto Clinic" };
 
 export default function PlacesPage() {
   return <PlacesClient practiceChannel={Boolean(process.env.TEAMS_WEBHOOK_URL)} emailOn={emailConfigured()} />;

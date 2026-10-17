@@ -104,7 +104,7 @@ export function WalkClient({ code }: { code: string }) {
         setGone({ kind: "busy", message: "Too many requests. The page tries again in a moment." });
         return 20_000;
       } else {
-        setGone({ kind: "offline", message: "Can't reach Nova Clinic right now. Trying again." });
+        setGone({ kind: "offline", message: "Can't reach Otto Clinic right now. Trying again." });
       }
     } catch {
       setGone({ kind: "offline", message: "No connection. The page tries again." });
@@ -152,7 +152,7 @@ export function WalkClient({ code }: { code: string }) {
       <div className="flex items-center gap-3">
         <Mascot size={40} />
         <div className="leading-tight">
-          <p className="text-[17px] font-semibold tracking-tight">Nova Clinic</p>
+          <p className="text-[17px] font-semibold tracking-tight">Otto Clinic</p>
           <p className="text-sm text-muted">Your walk with Otto</p>
         </div>
       </div>

@@ -1,4 +1,5 @@
-// shared between server and browser - no imports here (tests load this file directly)
+// shared between server and browser - no imports here (tests load this file directly; type imports vanish)
+import type { DemoOp, DemoScript, DemoState } from "./demo-script";
 
 // ---------- places
 
@@ -36,6 +37,8 @@ export type Place = {
   notifyEmail?: string;
   // the notification channels this place picked (/notifications). absent = the default channels
   channelIds?: string[];
+  // the floor: the name of the robot map this place is on. absent = any floor
+  mapName?: string;
   createdAt: string;
 };
 
@@ -132,7 +135,10 @@ export type JourneyWithQueue = Journey & QueueInfo;
 
 // ---------- robot commands
 
-type CommandBase = { id: string; robot: string; createdAt: string; deliveredAt?: string; doneAt?: string };
+// ok / detail: otto's answer when it finished (POST /api/robot/commands/:id/done { ok, detail }): ok false = refused
+// or failed ("Otto is in Show mode", "only on the current map"), detail = one short english line
+type CommandBase = { id: string; robot: string; createdAt: string; deliveredAt?: string; doneAt?: string; ok?: boolean; detail?: string };
+export type CommandResult = { ok: boolean; detail?: string };
 export type GuideCommand = CommandBase & {
   type: "guide";
   journeyId: string;
@@ -158,7 +164,26 @@ export type WalkControlCommand = CommandBase & {
   action: WalkAction;
   origin?: "staff" | "phone";
 };
-export type RobotCommand = GuideCommand | SayCommand | AskCommand | GoToCommand | WalkControlCommand;
+// docs/robot-setup.md: change the floor map (spot = where otto stands on it, to localise), fetch the settings again,
+// check which server answers
+export type SwitchMapCommand = CommandBase & { type: "switch_map"; mapName: string; spot: string };
+export type ConfigChangedCommand = CommandBase & { type: "config_changed" };
+export type RecheckCommand = CommandBase & { type: "recheck" };
+// normal / show / calm (lib/modes.ts), switched at the top of the dashboard
+export type SetModeCommand = CommandBase & { type: "set_mode"; mode: "normal" | "show" | "calm" };
+// demo mode (docs/demo-mode.md): start (+ script) / next / hold / resume / restart / stop / say (+ text)
+export type DemoCommand = CommandBase & { type: "demo"; op: DemoOp; script?: DemoScript; text?: string };
+export type RobotCommand =
+  | GuideCommand
+  | SayCommand
+  | AskCommand
+  | GoToCommand
+  | WalkControlCommand
+  | SwitchMapCommand
+  | ConfigChangedCommand
+  | RecheckCommand
+  | SetModeCommand
+  | DemoCommand;
 
 // ---------- robot status
 
@@ -184,6 +209,15 @@ export type RobotHeartbeat = {
   server: string | null;
   // the nova clinic app version on the robot
   version: string | null;
+  // robot-setup.md: the floor map the robot is on, whether it knows where it stands on it, the settings version it runs
+  mapName?: string | null;
+  localised?: boolean | null;
+  configVersion?: number | null;
+  // the mode otto runs in now (normal / show / calm), and the one it takes when the walk under way is over
+  mode?: string | null;
+  modePending?: string | null;
+  // demo mode: where otto is in the script (docs/demo-mode.md)
+  demo?: DemoState | null;
   at: string;
 };
 
@@ -198,6 +232,12 @@ export type RobotStatus = {
   screen?: RobotScreen | null;
   server?: string | null;
   version?: string | null;
+  mapName?: string | null;
+  localised?: boolean | null;
+  configVersion?: number | null;
+  mode?: string | null;
+  modePending?: string | null;
+  demo?: DemoState | null;
   lastSeenAt?: string;
   online: boolean;
 };
@@ -241,8 +281,11 @@ export const MAP_PLACES_MAX = 200;
 export type MapPose = { x: number; y: number; theta: number };
 export type MapPoint = { x: number; y: number };
 export type MapSpot = { name: string; x: number; y: number };
-export type MapFollower = { x: number; y: number; source: "lidar" | "camera" };
+// sim = the simulated patient of Virtual Otto (/simulate)
+export type MapFollower = { x: number; y: number; source: "lidar" | "camera" | "sim" };
 export type MapTrailPoint = { x: number; y: number; at: string };
+// a floor map the robot has (robot-setup.md section 2)
+export type MapInfo = { name: string; floor?: number };
 
 export type MapState = {
   robot: string;
@@ -254,7 +297,36 @@ export type MapState = {
   target?: MapSpot;
   remainingMeters?: number;
   trail: MapTrailPoint[];
+  // the robot's floor maps, when it sent them
+  maps?: MapInfo[];
   updatedAt: string;
+};
+
+export const MAP_MAPS_MAX = 20;
+
+// the real floor plan of one map (robot-setup.md section 1). the png itself is served by /api/robot/map/image.
+// map meters -> image pixels: u = (x - originX) / resolution, v = height - (y - originY) / resolution (y flipped)
+export type MapImageMeta = {
+  robot: string;
+  mapName: string;
+  width: number;
+  height: number;
+  resolution: number;
+  originX: number;
+  originY: number;
+  hash: string;
+  bytes: number;
+  updatedAt: string;
+};
+
+// one floor for the floor selector: what the robot reported plus the places set up on it
+export type FloorInfo = {
+  name: string;
+  floor?: number;
+  current: boolean;
+  image: boolean;
+  // spots otto reported on this map (remembered from its frames), for "Otto is standing at"
+  spots: string[];
 };
 
 // ---------- patient phone page
@@ -534,6 +606,12 @@ export function robotStatus(
     screen: beat?.screen ?? null,
     server: beat?.server ?? null,
     version: beat?.version ?? null,
+    mapName: beat?.mapName ?? null,
+    localised: beat?.localised ?? null,
+    configVersion: beat?.configVersion ?? null,
+    mode: beat?.mode ?? null,
+    modePending: beat?.modePending ?? null,
+    demo: beat?.demo ?? null,
     lastSeenAt: seen,
     online: now - Date.parse(seen) <= ROBOT_ONLINE_SECONDS * 1000,
   };

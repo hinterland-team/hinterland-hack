@@ -8,14 +8,19 @@ import kotlin.random.Random
 //  normal = the receptionist as before
 //  show   = lively face, small turns now and then, silent: no speech, no greeting, the mic is off, no walks
 //  calm   = quiet and passive: no speech, no greeting, no automatic driving, he does not mind being pushed
+//  demo   = the rehearsed demo (docs/demo-mode.md, Demo.kt): the mic is off, otto only says the script's lines
 enum class RobotMode(val wire: String, val label: String) {
     NORMAL("normal", "Normal"),
     SHOW("show", "Show"),
     CALM("calm", "Calm"),
+    DEMO("demo", "Demo"),
     ;
 
-    // nothing is said and the mic is off
-    val silent: Boolean get() = this != NORMAL
+    // nothing is said at all (show and calm)
+    val silent: Boolean get() = this == SHOW || this == CALM
+
+    // the mic is off and kept off (show, calm and the demo)
+    val micOff: Boolean get() = this != NORMAL
 
     companion object {
         fun of(raw: String?): RobotMode? = entries.firstOrNull { it.wire == raw?.trim()?.lowercase(Locale.ROOT) }
@@ -26,11 +31,14 @@ enum class RobotMode(val wire: String, val label: String) {
 object ModeRules {
 
     // a command otto does not take in this mode: the answer for the dashboard, null = he takes it.
-    // go_to stays possible (the team sends him somewhere on purpose); words are silent in show and calm
+    // go_to stays possible (the team sends him somewhere on purpose); words are silent in show and calm.
+    // the demo runs its own walk and has no ai: walks and ask wait until it is over, say still works
     fun refuses(mode: RobotMode, type: String): String? = when {
         mode == RobotMode.NORMAL -> null
         type == RobotCommand.GUIDE -> "Otto is in ${mode.label} mode"
-        type == RobotCommand.SAY || type == RobotCommand.ASK -> "Otto is in ${mode.label} mode and does not talk"
+        mode == RobotMode.DEMO && type == RobotCommand.ASK -> "Otto is in ${mode.label} mode"
+        mode == RobotMode.DEMO && type == RobotCommand.SWITCH_MAP -> "Otto is in Demo mode. Switch the map after the demo."
+        mode.silent && (type == RobotCommand.SAY || type == RobotCommand.ASK) -> "Otto is in ${mode.label} mode and does not talk"
         else -> null
     }
 
@@ -41,8 +49,8 @@ object ModeRules {
     // back to the reception after a while away
     fun drivesHome(mode: RobotMode) = mode == RobotMode.NORMAL
 
-    // calm: no automatic driving at all, low battery is only reported
-    fun drivesToCharger(mode: RobotMode) = mode != RobotMode.CALM
+    // calm: no automatic driving at all, low battery is only reported. the demo drives only its own run
+    fun drivesToCharger(mode: RobotMode) = mode != RobotMode.CALM && mode != RobotMode.DEMO
 
     // off the charger again when full: only in normal mode (show and calm stay where they are)
     fun leavesCharger(mode: RobotMode) = mode == RobotMode.NORMAL
@@ -55,6 +63,7 @@ object ModeRules {
         RobotMode.NORMAL -> "Receptionist: talks, greets, walks patients."
         RobotMode.SHOW -> "Lively face and small turns, silent. Walks are refused."
         RobotMode.CALM -> "Quiet and passive, no driving on his own. Walks are refused."
+        RobotMode.DEMO -> "Demo script: the mic is off, Otto only says the script's lines."
     }
 }
 

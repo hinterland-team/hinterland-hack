@@ -1,14 +1,21 @@
 import { notifyHelp } from "./channels";
 import { hoursAgo, now, numberOrNull, retention, robotName, today } from "./common";
+import { noteApplied, noteMode, queueOnce, setMode } from "./config";
+import { queueDemo, withoutScript } from "./demo";
+import { cleanDemoState } from "./demo-script";
+import { isOttoMode } from "./modes";
+import { isSimRobot } from "./robots";
 import { ApiError, text } from "./http";
 import { markAssigned } from "./journeys";
 import { feedId, readFeed, saveFeed } from "./live-feed";
 import { helpMessage } from "./messages";
-import { cleanMapFrame } from "./robot-data";
+import { rememberMaps } from "./floors";
+import { cleanMapFrame, cleanMaps } from "./robot-data";
 import { getStore } from "./store";
 import {
   FEED_KINDS,
   FEED_WHO,
+  type CommandResult,
   type FeedItem,
   type HelpRequest,
   type RobotCommand,
@@ -36,13 +43,25 @@ export async function nextCommand(robot: string) {
   return command;
 }
 
-export async function finishCommand(id: string) {
-  const command = await getStore().finishCommand(id, now());
+// body = otto's answer { ok, detail } for commands it can refuse or that can fail (switch_map, set_mode, recheck,
+// a walk or words in show / calm mode); an empty body for the rest, as before
+export async function finishCommand(id: string, body?: Record<string, unknown>) {
+  const result: CommandResult | undefined =
+    typeof body?.ok === "boolean" ? { ok: body.ok, ...(text(body.detail, 200) ? { detail: text(body.detail, 200) } : {}) } : undefined;
+  const command = await getStore().finishCommand(id, now(), result);
   if (!command) throw new ApiError(404, "command not found");
   return command;
 }
 
-// staff: ask = otto's ai decides what to do with it, say = word for word, go_to = drive there and stay
+// the walk otto is on right now: a guide it fetched and did not finish
+export async function guidingNow(robot: string) {
+  const list = await getStore().listCommands(robot, 30);
+  const g = list.find((c) => c.type === "guide" && c.deliveredAt && !c.doneAt);
+  return g?.type === "guide" ? g : null;
+}
+
+// staff: ask = otto's ai decides what to do with it, say = word for word, go_to = drive there and stay,
+// switch_map = another floor map (spot = where otto stands on it), config_changed / recheck (robot-setup.md)
 export async function createRobotCommand(body: Record<string, unknown>): Promise<RobotCommand> {
   await retention();
   const id = crypto.randomUUID();
@@ -58,15 +77,38 @@ export async function createRobotCommand(body: Record<string, unknown>): Promise
     if (!spot) throw new ApiError(400, "spot is required");
     return getStore().createCommand({ id, robot, type: "go_to", spot, createdAt });
   }
+  if (body.type === "switch_map") {
+    const mapName = text(body.mapName, 80);
+    const spot = text(body.spot, 80);
+    if (!mapName) throw new ApiError(400, "mapName is required");
+    if (!spot) throw new ApiError(400, "spot is required: where Otto stands on that map, so it knows where it is");
+    const walk = await guidingNow(robot);
+    if (walk) throw new ApiError(409, `Otto is walking with ${walk.ticket} right now. Switch the floor after this walk`);
+    return getStore().createCommand({ id, robot, type: "switch_map", mapName, spot, createdAt });
+  }
+  if (body.type === "config_changed" || body.type === "recheck") return queueOnce(robot, body.type);
+  if (body.type === "set_mode") {
+    // the mode is part of the settings: saved there, then set_mode goes to otto (also for the same mode again).
+    // demo goes as the demo command with the saved script
+    await setMode(robot, body.mode);
+    const demo = body.mode === "demo";
+    const sent = (await getStore().listCommands(robot, 10)).find(
+      (c) => (demo ? c.type === "demo" && c.op === "start" : c.type === "set_mode") && !c.deliveredAt && !c.doneAt,
+    );
+    if (!sent) throw new ApiError(500, "the mode switch was not queued");
+    return sent;
+  }
+  // demo mode (docs/demo-mode.md): { type: "demo", op, text? }, a start carries the saved script
+  if (body.type === "demo") return queueDemo(robot, body.op, body.text);
   if (body.type === "walk_control") throw new ApiError(400, `walk_control needs journeyId and action (${WALK_ACTIONS.join(", ")})`);
-  throw new ApiError(400, "type must be ask, say, go_to or walk_control");
+  throw new ApiError(400, "type must be ask, say, go_to, walk_control, switch_map, config_changed, recheck, set_mode or demo");
 }
 
 // what a patient asked on the phone only shows with the demo switch on (and is gone once otto has it)
 export async function listCommands(robot: string, limit: number, showPatientWords?: boolean) {
   const show = showPatientWords ?? (await showPatientText());
   const list = await getStore().listCommands(robot, Math.min(50, Math.max(1, Math.round(limit) || 10)));
-  return list.map((c) => (c.type === "ask" && c.origin === "phone" && !show ? { ...c, text: "" } : c));
+  return list.map((c) => (c.type === "ask" && c.origin === "phone" && !show ? { ...c, text: "" } : withoutScript(c)));
 }
 
 // ---------- heartbeat
@@ -105,6 +147,12 @@ export async function saveHeartbeat(body: Record<string, unknown>) {
       }
     }
   }
+  // robot-setup.md: the floor map, localised on it (either spelling), the settings version it runs
+  const localised = typeof body.localised === "boolean" ? body.localised : typeof body.localized === "boolean" ? body.localized : null;
+  const configVersion = numberOrNull(body.configVersion);
+  // demo mode: where otto is in the script, exactly the fields of docs/demo-mode.md
+  const demo = cleanDemoState(body.demo);
+  const at = now();
   await getStore().saveHeartbeat({
     robot,
     battery: battery === null ? null : Math.round(Math.min(100, Math.max(0, battery))),
@@ -116,8 +164,19 @@ export async function saveHeartbeat(body: Record<string, unknown>) {
     screen: cleanScreen(body.screen),
     server: text(body.server, 200) ?? null,
     version: text(body.version, 40) ?? null,
-    at: now(),
+    mapName: text(body.mapName, 80) ?? null,
+    localised,
+    configVersion: configVersion !== null && Number.isInteger(configVersion) && configVersion >= 0 ? configVersion : null,
+    mode: isOttoMode(body.mode) ? body.mode : null,
+    modePending: isOttoMode(body.modePending) ? body.modePending : null,
+    demo,
+    at,
   });
+  if (configVersion !== null) await noteApplied(robot, configVersion, at);
+  const runs = demo?.running ? "demo" : body.mode;
+  if (isOttoMode(runs)) await noteMode(robot, runs, at);
+  const maps = cleanMaps(body.maps);
+  if (maps?.length) await rememberMaps(robot, maps);
 }
 
 export async function getRobotStatus(robot: string) {
@@ -224,5 +283,6 @@ export async function getFeed(robot: string, limit = 50) {
 export async function stats(day = today()) {
   const store = getStore();
   const [rows, places, open] = await Promise.all([store.getStats(day), store.listPlaces(), store.listJourneys({ active: true })]);
-  return summarize(day, rows, places, open.length);
+  // virtual otto's walks are not counted (today's numbers are real ones only)
+  return summarize(day, rows, places, open.filter((j) => !isSimRobot(j.robot)).length);
 }

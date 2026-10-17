@@ -42,5 +42,8 @@ yarn-error.log*
 next-env.d.ts
 public/*.apk
 
+# the laptop store (STORE_FILE): places, channels with their secrets, settings
+/.data/
+
 .vercel
 .env*

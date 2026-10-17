@@ -1,32 +1,41 @@
 "use client";
 
 import { BellRinging, ThumbsDown, ThumbsUp, WarningOctagon } from "@phosphor-icons/react";
+import { memo, useMemo, useState } from "react";
 import type { Board } from "@/lib/board";
 import type { HelpRequest, RobotStatus } from "@/lib/types";
-import { PAGE, clockTime, post, robotLabel } from "@/lib/ui";
+import { PAGE, ROBOT, SIM_ROBOT, clockTime, post, robotLabel } from "@/lib/ui";
 import { Button, Dot } from "../components/button";
+import { useLiveMap } from "../components/live-map";
+import { AlertsControl, useStaffAlerts } from "../components/staff-alerts";
 import { useAction, useBoard } from "../components/use-board";
+import { useNow } from "../components/use-poll";
 import { GuidePanel } from "./guide-panel";
 import { JourneysPanel } from "./journeys-panel";
 import { ControlsCard, ConversationCard, RobotCard } from "./live-panel";
 import { MapPanel } from "./map-panel";
 
 export function Reception() {
-  const { data, offline, now, reload } = useBoard();
+  // the live card can show virtual otto while a simulation runs (/simulate). the list always shows every walk
+  const [robot, setRobot] = useState(ROBOT);
+  const { data, offline, reload } = useBoard(2000, robot);
+  const live = useLiveMap(robot);
   const { run, busy, error, clearError } = useAction(reload);
+  const simOpen = useMemo(() => Boolean(data?.journeys.some((j) => j.robot === SIM_ROBOT)), [data?.journeys]);
+  const showSwitch = simOpen || robot === SIM_ROBOT;
+  useStaffAlerts(data?.journeys, data?.places, data?.help);
 
   return (
     <main className={`${PAGE} pb-16`}>
-      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2 pt-6 pb-4">
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 pt-6 pb-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Reception</h1>
-          <p className="text-[15px] text-muted tabular">
-            {now
-              ? `${new Date(now).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" })}, ${clockTime(new Date(now).toISOString())}`
-              : " "}
-          </p>
+          <DateLine />
         </div>
-        <LiveBadge offline={offline} ready={data !== null} />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <AlertsControl what={`"A17 has arrived" and other updates for the reception`} />
+          <LiveBadge offline={offline} ready={data !== null} />
+        </div>
       </div>
 
       {error && (
@@ -56,17 +65,27 @@ export function Reception() {
         </div>
       )}
 
-      {data && now !== null ? (
+      {data ? (
         <>
-          <Today data={data} />
+          <Today stats={data.stats} />
           <div className="mt-4 grid items-start gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] xl:grid-cols-[minmax(0,4fr)_minmax(0,5fr)_minmax(0,4fr)] xl:gap-5">
-            <GuidePanel places={data.places} open={data.journeys} onSent={reload} />
-            <JourneysPanel journeys={data.journeys} places={data.places} now={now} run={run} busy={busy} />
+            <GuidePanel places={data.places} open={data.journeys} robotStatus={data.robot} onSent={reload} />
+            <JourneysPanel journeys={data.journeys} places={data.places} run={run} busy={busy} />
             <div className="grid items-start gap-4 lg:col-span-2 lg:grid-cols-2 xl:col-span-1 xl:grid-cols-1 xl:gap-5">
-              <RobotCard data={data} now={now} run={run} busy={busy} />
-              <MapPanel places={data.places} robot={data.robot} />
-              <ConversationCard data={data} run={run} />
-              <ControlsCard data={data} run={run} busy={busy} />
+              <RobotCard
+                robot={data.robot}
+                journeys={data.journeys}
+                currentJourneyId={data.currentJourneyId}
+                logErrors={data.logErrors}
+                places={data.places}
+                floors={live.floors}
+                run={run}
+                busy={busy}
+                pick={showSwitch ? setRobot : undefined}
+              />
+              <MapPanel places={data.places} robot={data.robot} live={live} />
+              <ConversationCard feed={data.feed} online={data.robot.online} robot={data.robot.robot} run={run} />
+              <ControlsCard places={data.places} commands={data.commands} robot={data.robot} run={run} busy={busy} />
             </div>
           </div>
         </>
@@ -74,6 +93,18 @@ export function Reception() {
         <Skeleton offline={offline} />
       )}
     </main>
+  );
+}
+
+// the date and time under the title: its own clock, so the rest of the page does not re-render every second
+function DateLine() {
+  const now = useNow(15_000);
+  return (
+    <p className="text-[15px] text-muted tabular">
+      {now
+        ? `${new Date(now).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" })}, ${clockTime(new Date(now).toISOString())}`
+        : " "}
+    </p>
   );
 }
 
@@ -100,8 +131,8 @@ function OutOfService({ robot }: { robot: RobotStatus }) {
         <p className="text-[17px] font-semibold text-danger">Out of service: {robotLabel(robot.robot)} can&apos;t drive right now</p>
         <p className="text-[15px] break-words">{robot.detail ?? "The robot reported an error."}</p>
         <p className="text-sm text-muted">
-          Not started from the home screen: start Nova Clinic again from there. Emergency stop, low battery or an update: check
-          the robot.
+          Not started from the home screen: start Otto&apos;s app (Nova Clinic) again from the robot&apos;s home screen. Emergency
+          stop, low battery or an update: check the robot.
         </p>
       </div>
     </div>
@@ -123,7 +154,7 @@ function HelpAlert({ help, onDone, busy }: { help: HelpRequest; onDone: () => vo
         </p>
         <p className="text-[15px]">{help.summary}</p>
         <p className="text-sm text-muted">
-          {clockTime(help.createdAt)}, {help.notified ? "also sent to Teams" : "not sent to Teams"}
+          {clockTime(help.createdAt)}, {help.notified ? "also sent to the team's channels" : "only on this board"}
         </p>
       </div>
       <Button kind={urgent ? "danger" : "primary"} size="lg" disabled={busy} onClick={onDone}>
@@ -133,8 +164,7 @@ function HelpAlert({ help, onDone, busy }: { help: HelpRequest; onDone: () => vo
   );
 }
 
-function Today({ data }: { data: Board }) {
-  const s = data.stats;
+const Today = memo(function Today({ stats: s }: { stats: Board["stats"] }) {
   const cells: { label: string; value: string; note?: React.ReactNode }[] = [
     { label: "Guides today", value: String(s.guides), note: `${s.journeys} patients` },
     { label: "Finished", value: String(s.done), note: `${s.activeNow} still open` },
@@ -171,7 +201,7 @@ function Today({ data }: { data: Board }) {
       ))}
     </section>
   );
-}
+});
 
 function Skeleton({ offline }: { offline: boolean }) {
   return (

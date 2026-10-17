@@ -5,9 +5,11 @@ import {
   LOG_SOURCES,
   type LogLevel,
   type LogSource,
+  MAP_MAPS_MAX,
   MAP_PLACES_MAX,
   MAP_SCAN_MAX,
   type MapFollower,
+  type MapInfo,
   type MapPose,
   type MapSpot,
   isOneOf,
@@ -30,6 +32,8 @@ export type MapFrame = {
   follower?: MapFollower;
   target?: MapSpot;
   remainingMeters?: number;
+  // undefined = not sent this time
+  maps?: MapInfo[];
   at: string;
 };
 
@@ -182,5 +186,89 @@ export function cleanMapFrame(body: Record<string, unknown>, robot: string, now:
   const left = num(body.remainingMeters);
   if (left !== null && left >= 0 && left < MAP_LIMIT) frame.remainingMeters = Math.round(left * 10) / 10;
 
+  const maps = cleanMaps(body.maps);
+  if (maps) frame.maps = maps;
+
   return { frame };
+}
+
+// the robot's floor maps: [{ name, floor? }] (plain names are taken too). in the map frame and the heartbeat
+export function cleanMaps(raw: unknown): MapInfo[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  const maps: MapInfo[] = [];
+  for (const r of raw) {
+    const o = typeof r === "string" ? { name: r } : r && typeof r === "object" ? (r as Record<string, unknown>) : null;
+    const name = o ? str(o.name, 80) : undefined;
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const floor = o ? num(o.floor) : null;
+    maps.push(floor !== null && Number.isInteger(floor) && Math.abs(floor) <= 200 ? { name, floor } : { name });
+    if (maps.length >= MAP_MAPS_MAX) break;
+  }
+  return maps;
+}
+
+// ---------- the floor plan image (robot-setup.md section 1)
+
+export const MAP_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+export const MAP_IMAGE_MAX_SIDE = 8192;
+
+export type MapImageUpload = {
+  mapName: string;
+  width: number;
+  height: number;
+  resolution: number;
+  originX: number;
+  originY: number;
+  hash: string;
+  png: string;
+  bytes: number;
+};
+
+// width and height of a png, read from its IHDR chunk. null when it is not a png
+export function pngSize(bytes: Uint8Array): { width: number; height: number } | null {
+  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (bytes.length < 24 || sig.some((b, i) => bytes[i] !== b)) return null;
+  if (String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]) !== "IHDR") return null;
+  const u32 = (o: number) => ((bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3]) >>> 0;
+  return { width: u32(16), height: u32(20) };
+}
+
+// { robot, mapName, width, height, resolution, originX, originY, png: base64, hash }. the png's own size wins over
+// width / height (the robot may have scaled it down, the resolution says how many meters one pixel is)
+export function cleanMapImage(body: Record<string, unknown>): { image: MapImageUpload } | { error: string } {
+  const mapName = str(body.mapName, 80);
+  if (!mapName) return { error: "mapName is required" };
+  const resolution = num(body.resolution);
+  if (resolution === null || resolution <= 0 || resolution > 10) return { error: "resolution must be meters per pixel, above 0" };
+  const originX = num(body.originX);
+  const originY = num(body.originY);
+  if (originX === null || originY === null || Math.abs(originX) > MAP_LIMIT || Math.abs(originY) > MAP_LIMIT) {
+    return { error: "originX and originY must be the map position of pixel 0,0 in meters" };
+  }
+  if (typeof body.png !== "string" || !body.png.trim()) return { error: "png must be the image as base64" };
+  const b64 = body.png.trim().replace(/^data:image\/png;base64,/, "").replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) return { error: "png must be base64" };
+  const raw = Buffer.from(b64, "base64");
+  if (raw.length > MAP_IMAGE_MAX_BYTES) return { error: `the png is larger than ${MAP_IMAGE_MAX_BYTES / 1024 / 1024} MB` };
+  const size = pngSize(raw);
+  if (!size) return { error: "png is not a png image" };
+  if (!size.width || !size.height || size.width > MAP_IMAGE_MAX_SIDE || size.height > MAP_IMAGE_MAX_SIDE) {
+    return { error: `the image must be 1 to ${MAP_IMAGE_MAX_SIDE} pixels on each side` };
+  }
+  const hash = str(body.hash, 128)?.replace(/[^A-Za-z0-9._:-]/g, "") || undefined;
+  return {
+    image: {
+      mapName,
+      width: size.width,
+      height: size.height,
+      resolution,
+      originX,
+      originY,
+      hash: hash ?? `b${raw.length}-${b64.slice(-16)}`,
+      png: b64,
+      bytes: raw.length,
+    },
+  };
 }

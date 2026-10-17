@@ -13,6 +13,7 @@ import com.ainirobot.coreservice.client.person.PersonApi
 import java.io.FileInputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -94,8 +95,6 @@ object Robot {
     // doc: charging status updates take some time after undocking, ignore "charging" for a while
     private const val UNDOCK_SETTLE_MS = 30_000L
     private const val HOME_RANGE_M = 1.0
-    // push events in the log, at most (calm mode field test)
-    private const val PUSH_LOG_MAX = 40
     // map commands: loading another map may take a while
     private const val SWITCH_MAP_TIMEOUT_MS = 30_000L
     private const val MAP_CALL_TIMEOUT_MS = 6_000L
@@ -272,13 +271,27 @@ object Robot {
 
     // someone pushes the robot. the docs list STATUS_ROBOT_BEING_PUSHED for another model only (Caizhao); the
     // jar also has STATUS_ROBOT_HAS_BEING_PUSHED and STATUS_PUSH_EXCEED_DISTANCE. we only log what comes, so the
-    // field test shows what this robot reports (calm mode, the user's spec 17.10)
-    @Volatile private var pushLogs = 0
+    // field test shows what this robot reports (calm mode, the user's spec 17.10). they come in bursts (36 within
+    // a second after an emergency stop, b16): one line at once, then one with a count every 10 s (BurstLog)
+    private val pushes = BurstLog()
+    @Volatile private var pushLast = ""
+    @Volatile private var pushFlush: Job? = null
     private val pushListener = object : StatusListener() {
         override fun onStatusUpdate(type: String?, data: String?) {
-            if (pushLogs >= PUSH_LOG_MAX) return
-            pushLogs++
-            RobotLog.i(LogSource.NAV, "Robot reports ${type ?: "push"}: \"${data?.trim()?.take(80)}\" (mode ${Modes.current.wire})")
+            val line = "Robot reports ${type ?: "push"}: \"${data?.trim()?.take(80)}\""
+            pushLast = line
+            val now = now()
+            if (pushes.note(now) != null) {
+                RobotLog.i(LogSource.NAV, "$line (mode ${Modes.current.wire})")
+                return
+            }
+            if (pushFlush?.isActive == true) return
+            pushFlush = scope.launch {
+                delay(pushes.msToFlush(now()))
+                pushes.flush(now())?.let { n ->
+                    RobotLog.i(LogSource.NAV, "$pushLast, $n more time${if (n == 1) "" else "s"} in the last ${BurstLog.EVERY_MS / 1000} s (mode ${Modes.current.wire})")
+                }
+            }
         }
     }
 

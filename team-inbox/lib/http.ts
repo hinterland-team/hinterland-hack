@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { bearerValid, hasBearer, staffAuthorized } from "./session";
 
@@ -54,6 +55,13 @@ export function baseUrl(req: Request) {
   return host ? `${proto}://${host}` : new URL(req.url).origin;
 }
 
+// the address this browser used (not PUBLIC_BASE_URL): oauth has to come back to the same host, where the login cookie is
+export function requestOrigin(req: Request) {
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? new URL(req.url).protocol.replace(":", "");
+  return host ? `${proto}://${host}` : new URL(req.url).origin;
+}
+
 function fail(err: unknown) {
   if (err instanceof ApiError) {
     return NextResponse.json({ error: err.message }, { status: err.status, headers: err.headers });
@@ -91,4 +99,13 @@ export function flag(url: URL, name: string) {
 
 export function json(data: unknown, status = 200) {
   return NextResponse.json(data, { status, headers: { "Cache-Control": "no-store" } });
+}
+
+// for answers the dashboard polls every few seconds: an etag of the content (hashData: what counts as a change,
+// e.g. without a clock field). a poll that sends If-None-Match with the same tag gets 304 and no body
+export function jsonEtag(req: Request, data: unknown, hashData: unknown = data) {
+  const tag = `W/"${createHash("sha1").update(JSON.stringify(hashData) ?? "").digest("base64url").slice(0, 22)}"`;
+  const headers = { "Cache-Control": "no-store", ETag: tag };
+  if (req.headers.get("if-none-match") === tag) return new NextResponse(null, { status: 304, headers });
+  return NextResponse.json(data, { status: 200, headers });
 }

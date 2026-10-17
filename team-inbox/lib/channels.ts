@@ -33,7 +33,7 @@ import {
   sendAll,
   sendTo,
 } from "./notify";
-import { getStore } from "./store";
+import { getStore, storageKind } from "./store";
 import type { ChannelPatch } from "./store-types";
 import { type JourneyEvent, type Place, isOneOf } from "./types";
 
@@ -123,12 +123,15 @@ export async function notificationsView(): Promise<NotificationsView> {
   );
   const routing: Record<string, string[]> = {};
   for (const p of places) if (p.kind !== "exit") routing[p.id] = placeTargets(p, channels, env).map((t) => t.id);
+  const storage = storageKind();
   return {
     channels: views,
     routing,
     help: defaultTargets(channels, env).map((t) => t.id),
     emailEnv: emailFlags(env),
-    memoryStore: store.kind === "memory",
+    memoryStore: storage === "memory",
+    storage,
+    integration: Boolean(process.env.INTEGRATION_KEY?.trim()),
   };
 }
 
