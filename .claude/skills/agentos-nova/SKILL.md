@@ -10,6 +10,7 @@ OrionStar ships these rules for AI coding assistants (original, in Chinese: `ref
 ## 0. Our robot
 
 - GreetingBot Nova, model OS-R-SG04, SN M03SHW2A30025032951B, name 小豹, OrionStar OS **12.1**, AgentOS (never switch it to RobotOS).
+- People know the robot as **Otto** (he): screen, speech, persona. "Nova" stays for the product brand (Nova Clinic, Nova Deploy, Nova Remote), the hardware model and technical ids (robot id and feed value `nova`).
 - SDK `com.orionstar.agent:sdk:0.4.5-SNAPSHOT` (newest one below ROM 12.3). It bundles RobotAPI (RobotCore). Do not use APIs that only exist in 0.4.11+ (`ttsParallel`, `ttsRequest*`, `setVoiceMode`).
 - Screen: 1920 x 1080 px, density 3.5, so about 549 x 308 dp. OrionStar says: keep layouts compact, small text and components, no deep nesting, nothing outside the screen.
 - Map spots on 小豹 right now: Reception Point, Charging Pole1, Home, Elevator, Stairs Down, Dr. Blue, Dr. Red, Dr. Yellow, Dr. Green, Dr. Purple. Spot names come from the backend (`/api/doctors`), never from code.
@@ -48,6 +49,7 @@ Only if the docs have nothing, look at the web or general Android docs. Do not g
 ## 5. Voice and "thinking"
 
 - On AgentOS the old RobotAPI ASR/TTS/NLP are switched off. All speech goes through `AgentCore` (`tts`/`ttsSync`, `llm`/`llmSync`, `query`).
+- The TTS voice (male/female, timbre, speed) can't be chosen from an app in any SDK version (0.4.5 to 0.4.12: `tts*` take only text and a timeout; `setVoiceMode` is about wake words). It is set on the robot / OrionStar side. What the app controls is how Otto talks: `Voice.STYLE` (used by `setStyle` and by `Voice.speak`).
 - The mic plus the LLM pick actions by themselves. Use `llm`/`llmSync` only when an action can't express it (free text generation, summaries, robot-initiated sentences in the patient's language).
 - To start talking on its own (proactive): `AgentCore.query("...")` (acts as if the user said it) or `notify(isTriggerFollowUp = true)`.
 - Tell the LLM what is on screen with `AgentCore.uploadInterfaceInfo(...)`. It **replaces** the previous info each call, so send the full state.
