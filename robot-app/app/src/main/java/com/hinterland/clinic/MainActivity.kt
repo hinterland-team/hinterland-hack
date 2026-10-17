@@ -6,6 +6,9 @@ import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -24,6 +27,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        hideSystemBars()
 
         // page actions are live while this screen is visible. listeners return false
         // so the agent keeps handling speech as usual (the voice bar itself is off, see onStart).
@@ -102,11 +107,27 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         voiceBar(false)
+        hideSystemBars()
+    }
+
+    // dialogs and edge swipes bring the bars back, hide them again when we get focus
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemBars()
     }
 
     override fun onStop() {
         voiceBar(true)
         super.onStop()
+    }
+
+    // full screen: the system navigation bar (the side panel with the arrow) and the status bar
+    // stay hidden. a swipe from the edge shows them for a moment
+    private fun hideSystemBars() {
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
     }
 
     private fun voiceBar(on: Boolean) {
