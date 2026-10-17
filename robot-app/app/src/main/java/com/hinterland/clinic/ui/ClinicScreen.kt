@@ -209,8 +209,6 @@ private fun Stage(state: UiState, actions: ScreenActions, reduced: Boolean) {
                     .graphicsLayer { alpha = reveal },
             ) {
                 Caption(state)
-                Spacer(Modifier.height(Space.s))
-                StatusLine(state)
             }
             Box(
                 Modifier
@@ -313,9 +311,9 @@ private fun HeroCaption(state: UiState, modifier: Modifier) {
     }
 }
 
-// ---- left column under the small face: caption, status ----
+// ---- left column under the small face: what nova says ----
 
-// what nova or the person just said, always the same height
+// what nova just said, big, always the same height. connection and battery are in the staff menu.
 @Composable
 private fun Caption(state: UiState) {
     // the patient's words stay off the screen; nova's own lines are shown
@@ -333,157 +331,66 @@ private fun Caption(state: UiState) {
         Spacer(Modifier.height(Space.xs))
         Text(
             when {
-                fromUser -> "I'm listening to you..."
-                state.subtitle.isBlank() -> "I'm listening whenever you're ready."
+                fromUser -> "I'm listening..."
+                state.subtitle.isBlank() -> "Just talk to me."
                 else -> state.subtitle
             },
-            style = text(Type.body, FontWeight.Medium, if (fromUser || state.subtitle.isBlank()) Nova.InkSoft else Nova.Ink),
-            maxLines = 3,
+            style = text(Big.label, FontWeight.Medium, if (fromUser || state.subtitle.isBlank()) Nova.InkSoft else Nova.Ink, lineHeight = 38.sp),
+            maxLines = 4,
             overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
-private val CAPTION_HEIGHT = 188.dp
+private val CAPTION_HEIGHT = DESIGN_HEIGHT - Space.page - SideBelow
 
-@Composable
-private fun StatusLine(state: UiState) {
-    val brain = state.brain
-    val online = state.backend != Health.DOWN && state.robot != Health.DOWN && state.chassis == null
-    Row(Modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(12.dp).clip(CircleShape).background(if (online) Nova.Done else Nova.Fail))
-        Spacer(Modifier.width(10.dp))
-        Text(
-            when {
-                state.chassis != null -> "Driving off"
-                state.robot == Health.DOWN -> "Driving not ready"
-                state.backend == Health.DOWN -> "Practice offline"
-                else -> "Online"
-            },
-            style = text(Type.caption, FontWeight.Medium, Nova.InkSoft),
-            maxLines = 1,
-        )
-        Spacer(Modifier.weight(1f))
-        BatteryGlyph(brain.battery, brain.charging)
-        Spacer(Modifier.width(10.dp))
-        Text(brain.battery?.let { "$it %" } ?: "–", style = text(Type.caption, FontWeight.Medium, Nova.InkSoft, tabular = true))
-    }
-}
-
-@Composable
-private fun BatteryGlyph(level: Int?, charging: Boolean) {
-    val fill = when {
-        charging -> Nova.Done
-        level != null && level <= 20 -> Nova.Fail
-        else -> Nova.InkSoft
-    }
-    Canvas(Modifier.size(width = 34.dp, height = 17.dp)) {
-        val stroke = 2.dp.toPx()
-        val tip = 3.5.dp.toPx()
-        val bodyW = size.width - tip - stroke
-        drawRoundRect(Nova.InkSoft, Offset(stroke / 2f, stroke / 2f), Size(bodyW, size.height - stroke), CornerRadius(4.dp.toPx()), style = Stroke(stroke))
-        drawRoundRect(Nova.InkSoft, Offset(bodyW + stroke / 2f, size.height * 0.3f), Size(tip, size.height * 0.4f), CornerRadius(1.dp.toPx()))
-        if (level != null) {
-            val pad = stroke + 2.dp.toPx()
-            val inner = bodyW - pad * 2f + stroke
-            drawRoundRect(
-                fill,
-                Offset(pad, pad),
-                Size((inner * level.coerceIn(0, 100) / 100f).coerceAtLeast(1.dp.toPx()), size.height - pad * 2f),
-                CornerRadius(2.dp.toPx()),
-            )
-        }
-    }
-}
-
-// ---- idle ----
+// ---- idle: the welcome, or what nova is busy with ----
 
 @Composable
 private fun IdleContent(state: UiState, actions: ScreenActions) {
-    Column(Modifier.fillMaxSize()) {
-        Text("Hello, I'm Nova", style = text(Type.title, FontWeight.Bold, Nova.Ink))
-        Spacer(Modifier.height(Space.s))
-        Text(
-            "I walk with you to your room, at your pace.",
-            style = text(Type.bodyLarge, FontWeight.Normal, Nova.InkSoft),
-        )
-        Spacer(Modifier.height(Space.l))
-        if (state.canSelfCheckIn) {
-            BigButton("Check in", GlyphKind.TICKET, onClick = actions.checkIn, pulse = true)
-        } else {
-            NoteCard("The desk sends me to you. I'll call your ticket.")
+    when (state.brain.state) {
+        RobotState.RETURNING -> Column(Modifier.fillMaxSize()) {
+            Headline("I'm going back")
+            Spacer(Modifier.height(Space.xs))
+            Say("See you soon!")
+            Spacer(Modifier.weight(1f))
+            RouteMap(from = "Here", progress = null)
+            Spacer(Modifier.weight(1f))
         }
-        Spacer(Modifier.weight(1f))
-        Capability(GlyphKind.ROUTE, "Walk with you", "To your room, slowly if you like")
-        Spacer(Modifier.height(Space.m))
-        Capability(GlyphKind.DOOR, "Show the way", "To the exit or the reception")
-        Spacer(Modifier.height(Space.m))
-        Capability(GlyphKind.PERSON, "Get the team", "If you need a person")
-        Spacer(Modifier.weight(1f))
-        val busy = idleBusy(state.brain)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Glyph(if (busy != null) GlyphKind.ROUTE else GlyphKind.MIC, Nova.Blue, 30.dp)
-            Spacer(Modifier.width(12.dp))
-            Text(busy ?: "Just talk to me, in your language.", style = text(Type.body, FontWeight.Medium, Nova.Blue), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
-
-// what nova does right now when it is not the plain waiting, else null
-private fun idleBusy(b: BrainStatus): String? = when (b.state) {
-    RobotState.RETURNING, RobotState.CHARGING -> b.goal
-    RobotState.ERROR -> b.detail ?: b.goal
-    else -> null
-}
-
-@Composable
-private fun Capability(glyph: GlyphKind, title: String, caption: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(64.dp).clip(CircleShape).background(Nova.SkySoft), contentAlignment = Alignment.Center) {
-            Glyph(glyph, Nova.Blue, 34.dp)
-        }
-        Spacer(Modifier.width(Space.m))
-        Column {
-            Text(title, style = text(Type.body, FontWeight.SemiBold, Nova.Ink))
-            Spacer(Modifier.height(4.dp))
-            Text(caption, style = text(Type.caption, FontWeight.Normal, Nova.InkSoft))
+        RobotState.CHARGING -> Message("I'm charging", "Just talk to me if you need me.", { IconBadge(GlyphKind.PLUG, Nova.Teal, Nova.TealSoft, pulse = true) })
+        RobotState.ERROR -> Message("One moment, please", "The desk will help you.", { IconBadge(GlyphKind.PERSON, Nova.Amber, Nova.AmberSoft) })
+        else -> Column(Modifier.fillMaxSize()) {
+            Headline("Hello! I'm Nova")
+            Spacer(Modifier.height(Space.xs))
+            Say("I walk with you to your room.")
+            Spacer(Modifier.weight(1f))
+            if (state.canSelfCheckIn) {
+                BigButton("Check in", GlyphKind.TICKET, onClick = actions.checkIn, pulse = true, height = Big.button)
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconBadge(GlyphKind.TICKET, Nova.Blue, Nova.SkySoft, size = 104.dp)
+                    Spacer(Modifier.width(Space.s))
+                    Say("The desk will call your ticket.", color = Nova.Ink)
+                }
+            }
+            Spacer(Modifier.height(Space.l))
+            TalkHint()
+            Spacer(Modifier.weight(1f))
         }
     }
 }
 
-// ---- out of service: no chassis rights, emergency stop, the system took over ----
+// ---- out of service: nova can't drive (no chassis rights, emergency stop, the system took over) ----
 
 @Composable
 private fun OutOfServiceContent(state: UiState) {
     val issue = state.chassis ?: return
-    Column(Modifier.fillMaxSize()) {
-        Pill("Out of service", Nova.Amber, Nova.AmberSoft, GlyphKind.PLUG)
-        Spacer(Modifier.height(Space.m))
-        Text(issue.title, style = text(Type.endTitle, FontWeight.Bold, Nova.Ink), maxLines = 2)
-        Spacer(Modifier.height(Space.s))
-        Text(issue.hint, style = text(Type.bodyLarge, FontWeight.Normal, Nova.InkSoft), maxLines = 3)
-        Spacer(Modifier.weight(1f))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(Space.radius))
-                .background(Nova.Card)
-                .border(1.5.dp, Nova.Line, RoundedCornerShape(Space.radius))
-                .padding(horizontal = Space.l, vertical = Space.m),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(64.dp).clip(CircleShape).background(Nova.SkySoft), contentAlignment = Alignment.Center) {
-                Glyph(GlyphKind.MIC, Nova.Blue, 34.dp)
-            }
-            Spacer(Modifier.width(Space.m))
-            Column {
-                Text("I can still talk with you", style = text(Type.body, FontWeight.SemiBold, Nova.Ink))
-                Spacer(Modifier.height(4.dp))
-                Text("For the way to your room, the reception desk will help.", style = text(Type.caption, FontWeight.Normal, Nova.InkSoft))
-            }
-        }
-        Spacer(Modifier.height(Space.m))
-        Text(issue.detail, style = text(Type.caption, FontWeight.Normal, Nova.InkFaint), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Message(
+        issue.title, "The desk will help you.",
+        { IconBadge(GlyphKind.PLUG, Nova.Amber, Nova.AmberSoft) },
+    ) {
+        // for the staff: how to get nova going again
+        Text(issue.hint, style = text(Type.caption, FontWeight.Normal, Nova.InkFaint), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -491,13 +398,16 @@ private fun OutOfServiceContent(state: UiState) {
 
 @Composable
 private fun HelpContent(state: UiState) {
-    val sent = state.help?.sent
+    val failed = state.help?.sent == false
     Column(Modifier.fillMaxSize()) {
-        Pill(if (sent == false) "Could not reach the team" else "Team informed", if (sent == false) Nova.Fail else Nova.Amber, if (sent == false) Nova.FailSoft else Nova.AmberSoft)
-        Spacer(Modifier.height(Space.m))
-        Text("Help is on the way", style = text(Type.title, FontWeight.Bold, Nova.Ink))
-        Spacer(Modifier.height(Space.s))
-        Text("I'll stay right here with you.", style = text(Type.bodyLarge, FontWeight.Normal, Nova.InkSoft))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBadge(GlyphKind.PERSON, Nova.Amber, Nova.AmberSoft, size = 132.dp, pulse = !failed)
+            Spacer(Modifier.width(Space.m))
+            Column {
+                Headline(if (failed) "Please call 112" else "Help is coming", maxLines = 1)
+                Say(if (failed) "I couldn't reach the team." else "I'm staying with you.", maxLines = 1)
+            }
+        }
         Spacer(Modifier.weight(1f))
         Row(
             Modifier
@@ -508,11 +418,11 @@ private fun HelpContent(state: UiState) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("In an emergency", style = text(Type.body, FontWeight.SemiBold, Nova.Fail))
+                Text("Emergency?", style = text(40.sp, FontWeight.Bold, Nova.Fail))
                 Spacer(Modifier.height(Space.xs))
-                Text("Call the emergency number now", style = text(Type.bodyLarge, FontWeight.Medium, Nova.Ink))
+                Say("Call this number now.", color = Nova.Ink, maxLines = 1)
             }
-            Text("112", style = text(Type.title * 1.6f, FontWeight.Black, Nova.Fail, tabular = true))
+            Text("112", style = text(Type.title * 1.8f, FontWeight.Black, Nova.Fail, tabular = true))
         }
         Spacer(Modifier.weight(1f))
     }
@@ -574,27 +484,6 @@ fun BigButton(
 }
 
 @Composable
-fun RowScope.ChoiceButton(label: String, glyph: GlyphKind, onClick: () -> Unit, selected: Boolean = false) {
-    val shape = RoundedCornerShape(Space.radius)
-    Column(
-        Modifier
-            .weight(1f)
-            .fillMaxHeight()
-            .clip(shape)
-            .background(if (selected) Nova.SkySoft else Nova.Card)
-            .border(if (selected) 3.dp else 2.dp, if (selected) Nova.Blue else Nova.Line, shape)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(Space.m),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Glyph(glyph, Nova.Blue, 64.dp)
-        Spacer(Modifier.height(Space.s))
-        Text(label, style = text(Type.body, FontWeight.SemiBold, Nova.Ink), maxLines = 1)
-    }
-}
-
-@Composable
 fun Pill(label: String, fg: Color, bg: Color, glyph: GlyphKind? = null) {
     Row(
         Modifier
@@ -609,19 +498,5 @@ fun Pill(label: String, fg: Color, bg: Color, glyph: GlyphKind? = null) {
             Spacer(Modifier.width(10.dp))
         }
         Text(label, style = text(Type.caption, FontWeight.SemiBold, fg), maxLines = 1)
-    }
-}
-
-@Composable
-fun NoteCard(textLine: String, fg: Color = Nova.InkSoft, bg: Color = Nova.Card) {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Space.radius))
-            .background(bg)
-            .border(1.5.dp, Nova.Line, RoundedCornerShape(Space.radius))
-            .padding(horizontal = Space.l, vertical = Space.m),
-    ) {
-        Text(textLine, style = text(Type.body, FontWeight.Medium, fg))
     }
 }
