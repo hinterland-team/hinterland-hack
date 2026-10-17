@@ -402,7 +402,8 @@ object Clinic {
         val sent = result.isSuccess
         setTask(null)
         if (sent) {
-            flash(Mood.HAPPY)
+            // no happy face in an emergency: she stays concerned with the person
+            if (!urgent) flash(Mood.RELIEVED)
             speak(
                 "Tell the person the practice team has been informed and someone will come to them shortly." +
                     if (urgent) " Because it is urgent, also tell them clearly to call the emergency number 112 right away, and that you stay with them." else "",
@@ -457,6 +458,7 @@ object Clinic {
         val g = Guide.current ?: return
         g.rate(up)
         updateGuide { it.copy(feedback = if (up) "up" else "down") }
+        flash(if (up) Mood.LOVE else Mood.SORRY, 3_000)
     }
 
     // self check-in: who -> pace -> confirm
@@ -465,6 +467,7 @@ object Clinic {
         if (Guide.current != null) return
         val rooms = Places.selfCheckIn(_ui.value.places)
         _ui.update { it.copy(checkIn = CheckInUi(step = CheckInStep.WHO, rooms = rooms)) }
+        flash(Mood.SURPRISED, 900)
         feed.patientIntent(now(), "Started the self check-in")
         scope.launch {
             val fresh = refreshPlaces() ?: return@launch

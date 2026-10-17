@@ -8,7 +8,30 @@ enum class Health { UNKNOWN, OK, DOWN }
 // what the agentos planner is doing (from OnAgentStatusChangedListener)
 enum class AgentMode { IDLE, LISTENING, THINKING }
 
-enum class Mood { IDLE, LISTENING, THINKING, SPEAKING, WALKING, HAPPY, SORRY }
+// how nova feels. talking is separate (UiState.speaking): she can talk happily, sorrily, sleepily...
+enum class Mood {
+    IDLE, LISTENING, THINKING, WALKING, HAPPY, SORRY,
+    // a big moment: arrived, "that's me"
+    EXCITED,
+    // thumbs up from the patient
+    LOVE,
+    SURPRISED,
+    // urgent help, a patient out of sight
+    CONCERNED,
+    // the robot itself is in trouble
+    CONFUSED,
+    // charging
+    SLEEPY,
+    // low battery
+    TIRED,
+    // a patient found again, the team informed
+    RELIEVED,
+    // nova greets someone walking up
+    GREETING,
+}
+
+// below this battery level nova looks tired (unless charging)
+const val LOW_BATTERY = 15
 
 // step = on-screen english for the current step, view = heartbeat screen.view
 enum class GuidePhase(val view: String) {
@@ -122,17 +145,22 @@ data class UiState(
     // from GET /api/places
     val places: List<Place> = emptyList(),
 ) {
-    // the face follows the walk: attentive while checking, concerned when someone is missing
+    // the face follows the walk: attentive while checking, worried when someone is missing.
+    // talking doesn't change the mood, the mouth moves on top of it.
     fun mood(): Mood = when {
         flash != null -> flash
-        speaking -> Mood.SPEAKING
-        help != null -> Mood.LISTENING
-        guide?.phase in setOf(GuidePhase.LOOKING, GuidePhase.LOST, GuidePhase.FAILED, GuidePhase.NOBODY_CAME) -> Mood.SORRY
+        help != null -> Mood.CONCERNED
+        guide?.phase in setOf(GuidePhase.LOOKING, GuidePhase.LOST) -> Mood.CONCERNED
+        guide?.phase in setOf(GuidePhase.FAILED, GuidePhase.NOBODY_CAME) -> Mood.SORRY
         guide?.phase in setOf(GuidePhase.CHECKING, GuidePhase.WAITING, GuidePhase.PICKUP) -> Mood.LISTENING
         guide?.phase == GuidePhase.ARRIVED -> Mood.HAPPY
         walking -> Mood.WALKING
         working > 0 || agent == AgentMode.THINKING -> Mood.THINKING
         agent == AgentMode.LISTENING -> Mood.LISTENING
+        brain.state == RobotState.GREETING -> Mood.GREETING
+        brain.state == RobotState.ERROR -> Mood.CONFUSED
+        brain.state == RobotState.CHARGING && !speaking -> Mood.SLEEPY
+        !brain.charging && (brain.battery ?: 100) <= LOW_BATTERY -> Mood.TIRED
         else -> Mood.IDLE
     }
 

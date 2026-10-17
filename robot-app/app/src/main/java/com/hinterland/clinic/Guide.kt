@@ -199,7 +199,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             null, JourneyEvent.PATIENT_CONFIRMED,
             if (how == HOW_TAP) "Patient tapped That's me" else "Patient said the ticket number",
         )
-        Clinic.flash(Mood.HAPPY)
+        Clinic.flash(Mood.EXCITED)
         return true
     }
 
@@ -495,7 +495,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                 patch(null, JourneyEvent.CHECK_BACK, if (timeline.hasReported) "Patient found again after the help call" else "Patient came back after Nova called")
                 Clinic.feed.novaDid(now(), "Found the patient again")
                 setPace(pace.slower(), announce = false, detail = "Patient fell behind, pace lowered")
-                Clinic.flash(Mood.HAPPY)
+                Clinic.flash(Mood.RELIEVED, 3_000)
                 Clinic.speak(
                     "Say you are glad to see them again and that you will walk a little slower now. One short sentence.",
                     lang,
@@ -512,7 +512,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         Clinic.updateGuide { it.copy(progress = 1f) }
         NovaBrain.activity(RobotState.WALKING, "Arrived with ${ticketOr()} at $destination")
         Clinic.feed.novaDid(now(), "Arrived at $destination")
-        Clinic.flash(Mood.HAPPY, 3_000)
+        Clinic.flash(Mood.EXCITED, 3_000)
         if (isExit()) {
             Clinic.speak(
                 "You arrived at the exit with the patient. Say goodbye warmly and wish them to get well soon. One or two short sentences.",

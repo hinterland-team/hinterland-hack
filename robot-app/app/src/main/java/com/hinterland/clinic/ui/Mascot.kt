@@ -1,215 +1,436 @@
 package com.hinterland.clinic.ui
 
-import androidx.annotation.DrawableRes
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.AnimationVector2D
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.res.imageResource
 import com.hinterland.clinic.Mood
 import com.hinterland.clinic.R
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlin.math.cos
+import kotlinx.coroutines.launch
+import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.random.Random
+import kotlin.time.TimeSource
 
-// nova's face is cut from the doctor artwork (res/drawable-nodpi/doctor_*): the bust from the idle frame,
-// and the eyes and mouth of the other frames as patches laid over it. all numbers below are in sprite pixels.
+private typealias Anim = Animatable<Float, AnimationVector1D>
+
+// she starts her little idle habits after this long with nothing going on
+private const val IDLE_ACT_AFTER_MS = 15_000L
+
+// nova's face: the doctor art as a rig (FaceParts.kt). every mood has a pose; on top she blinks,
+// glances around, nods, hops when happy, droops when sorry, and her mouth talks in any mood.
 // with reduced motion the face stays still and only changes its expression.
-private object Sprite {
-    const val WIDTH = 818f
-    const val HEIGHT = 712f
-    val EyesAt = Offset(180f, 240f)
-    val MouthAt = Offset(326f, 402f)
-    // the light blue circle behind the doctor
-    val Backdrop = Offset(408.5f, 412f)
-    const val BACKDROP_R = 404f
-    val Glow = Color(0xFF2E9BFF)
-}
-
-private enum class Eyes(@DrawableRes val res: Int) {
-    SMILE(R.drawable.doctor_eyes_smile),
-    GLANCE(R.drawable.doctor_eyes_glance),
-    LOOK(R.drawable.doctor_eyes_look),
-    SQUINT(R.drawable.doctor_eyes_squint),
-    LAUGH(R.drawable.doctor_eyes_laugh),
-}
-
-private enum class Mouth(@DrawableRes val res: Int) {
-    SMILE(R.drawable.doctor_mouth_smile),
-    O(R.drawable.doctor_mouth_o),
-    LAUGH(R.drawable.doctor_mouth_laugh),
-    FROWN(R.drawable.doctor_mouth_frown),
-}
-
-// mouth shapes nova flaps through while talking, the open ones more often
-private val TALK = listOf(Mouth.O, Mouth.LAUGH, Mouth.O, Mouth.SMILE, Mouth.LAUGH, Mouth.O)
-
 @Composable
-fun Mascot(mood: Mood, modifier: Modifier = Modifier) {
-    val base = ImageBitmap.imageResource(R.drawable.doctor_base)
-    val eyeImages = Eyes.entries.map { ImageBitmap.imageResource(it.res) }
-    val mouthImages = Mouth.entries.map { ImageBitmap.imageResource(it.res) }
+fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) {
     val reduced = LocalReducedMotion.current
+    val body = ImageBitmap.imageResource(R.drawable.doctor_body)
+    val eyesL = Eye.entries.map { if (it.drawn) null else ImageBitmap.imageResource(it.left) }
+    val eyesR = Eye.entries.map { if (it.drawn) null else ImageBitmap.imageResource(it.right) }
+    val browL = ImageBitmap.imageResource(R.drawable.doctor_brow_l)
+    val browR = ImageBitmap.imageResource(R.drawable.doctor_brow_r)
+    val mouths = Mouth.entries.map { if (it.res == 0) null else ImageBitmap.imageResource(it.res) }
+    val smile = mouths[Mouth.SMILE.ordinal]!!
 
-    var blinking by remember { mutableStateOf(false) }
+    // one clock for breathing, bobbing and the effects. read only while drawing, so it redraws, not recomposes
+    val clock = remember { mutableLongStateOf(0L) }
     LaunchedEffect(reduced) {
-        blinking = false
-        while (!reduced) {
-            delay(Random.nextLong(2_200, 5_200))
-            blinking = true
-            delay(130)
-            blinking = false
-            if (Random.nextInt(4) == 0) {
-                delay(160)
-                blinking = true
-                delay(130)
-                blinking = false
+        if (reduced) return@LaunchedEffect
+        val start = withFrameMillis { it } - clock.longValue
+        while (true) withFrameMillis { clock.longValue = it - start }
+    }
+    val moodSince = remember { mutableLongStateOf(0L) }
+
+    // waking up from a nap starts with a little surprise
+    var surprise by remember { mutableStateOf(false) }
+    var last by remember { mutableStateOf(mood) }
+    LaunchedEffect(mood) {
+        moodSince.longValue = clock.longValue
+        val woke = last == Mood.SLEEPY && mood != Mood.SLEEPY
+        last = mood
+        if (woke && !reduced) {
+            surprise = true
+            try {
+                delay(800)
+            } finally {
+                surprise = false
+            }
+        }
+    }
+    val shown = if (surprise) Mood.SURPRISED else mood
+
+    var act by remember { mutableStateOf(Act.NONE) }
+    val pose = poseFor(shown).with(act)
+
+    val blink = remember { Animatable(1f) }
+    val wink = remember { Animatable(1f) }
+    val gaze = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
+    val hop = remember { Animatable(0f) }
+    val squash = remember { Animatable(1f) }
+    val nod = remember { Animatable(0f) }
+    val sway = remember { Animatable(0f) }
+    val talkAmp = remember { Animatable(0f) }
+    val browPop = remember { Animatable(0f) }
+    var talkShape by remember { mutableStateOf(Mouth.O) }
+
+    // blinking: a blink when the mood changes, like taking it in, then every few seconds
+    LaunchedEffect(shown, reduced) {
+        blink.snapTo(1f)
+        if (reduced || shown == Mood.SLEEPY) return@LaunchedEffect
+        val slow = shown == Mood.TIRED
+        blinkOnce(blink, slow)
+        while (true) {
+            delay(if (slow) Random.nextLong(3_000, 6_000) else Random.nextLong(2_000, 5_000))
+            blinkOnce(blink, slow)
+            if (!slow && Random.nextInt(4) == 0) {
+                delay(140)
+                blinkOnce(blink, false)
             }
         }
     }
 
-    // while idle she looks around now and then
-    var glance by remember { mutableStateOf<Eyes?>(null) }
-    LaunchedEffect(mood, reduced) {
-        glance = null
-        if (mood != Mood.IDLE || reduced) return@LaunchedEffect
-        while (true) {
-            delay(Random.nextLong(6_000, 12_000))
-            glance = if (Random.nextBoolean()) Eyes.GLANCE else Eyes.LOOK
-            delay(Random.nextLong(900, 1_600))
-            glance = null
+    // the moment a mood starts: a hop for the happy ones, a pop for a surprise, a slump for bad news
+    LaunchedEffect(shown, reduced) {
+        if (reduced) return@LaunchedEffect
+        if (hop.value != 0f) hop.animateTo(0f, tween(150))
+        when (shown) {
+            Mood.HAPPY, Mood.GREETING, Mood.LOVE -> hopOnce(hop, squash)
+            Mood.EXCITED -> while (true) {
+                hopOnce(hop, squash, high = 34f)
+                delay(Random.nextLong(120, 380))
+            }
+            Mood.SURPRISED -> {
+                squash.animateTo(1.08f, tween(110))
+                squash.animateTo(1f, spring(0.35f, Spring.StiffnessMedium))
+            }
+            Mood.SORRY, Mood.CONCERNED -> {
+                squash.animateTo(0.97f, tween(220))
+                squash.animateTo(1f, spring(0.5f, Spring.StiffnessLow))
+            }
+            else -> {
+                squash.animateTo(0.985f, tween(90))
+                squash.animateTo(1f, spring(0.45f, Spring.StiffnessMediumLow))
+            }
         }
     }
 
-    var talkMouth by remember { mutableStateOf(Mouth.SMILE) }
-    LaunchedEffect(mood, reduced) {
-        talkMouth = Mouth.SMILE
-        if (mood != Mood.SPEAKING) return@LaunchedEffect
-        // reduced motion: one still, half-open "talking" mouth
+    // where she looks, and her little habits when nobody needs her
+    LaunchedEffect(shown, talking, reduced) {
+        act = Act.NONE
+        launch { wink.animateTo(1f, tween(120)) }
+        launch { sway.animateTo(0f, tween(250)) }
         if (reduced) {
-            talkMouth = Mouth.O
+            gaze.snapTo(Offset.Zero)
             return@LaunchedEffect
         }
-        var last = Mouth.SMILE
-        while (true) {
-            last = TALK.filter { it != last }.random()
-            talkMouth = last
-            delay(Random.nextLong(110, 190))
-        }
-    }
-
-    val moodEyes = when (mood) {
-        Mood.LISTENING -> Eyes.GLANCE
-        Mood.THINKING -> Eyes.LOOK
-        Mood.HAPPY -> Eyes.LAUGH
-        Mood.SORRY -> Eyes.SQUINT
-        else -> glance ?: Eyes.SMILE
-    }
-    val eyes = if (blinking && mood != Mood.SORRY) Eyes.SQUINT else moodEyes
-    val mouth = when (mood) {
-        Mood.SPEAKING -> talkMouth
-        Mood.HAPPY -> Mouth.LAUGH
-        Mood.SORRY -> Mouth.FROWN
-        else -> Mouth.SMILE
-    }
-
-    // every patch fades in and out on its own, so switching between them is a short crossfade
-    val eyeAlpha = Eyes.entries.map {
-        animateFloatAsState(if (it == eyes) 1f else 0f, calm(if (blinking) 60 else 180, reduced), label = "eyes$it").value
-    }
-    val mouthAlpha = Mouth.entries.map {
-        animateFloatAsState(if (it == mouth) 1f else 0f, calm(if (mood == Mood.SPEAKING) 60 else 200, reduced), label = "mouth$it").value
-    }
-
-    val loop = rememberInfiniteTransition(label = "mascot")
-    val spin by loop.animateFloat(0f, 360f, infiniteRepeatable(tween(1_400, easing = LinearEasing)), label = "spin")
-    val pulse by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1_600, easing = LinearEasing)), label = "pulse")
-    val bob by loop.animateFloat(-1f, 1f, infiniteRepeatable(tween(650, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bob")
-    val sway by loop.animateFloat(-1f, 1f, infiniteRepeatable(tween(2_400, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "sway")
-    val breathe by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(3_200, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe")
-    // 0 = no movement at all
-    val m = if (reduced) 0f else 1f
-
-    val tilt by animateFloatAsState(
-        m * when (mood) {
-            Mood.THINKING -> 4f
-            Mood.SORRY -> -3f
-            Mood.LISTENING -> -2f
-            else -> 0f
-        },
-        calm(500, reduced),
-        label = "tilt",
-    )
-    val sink by animateFloatAsState(m * if (mood == Mood.SORRY) 10f else 0f, calm(500, reduced), label = "sink")
-
-    Canvas(modifier) {
-        val k = min(size.width / Sprite.WIDTH, size.height / Sprite.HEIGHT)
-        val walking = mood == Mood.WALKING
-        val dx = m * if (walking) sway * 8f else 0f
-        val dy = sink + m * if (walking) bob * 9f else (breathe - 0.5f) * 6f
-
-        translate((size.width - Sprite.WIDTH * k) / 2f, (size.height - Sprite.HEIGHT * k) / 2f) {
-            scale(k, k, pivot = Offset.Zero) {
-                if (mood == Mood.LISTENING) {
-                    for (i in 0..1) {
-                        val p = ((if (reduced) 0.3f else pulse) + i * 0.5f) % 1f
-                        drawCircle(
-                            color = Sprite.Glow.copy(alpha = (1f - p) * 0.35f),
-                            radius = Sprite.BACKDROP_R * (1.0f + 0.14f * p),
-                            center = Sprite.Backdrop,
-                            style = Stroke(width = 6f),
-                        )
-                    }
-                }
-
-                translate(dx, dy) {
-                    rotate(tilt, pivot = Offset(Sprite.WIDTH / 2f, Sprite.HEIGHT)) {
-                        drawImage(base)
-                        Eyes.entries.forEach { e ->
-                            if (eyeAlpha[e.ordinal] > 0.01f) drawImage(eyeImages[e.ordinal], Sprite.EyesAt, alpha = eyeAlpha[e.ordinal])
+        when (shown) {
+            Mood.SLEEPY -> gaze.animateTo(Offset.Zero, tween(600))
+            // looking for someone
+            Mood.CONCERNED -> while (true) {
+                gaze.animateTo(Offset(-15f, 2f), tween(520, easing = FastOutSlowInEasing))
+                delay(Random.nextLong(500, 1_100))
+                gaze.animateTo(Offset(15f, 2f), tween(620, easing = FastOutSlowInEasing))
+                delay(Random.nextLong(500, 1_100))
+            }
+            Mood.CONFUSED -> while (true) {
+                gaze.animateTo(Offset(-7f, -3f), tween(140))
+                delay(Random.nextLong(900, 1_500))
+                gaze.animateTo(Offset(9f, -3f), tween(140))
+                delay(Random.nextLong(900, 1_500))
+            }
+            Mood.THINKING -> while (true) {
+                gaze.animateTo(Offset(Random.nextFloat() * 8f - 4f, Random.nextFloat() * 6f - 3f), tween(220))
+                delay(Random.nextLong(700, 1_600))
+            }
+            else -> {
+                val since = TimeSource.Monotonic.markNow()
+                while (true) {
+                    delay(Random.nextLong(1_200, 3_400))
+                    val bored = shown == Mood.IDLE && !talking && since.elapsedNow().inWholeMilliseconds > IDLE_ACT_AFTER_MS
+                    if (bored && Random.nextInt(3) == 0) {
+                        val a = IDLE_ACTS.random()
+                        act = a
+                        try {
+                            perform(a, gaze, wink, sway, squash)
+                        } finally {
+                            act = Act.NONE
                         }
-                        Mouth.entries.forEach { m ->
-                            if (mouthAlpha[m.ordinal] > 0.01f) drawImage(mouthImages[m.ordinal], Sprite.MouthAt, alpha = mouthAlpha[m.ordinal])
-                        }
-                    }
-                }
-
-                if (mood == Mood.THINKING) {
-                    val c = Sprite.Backdrop + Offset(Sprite.BACKDROP_R * 0.78f, -Sprite.BACKDROP_R * 0.82f)
-                    for (i in 0 until 3) {
-                        val a = Math.toRadians((spin * m + i * 22f - 100f).toDouble())
-                        drawCircle(
-                            color = Sprite.Glow.copy(alpha = 0.45f + 0.18f * i),
-                            radius = 10f + 3.5f * i,
-                            center = Offset(
-                                c.x + (Sprite.BACKDROP_R * 0.22f * cos(a)).toFloat(),
-                                c.y + (Sprite.BACKDROP_R * 0.07f * sin(a)).toFloat(),
-                            ),
-                        )
+                    } else {
+                        // a quick saccade, now and then back to the middle
+                        val target = if (Random.nextInt(3) == 0) Offset.Zero else Offset(Random.nextFloat() * 18f - 9f, Random.nextFloat() * 9f - 5f)
+                        gaze.animateTo(target, tween(90))
                     }
                 }
             }
         }
+    }
+
+    // listening: a small nod now and then. tired: a yawn now and then
+    LaunchedEffect(shown, reduced) {
+        if (reduced) return@LaunchedEffect
+        when (shown) {
+            Mood.LISTENING -> while (true) {
+                delay(Random.nextLong(2_200, 4_500))
+                nod.animateTo(7f, tween(160))
+                nod.animateTo(0f, spring(0.45f, Spring.StiffnessLow))
+            }
+            Mood.TIRED -> while (true) {
+                delay(Random.nextLong(8_000, 15_000))
+                act = Act.YAWN
+                try {
+                    delay(1_900)
+                } finally {
+                    act = Act.NONE
+                }
+            }
+            else -> if (nod.value != 0f) nod.animateTo(0f, tween(200))
+        }
+    }
+
+    // talking: syllables of different sizes, short pauses, the brows lift on the strong ones
+    LaunchedEffect(talking, shown, reduced) {
+        val p = poseFor(shown)
+        talkShape = p.talk.first()
+        if (!talking) {
+            talkAmp.animateTo(0f, tween(150))
+            return@LaunchedEffect
+        }
+        if (reduced) {
+            talkAmp.snapTo(0.5f)
+            return@LaunchedEffect
+        }
+        while (true) {
+            val a = Random.nextFloat()
+            talkShape = p.talk.filter { it != talkShape }.ifEmpty { p.talk }.random()
+            if (a > 0.82f) {
+                launch {
+                    browPop.animateTo(5f, tween(90))
+                    browPop.animateTo(0f, spring(0.5f, Spring.StiffnessLow))
+                }
+            }
+            talkAmp.animateTo(a, tween(70))
+            delay(Random.nextLong(60, 140))
+            if (Random.nextInt(7) == 0) {
+                talkShape = p.mouth
+                talkAmp.animateTo(0.1f, tween(90))
+                delay(Random.nextLong(120, 260))
+            }
+        }
+    }
+
+    val spec: AnimationSpec<Float> = if (reduced) snap() else spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMediumLow)
+    val brow = animateFloatAsState(pose.brow, spec, label = "brow")
+    val browTilt = animateFloatAsState(pose.browTilt, spec, label = "browTilt")
+    val browAsym = animateFloatAsState(pose.browAsym, spec, label = "browAsym")
+    val eyeScale = animateFloatAsState(pose.eyeScale, spec, label = "eyeScale")
+    val lid = animateFloatAsState(pose.lid, spec, label = "lid")
+    val gazeX = animateFloatAsState(pose.gaze.x, spec, label = "gazeX")
+    val gazeY = animateFloatAsState(pose.gaze.y, spec, label = "gazeY")
+    val tilt = animateFloatAsState(pose.tilt, spec, label = "tilt")
+    val sink = animateFloatAsState(pose.sink, spec, label = "sink")
+    val lean = animateFloatAsState(pose.lean, spec, label = "lean")
+    val mouthScale = animateFloatAsState(pose.mouthScale, spec, label = "mouthScale")
+    val energy = animateFloatAsState(pose.energy, if (reduced) snap() else tween(800), label = "energy")
+    val walk = animateFloatAsState(if (shown == Mood.WALKING) 1f else 0f, if (reduced) snap() else tween(500), label = "walk")
+
+    // every shape fades in and out on its own, so changing shape is a short crossfade
+    val eyes = pose.eyes
+    val mouth = if (talking) talkShape else pose.mouth
+    val fade: AnimationSpec<Float> = if (reduced) snap() else tween(160)
+    val eyeW = Eye.entries.map { animateFloatAsState(if (it == eyes) 1f else 0f, fade, label = "eye$it") }
+    val mouthW = Mouth.entries.map {
+        animateFloatAsState(if (it == mouth) 1f else 0f, if (talking && !reduced) tween(70) else fade, label = "mouth$it")
+    }
+    val fxW = Fx.entries.map {
+        animateFloatAsState(if (it in pose.fx) 1f else 0f, if (reduced) snap() else tween(400), label = "fx$it")
+    }
+    val fx = { f: Fx -> if (reduced && f == Fx.CONFETTI) 0f else fxW[f.ordinal].value }
+
+    Canvas(modifier) {
+        val now = clock.longValue
+        val t = now / 1000f
+        val since = (now - moodSince.longValue) / 1000f
+        val k = min(size.width / Rig.WIDTH, size.height / Rig.HEIGHT)
+        val ox = (size.width - Rig.WIDTH * k) / 2f
+        val oy = (size.height - Rig.HEIGHT * k) / 2f
+        val view = Rect(-ox / k, -oy / k, (size.width - ox) / k, (size.height - oy) / k)
+
+        // breathing: slower and deeper when tired or sleepy
+        val e = energy.value
+        val breath = sin(t * 2f * PI.toFloat() / (3.4f / (0.5f + 0.5f * e)))
+        val breathAmp = 0.006f + (1f - e) * 0.01f
+        // the walk: a step bounce and a sway. excited: a wiggle. love: a slow sway
+        val w = walk.value
+        val stepBob = -abs(sin(t * PI.toFloat() / 0.65f)) * 9f * w
+        val wiggle = sin(t * 12f) * 2.5f * fx(Fx.CONFETTI) + sin(t * 3f) * 2.5f * fx(Fx.HEARTS) + sin(t * PI.toFloat() / 1.3f) * 1.5f * w
+
+        val dy = sink.value + hop.value + nod.value + talkAmp.value * 3f + stepBob + breath * 2f
+        val sy = squash.value * (1f + breath * breathAmp)
+        val sx = 1f + (1f - squash.value) * 0.7f
+        val l = lean.value
+
+        translate(ox, oy) {
+            scale(k, k, Offset.Zero) {
+                drawBackFx(fx, t)
+                translate(sin(t * PI.toFloat() / 1.3f) * 8f * w, dy) {
+                    rotate(tilt.value + sway.value + wiggle, Rig.Pivot) {
+                        scale(sx * l, sy * l, Rig.Pivot) {
+                            drawImage(body)
+
+                            // eyes: shapes crossfade, the whole eye moves with the gaze and squashes to blink
+                            var g = gaze.value + Offset(gazeX.value, gazeY.value)
+                            if (g.getDistance() > Rig.GAZE_MAX) g *= Rig.GAZE_MAX / g.getDistance()
+                            val open = lid.value * blink.value
+                            for (side in 0..1) {
+                                val lens = if (side == 0) Rig.EyeL else Rig.EyeR
+                                val c = lens + g
+                                val lidS = (open * if (side == 0) wink.value else 1f).coerceAtLeast(0.04f)
+                                val sprites = if (side == 0) eyesL else eyesR
+                                withTransform({
+                                    // the eye stays inside its lens, however far she looks
+                                    clipPath(Path().apply { addOval(Rect(lens, Rig.LENS_R)) })
+                                    translate(c.x, c.y)
+                                    scale(eyeScale.value, eyeScale.value * lidS, Offset.Zero)
+                                }) {
+                                    Eye.entries.forEach { eye ->
+                                        val a = eyeW[eye.ordinal].value
+                                        if (a < 0.01f) return@forEach
+                                        val img = sprites[eye.ordinal]
+                                        if (img == null) drawnEye(eye, a, t) else drawImage(img, -Rig.EyeHalf, alpha = a, blendMode = BlendMode.Plus)
+                                    }
+                                }
+                            }
+
+                            // brows: up, tilted, one up one down; they dip a little with a blink
+                            for (side in 0..1) {
+                                val s = if (side == 0) 1f else -1f
+                                val c = if (side == 0) Rig.BrowL else Rig.BrowR
+                                val up = brow.value + browPop.value + s * browAsym.value
+                                withTransform({
+                                    translate(c.x + g.x * 0.25f, c.y - up + g.y * 0.35f + (1f - blink.value) * 3f)
+                                    rotate(-s * browTilt.value, Offset.Zero)
+                                }) {
+                                    drawImage(if (side == 0) browL else browR, -Rig.BrowHalf, blendMode = BlendMode.Plus)
+                                }
+                            }
+
+                            // mouth: opens with the syllables while talking
+                            val m = Rig.Mouth + Offset(g.x * 0.3f, 0f)
+                            val talkOpen = if (talking) 0.72f + 0.5f * talkAmp.value else 1f
+                            withTransform({
+                                translate(m.x, m.y)
+                                scale(mouthScale.value, mouthScale.value * talkOpen, Offset.Zero)
+                            }) {
+                                Mouth.entries.forEach { mo ->
+                                    val a = mouthW[mo.ordinal].value
+                                    if (a < 0.01f) return@forEach
+                                    val img = mouths[mo.ordinal]
+                                    when {
+                                        mo == Mouth.FROWN -> scale(1f, -1f, Offset(0f, 3f)) {
+                                            drawImage(smile, -Rig.MouthHalf, alpha = a, blendMode = BlendMode.Plus)
+                                        }
+                                        img == null -> drawnMouth(mo, a, t)
+                                        else -> drawImage(img, -Rig.MouthHalf, alpha = a, blendMode = BlendMode.Plus)
+                                    }
+                                }
+                            }
+
+                            drawHeadFx(fx, t)
+                        }
+                    }
+                }
+                drawConfetti(fx(Fx.CONFETTI), since, t, view)
+            }
+        }
+    }
+}
+
+private suspend fun blinkOnce(blink: Anim, slow: Boolean) {
+    blink.animateTo(0.06f, tween(if (slow) 260 else 70))
+    blink.animateTo(1f, tween(if (slow) 380 else 120))
+}
+
+// crouch, jump, land with a squash
+private suspend fun hopOnce(hop: Anim, squash: Anim, high: Float = 26f) {
+    squash.animateTo(0.94f, tween(90))
+    coroutineScope {
+        launch { squash.animateTo(1.04f, tween(160)) }
+        hop.animateTo(-high, tween(170, easing = FastOutSlowInEasing))
+    }
+    coroutineScope {
+        launch { squash.animateTo(1f, tween(150)) }
+        hop.animateTo(0f, tween(190, easing = FastOutLinearInEasing))
+    }
+    squash.animateTo(0.93f, tween(70))
+    squash.animateTo(1f, spring(0.4f, Spring.StiffnessMedium))
+}
+
+private suspend fun perform(a: Act, gaze: Animatable<Offset, AnimationVector2D>, wink: Anim, sway: Anim, squash: Anim) {
+    when (a) {
+        Act.LOOK_AROUND -> {
+            gaze.animateTo(Offset(-16f, -3f), tween(260))
+            delay(800)
+            gaze.animateTo(Offset(16f, -3f), tween(360))
+            delay(800)
+            gaze.animateTo(Offset.Zero, tween(260))
+        }
+        Act.WINK -> {
+            delay(150)
+            wink.animateTo(0.05f, tween(90))
+            delay(320)
+            wink.animateTo(1f, tween(160))
+            delay(300)
+        }
+        Act.HUM -> {
+            repeat(4) {
+                sway.animateTo(3f, tween(400, easing = FastOutSlowInEasing))
+                sway.animateTo(-3f, tween(400, easing = FastOutSlowInEasing))
+            }
+            sway.animateTo(0f, tween(300))
+        }
+        Act.STRETCH -> {
+            squash.animateTo(1.07f, tween(450))
+            delay(350)
+            squash.animateTo(0.95f, tween(220))
+            squash.animateTo(1f, spring(0.4f, Spring.StiffnessMedium))
+            delay(300)
+        }
+        Act.TILT -> {
+            sway.animateTo(7f, spring(0.6f, Spring.StiffnessLow))
+            delay(1_500)
+            sway.animateTo(0f, spring(0.6f, Spring.StiffnessLow))
+        }
+        Act.YAWN, Act.NONE -> Unit
     }
 }

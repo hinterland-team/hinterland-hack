@@ -96,17 +96,35 @@ class UiStateTest {
     @Test
     fun moods() {
         assertEquals(Mood.IDLE, UiState().mood())
-        assertEquals(Mood.SPEAKING, UiState(speaking = true, walking = true).mood())
+        // talking keeps the mood, only the mouth moves
+        assertEquals(Mood.WALKING, UiState(speaking = true, walking = true).mood())
+        assertEquals(Mood.IDLE, UiState(speaking = true).mood())
         assertEquals(Mood.WALKING, UiState(walking = true).mood())
         assertEquals(Mood.HAPPY, UiState(flash = Mood.HAPPY, speaking = true).mood())
         assertEquals(Mood.THINKING, UiState(working = 1).mood())
         assertEquals(Mood.LISTENING, UiState(agent = AgentMode.LISTENING).mood())
         // the face follows the walk
-        assertEquals(Mood.SORRY, UiState(guide = guide.copy(phase = GuidePhase.LOOKING), walking = true).mood())
+        assertEquals(Mood.CONCERNED, UiState(guide = guide.copy(phase = GuidePhase.LOOKING), walking = true).mood())
+        assertEquals(Mood.SORRY, UiState(guide = guide.copy(phase = GuidePhase.NOBODY_CAME)).mood())
         assertEquals(Mood.LISTENING, UiState(guide = guide.copy(phase = GuidePhase.CHECKING)).mood())
         assertEquals(Mood.HAPPY, UiState(guide = guide.copy(phase = GuidePhase.ARRIVED)).mood())
         assertEquals(Mood.WALKING, UiState(guide = guide, walking = true).mood())
-        assertEquals(Mood.LISTENING, UiState(help = HelpUi(urgent = true, sent = null)).mood())
+        assertEquals(Mood.CONCERNED, UiState(help = HelpUi(urgent = true, sent = null)).mood())
+    }
+
+    @Test
+    fun theRobotsOwnStateShowsWhenNothingElseIsGoingOn() {
+        assertEquals(Mood.GREETING, UiState(brain = BrainStatus(state = RobotState.GREETING), speaking = true).mood())
+        assertEquals(Mood.CONFUSED, UiState(brain = BrainStatus(state = RobotState.ERROR)).mood())
+        assertEquals(Mood.SLEEPY, UiState(brain = BrainStatus(state = RobotState.CHARGING, charging = true)).mood())
+        // someone talks to her while charging: she wakes up
+        assertEquals(Mood.IDLE, UiState(brain = BrainStatus(state = RobotState.CHARGING, charging = true), speaking = true).mood())
+        assertEquals(Mood.LISTENING, UiState(brain = BrainStatus(state = RobotState.CHARGING, charging = true), agent = AgentMode.LISTENING).mood())
+        assertEquals(Mood.TIRED, UiState(brain = BrainStatus(battery = LOW_BATTERY)).mood())
+        assertEquals(Mood.IDLE, UiState(brain = BrainStatus(battery = LOW_BATTERY, charging = true)).mood())
+        assertEquals(Mood.IDLE, UiState(brain = BrainStatus(battery = LOW_BATTERY + 1)).mood())
+        // a walk wins over a low battery
+        assertEquals(Mood.WALKING, UiState(brain = BrainStatus(battery = 5), walking = true).mood())
     }
 
     @Test

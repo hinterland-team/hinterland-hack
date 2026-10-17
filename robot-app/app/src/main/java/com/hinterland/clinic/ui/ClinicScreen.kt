@@ -210,7 +210,7 @@ private fun Stage(state: UiState, actions: ScreenActions, reduced: Boolean) {
                 .size(face.right - face.left, face.bottom - face.top)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { info = !info },
         ) {
-            Mascot(state.mood(), Modifier.fillMaxSize())
+            Mascot(state.mood(), Modifier.fillMaxSize(), talking = state.speaking)
         }
     }
 }
