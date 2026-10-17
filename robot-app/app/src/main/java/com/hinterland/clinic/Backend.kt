@@ -104,7 +104,7 @@ object Backend {
             val r = ServerList.judge(code, text) ?: HealthResult(false, ms)
             if (!r.up || token.isBlank()) return r.copy(ms = ms)
             // it answers, but does it take our robot key? 17.10: a server with another key looked
-            // "up" and every real call got 401, so nova never tried the next one
+            // "up" and every real call got 401, so otto never tried the next one
             return when (val key = runCatching { keyCheck(url) }.getOrNull()) {
                 401, 403 -> HealthResult(false, ms, "robot key not accepted ($key)")
                 else -> r.copy(ms = ms)
