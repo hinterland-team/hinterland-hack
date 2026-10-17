@@ -11,7 +11,7 @@ class ScheduleTest {
 
     private val t0 = 10_000_000_000L
 
-    // a walk: ticks every 250 ms like the navigation watcher. at each due check-back nova stops for
+    // a walk: ticks every 250 ms like the navigation watcher. at each due check-back otto stops for
     // checkBackMs (turn, look, talk, turn back); that time is not navigation time.
     private data class Walked(val reasons: List<CheckReason>, val atMs: List<Long>)
 
@@ -47,7 +47,7 @@ class ScheduleTest {
 
     @Test
     fun theFieldTestWalkOf34SecondsGetsAtLeastTwoCheckBacks() {
-        // 17.10: Reception -> Dr. Blue took 34 s and nova never turned around
+        // 17.10: Reception -> Dr. Blue took 34 s and otto never turned around
         val w = walk(34_000)
         assertTrue("check-backs at ${w.atMs}", w.reasons.size >= 2)
         assertEquals(CheckReason.FIRST, w.reasons.first())
@@ -202,10 +202,10 @@ class ScheduleTest {
     }
 
     @Test
-    fun aSpokenAnswerGetsNovasReplyFirst() {
+    fun aSpokenAnswerGetsOttosReplyFirst() {
         val w = TalkWindow(t0)
         assertEquals(TalkStep.LISTEN, w.next(t0 + 1_000, 0, false, false))
-        // "yes, all fine" at 2 s; the planner thinks, nova answers until 6 s
+        // "yes, all fine" at 2 s; the planner thinks, otto answers until 6 s
         assertEquals(TalkStep.REPLY, w.next(t0 + 2_200, t0 + 2_000, false, false))
         assertEquals(TalkStep.REPLY, w.next(t0 + 4_000, t0 + 2_000, true, false))
         assertEquals(TalkStep.REPLY, w.next(t0 + 6_000, t0 + 2_000, true, false))

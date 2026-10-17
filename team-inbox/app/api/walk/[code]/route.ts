@@ -11,7 +11,7 @@ export const GET = routeWith<{ code: string }>(async (req, { code }) => {
   return json(await walkView(journey));
 });
 
-// { action: wait | resume | slower | faster } -> walk_control command for nova
+// { action: wait | resume | slower | faster } -> walk_control command for otto
 export const POST = routeWith<{ code: string }>(async (req, { code }) => {
   const { journey, key } = await walkGuard(req, code, "act");
   await limit(`${key}|act|${journey.id}`, 20, 60, "Too many taps. Please wait a moment.");

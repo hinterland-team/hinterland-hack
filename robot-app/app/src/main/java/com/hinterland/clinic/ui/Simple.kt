@@ -185,7 +185,7 @@ private val Road = Color(0xFFCADCF2)
 private val ROUTE_HEIGHT = 210.dp
 
 // a wide road from A (where we are) to B (the pin), arrows flowing towards B all the time,
-// nova's little face on the way. progress null = nova can't tell how far: only the arrows move.
+// otto's little face on the way. progress null = otto can't tell how far: only the arrows move.
 @Composable
 fun RouteMap(
     from: String,
@@ -200,7 +200,7 @@ fun RouteMap(
     val pulse by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1_800, easing = LinearEasing)), label = "pulse")
     val bob by loop.animateFloat(0f, 2f * PI.toFloat(), infiniteRepeatable(tween(900, easing = LinearEasing)), label = "bob")
     val p by animateFloatAsState(if (arrived) 1f else progress ?: 0f, calm(900, reduced), label = "progress")
-    val showNova = arrived || progress != null
+    val showOtto = arrived || progress != null
     val pin = if (arrived) Nova.Teal else accent
 
     Column(modifier.fillMaxWidth()) {
@@ -251,10 +251,10 @@ fun RouteMap(
             }
             mapPin(b, pinR, pin, arrived)
 
-            if (showNova) {
+            if (showOtto) {
                 val pos = m.getPosition((len * p).coerceIn(0f, len))
                 val hop = if (reduced || arrived) 0f else sin(bob) * 3.dp.toPx()
-                novaDot(pos + Offset(0f, -road * 0.15f + hop), 24.dp.toPx())
+                ottoDot(pos + Offset(0f, -road * 0.15f + hop), 24.dp.toPx())
             }
         }
         Text(from, style = text(Big.label, FontWeight.Medium, Nova.InkSoft), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -293,8 +293,8 @@ private fun DrawScope.mapPin(tip: Offset, r: Float, color: Color, arrived: Boole
     }
 }
 
-// nova's little face, like the logo: a blue circle with two eyes and a smile
-private fun DrawScope.novaDot(c: Offset, r: Float) {
+// otto's little face, like the logo: a blue circle with two eyes and a smile
+private fun DrawScope.ottoDot(c: Offset, r: Float) {
     drawCircle(Color.White, r * 1.18f, c)
     drawCircle(Nova.Blue, r, c)
     for (side in listOf(-1f, 1f)) {

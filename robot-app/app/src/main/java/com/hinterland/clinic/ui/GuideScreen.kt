@@ -91,7 +91,7 @@ fun GuideContent(state: UiState, actions: ScreenActions) {
     }
 }
 
-// ---- pickup: nova on her way to you, then your ticket, huge ----
+// ---- pickup: otto on his way to you, then your ticket, huge ----
 
 @Composable
 private fun Pickup(g: GuideUi, actions: ScreenActions) {
@@ -101,7 +101,7 @@ private fun Pickup(g: GuideUi, actions: ScreenActions) {
             Spacer(Modifier.height(Space.xs))
             Say(if (g.from.isBlank()) "Please wait where you are." else "Please wait at ${g.from}.")
             Spacer(Modifier.weight(1f))
-            RouteMap(from = "Nova", progress = g.progress)
+            RouteMap(from = "Otto", progress = g.progress)
             Spacer(Modifier.weight(1f))
             if (g.ticket.isNotBlank()) TicketLine(g.ticket)
         }
@@ -237,7 +237,7 @@ private fun WalkNow(g: GuideUi, actions: ScreenActions) {
     }
 }
 
-// face to face at a check-back: the question, nova listening, three big answers
+// face to face at a check-back: the question, otto listening, three big answers
 @Composable
 private fun Talk(talk: TalkUi, actions: ScreenActions) {
     Column(Modifier.fillMaxSize()) {
@@ -257,7 +257,7 @@ private fun Talk(talk: TalkUi, actions: ScreenActions) {
     }
 }
 
-// a mic in a soft circle; while nova listens a ring runs down over the listening time
+// a mic in a soft circle; while otto listens a ring runs down over the listening time
 @Composable
 private fun Listening(talk: TalkUi) {
     val reduced = LocalReducedMotion.current

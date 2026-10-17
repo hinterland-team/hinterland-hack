@@ -5,7 +5,7 @@ import { badLinkPage, linkKeyOk, linkPage } from "@/lib/teams-link";
 
 export const dynamic = "force-dynamic";
 
-// staff: the journey is done, nova is not needed any more
+// staff: the journey is done, otto is not needed any more
 export const POST = routeWith<{ id: string }>(async (req, { id }) => {
   await requireStaff(req);
   return json(await finishJourney(id));
@@ -21,7 +21,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       status: 200,
       pill: "Done",
       heading: already ? `Ticket ${journey.ticket} was already done` : `Ticket ${journey.ticket} is done`,
-      lines: ["Thank you. Nova is free for the next patient."],
+      lines: ["Thank you. Otto is free for the next patient."],
       note: "You can close this page.",
     });
   });

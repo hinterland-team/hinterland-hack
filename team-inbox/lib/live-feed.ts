@@ -1,4 +1,4 @@
-// the live conversation feed. nova's lines and understood intents go to the store (db when set),
+// the live conversation feed. otto's lines and understood intents go to the store (db when set),
 // so every server instance shows them, for at most 12 h. what a patient said word for word
 // (only with the demo switch on) stays in this instance's memory (lib/feed.ts)
 import { hoursAgo } from "./common";

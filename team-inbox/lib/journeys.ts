@@ -245,7 +245,7 @@ export async function createJourney(
   await retention();
   const extra = Object.keys(body).filter((k) => !JOURNEY_FIELDS.includes(k));
   if (extra.length) {
-    throw new ApiError(400, `unknown field ${extra[0]}: Nova keeps no patient data, send only ${JOURNEY_FIELDS.join(", ")}`);
+    throw new ApiError(400, `unknown field ${extra[0]}: Otto keeps no patient data, send only ${JOURNEY_FIELDS.join(", ")}`);
   }
   const places = await activePlaces();
   const to = mustPlace(places, body.to, "to");
@@ -261,12 +261,12 @@ export async function createJourney(
   if (body.wheelchair !== undefined && typeof body.wheelchair !== "boolean")
     throw new ApiError(400, "wheelchair must be true or false");
 
-  // nova never decides medically: on its own it only goes to public places and self check-in rooms
+  // otto never decides medically: on its own it only goes to public places and self check-in rooms
   if (who === "robot" && (forPlace ? !forPlace.selfCheckIn : !to.public)) {
-    throw new ApiError(403, "Nova can only take patients to public places or rooms open for self check-in");
+    throw new ApiError(403, "Otto can only take patients to public places or rooms open for self check-in");
   }
   const reception = places.find((p) => p.kind === "reception");
-  if (!reception) throw new ApiError(409, "add the reception first (a place of kind reception), Nova picks patients up there");
+  if (!reception) throw new ApiError(409, "add the reception first (a place of kind reception), Otto picks patients up there");
 
   const store = getStore();
   const at = now();
@@ -398,13 +398,13 @@ function legDetail(status: LegStatus, leg: Leg) {
   const to = placeLabel({ name: leg.toName, room: leg.toRoom });
   switch (status) {
     case "pickup":
-      return `Nova is fetching the patient at ${leg.fromName ?? "the pickup point"}`;
+      return `Otto is fetching the patient at ${leg.fromName ?? "the pickup point"}`;
     case "walking":
       return `Walking to ${to}`;
     case "arrived":
       return `Arrived at ${to}`;
     case "failed":
-      return "Nova could not finish this walk";
+      return "Otto could not finish this walk";
     default:
       return undefined;
   }
@@ -442,7 +442,7 @@ export async function nextLeg(id: string, toId: unknown, base: string, via: "boa
   return { journey: await getJourney(id), command: withWalkUrl(command, base) };
 }
 
-// staff: nova gave up on a leg (nobody came, lost the patient). try the same walk again
+// staff: otto gave up on a leg (nobody came, lost the patient). try the same walk again
 export async function retryLeg(id: string, base: string) {
   await retention();
   const at = now();
@@ -459,7 +459,7 @@ export async function retryLeg(id: string, base: string) {
       updatedAt: at,
       status: "waiting_pickup",
       newLeg: leg,
-      events: [event("next_leg", `Sent Nova again to ${placeLabel({ name: cur.toName, room: cur.toRoom })}`, at)],
+      events: [event("next_leg", `Sent Otto again to ${placeLabel({ name: cur.toName, room: cur.toRoom })}`, at)],
     };
   });
   if (!leg) throw new ApiError(500, "no leg");

@@ -12,7 +12,7 @@ import kotlinx.coroutines.withContext
 import java.net.URL
 
 // several team-inbox servers (docs/journeys.md 6.1): teamInbox.urls in local.properties, first = preferred.
-// nova checks GET /api/health on start and every 60 s and uses the first that answers. both servers
+// otto checks GET /api/health on start and every 60 s and uses the first that answers. both servers
 // have the same api and the same robot token.
 
 // one server as the staff menu shows it. up = null: not checked yet

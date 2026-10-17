@@ -23,8 +23,8 @@ export function RobotScreen({ status }: { status: RobotStatus }) {
       role="img"
       aria-label={
         screen
-          ? `Nova's screen: ${screen.title}${screen.ticket ? `, ticket ${screen.ticket}` : ""}`
-          : "Nova's screen is not available"
+          ? `Otto's screen: ${screen.title}${screen.ticket ? `, ticket ${screen.ticket}` : ""}`
+          : "Otto's screen is not available"
       }
     >
       {!screen ? (
@@ -33,14 +33,14 @@ export function RobotScreen({ status }: { status: RobotStatus }) {
             <Mascot size={44} />
           </span>
           <p className="text-sm font-semibold text-screen-muted">
-            {status.online ? "Nova has not sent its screen yet" : status.lastSeenAt ? "Nova is offline" : "Nova is not connected"}
+            {status.online ? "Otto has not sent its screen yet" : status.lastSeenAt ? "Otto is offline" : "Otto is not connected"}
           </p>
         </div>
       ) : screen.view === "idle" && !screen.ticket ? (
         <div key={`${screen.view}-${screen.title}`} className="rise flex h-full items-center gap-4 p-4 sm:p-5">
           <Mascot size={56} />
           <div className="min-w-0">
-            <p className="text-lg leading-snug font-semibold break-words">{screen.title || "Hello, I'm Nova"}</p>
+            <p className="text-lg leading-snug font-semibold break-words">{screen.title || "Hello, I'm Otto"}</p>
             {screen.step && <p className="mt-1 text-sm text-screen-muted">{screen.step}</p>}
           </div>
         </div>

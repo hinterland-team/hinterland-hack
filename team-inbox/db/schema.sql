@@ -161,7 +161,7 @@ create table if not exists robot_logs (
 create index if not exists robot_logs_robot_idx on robot_logs (robot, id desc);
 create index if not exists robot_logs_received_idx on robot_logs (received_at);
 
--- v3.2: latest map frame per robot, trail = last 120 poses of nova (never the patient's)
+-- v3.2: latest map frame per robot, trail = last 120 poses of otto (never the patient's)
 create table if not exists robot_maps (
   robot text primary key,
   map_name text,
@@ -175,7 +175,7 @@ create table if not exists robot_maps (
   updated_at timestamptz not null
 );
 
--- v3.2: live feed for several server instances. nova's lines and understood intents only,
+-- v3.2: live feed for several server instances. otto's lines and understood intents only,
 -- at most 12 h and cleared with the journey. what patients say word for word stays in memory
 create table if not exists feed_items (
   id text primary key,

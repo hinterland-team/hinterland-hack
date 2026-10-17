@@ -1,6 +1,6 @@
 package com.hinterland.clinic
 
-// lines for the dashboard's live feed (docs/journeys.md 5). nova's lines go as said; the patient only as
+// lines for the dashboard's live feed (docs/journeys.md 5). otto's lines go as said; the patient only as
 // the understood intent, unless the dashboard said showPatientText=true. plain kotlin, unit tested.
 class FeedBuffer(private val capacity: Int = CAPACITY) {
 
@@ -10,10 +10,10 @@ class FeedBuffer(private val capacity: Int = CAPACITY) {
     @Volatile var showPatientText = false
 
     @Synchronized
-    fun novaSaid(at: Long, text: String) = add(FeedItem(at, FeedItem.NOVA, FeedItem.SAID, text))
+    fun ottoSaid(at: Long, text: String) = add(FeedItem(at, FeedItem.OTTO, FeedItem.SAID, text))
 
     @Synchronized
-    fun novaDid(at: Long, text: String) = add(FeedItem(at, FeedItem.NOVA, FeedItem.ACTION, text))
+    fun ottoDid(at: Long, text: String) = add(FeedItem(at, FeedItem.OTTO, FeedItem.ACTION, text))
 
     @Synchronized
     fun patientIntent(at: Long, text: String) = add(FeedItem(at, FeedItem.PATIENT, FeedItem.INTENT, text))

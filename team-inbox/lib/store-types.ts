@@ -130,7 +130,7 @@ export interface Store {
   saveMap(frame: MapFrame, trailMax: number): Promise<MapState>;
   getMap(robot: string): Promise<MapState | null>;
 
-  // nova's lines and understood intents (never what a patient said word for word). newest maxPerRobot kept
+  // otto's lines and understood intents (never what a patient said word for word). newest maxPerRobot kept
   addFeedItems(robot: string, items: FeedItem[], maxPerRobot: number, since: string): Promise<void>;
   // newest first, only items at or after since
   listFeedItems(robot: string, limit: number, since: string): Promise<FeedItem[]>;

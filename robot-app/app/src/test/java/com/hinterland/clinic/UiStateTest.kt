@@ -17,7 +17,7 @@ class UiStateTest {
     fun idleMirror() {
         val m = UiState(brain = BrainStatus(goal = "Waiting for patients")).mirror()
         assertEquals("idle", m.view)
-        assertEquals("Hello, I'm Nova", m.title)
+        assertEquals("Hello, I'm Otto", m.title)
         assertEquals("Waiting for patients", m.step)
         assertNull(m.ticket)
         assertNull(m.progress)
@@ -117,7 +117,7 @@ class UiStateTest {
         assertEquals(Mood.GREETING, UiState(brain = BrainStatus(state = RobotState.GREETING), speaking = true).mood())
         assertEquals(Mood.CONFUSED, UiState(brain = BrainStatus(state = RobotState.ERROR)).mood())
         assertEquals(Mood.SLEEPY, UiState(brain = BrainStatus(state = RobotState.CHARGING, charging = true)).mood())
-        // someone talks to her while charging: she wakes up
+        // someone talks to him while charging: he wakes up
         assertEquals(Mood.IDLE, UiState(brain = BrainStatus(state = RobotState.CHARGING, charging = true), speaking = true).mood())
         assertEquals(Mood.LISTENING, UiState(brain = BrainStatus(state = RobotState.CHARGING, charging = true), agent = AgentMode.LISTENING).mood())
         assertEquals(Mood.TIRED, UiState(brain = BrainStatus(battery = LOW_BATTERY)).mood())

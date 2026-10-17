@@ -48,7 +48,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-// the staff menu (long-press the Nova logo 3 s): servers, chassis, battery, radar, version and the
+// the staff menu (long-press the Nova Clinic logo 3 s): servers, chassis, battery, radar, version and the
 // live log. laid out on the same 1280 x 720 design grid as the patient screens.
 @Composable
 fun StaffMenu(staff: StaffUi, actions: ScreenActions, modifier: Modifier = Modifier) {

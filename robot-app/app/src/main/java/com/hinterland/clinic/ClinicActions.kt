@@ -26,7 +26,7 @@ object ClinicActions {
     private fun confirmTicket() = Action(
         name = "$NS.CONFIRM_TICKET",
         displayName = "That's me",
-        desc = "Confirms that the person in front of Nova is the patient Nova is calling. Use it when Nova calls a ticket " +
+        desc = "Confirms that the person in front of Otto is the patient Otto is calling. Use it when Otto calls a ticket " +
             "number and the person says it is them or says their ticket number (one letter and two digits, like A17).",
         parameters = listOf(
             Parameter(
@@ -41,8 +41,8 @@ object ClinicActions {
     private fun setPace() = Action(
         name = "$NS.SET_PACE",
         displayName = "Walking pace",
-        desc = "Changes how fast Nova walks with the patient. Use it when the patient answers Nova's question about the pace, " +
-            "asks Nova to walk slower or faster, or says they are ready to go on after Nova waited for them.",
+        desc = "Changes how fast Otto walks with the patient. Use it when the patient answers Otto's question about the pace, " +
+            "asks Otto to walk slower or faster, or says they are ready to go on after Otto waited for them.",
         parameters = listOf(
             Parameter(
                 "pace", ParameterType.ENUM,
@@ -60,8 +60,8 @@ object ClinicActions {
     private fun pauseWalk() = Action(
         name = "$NS.PAUSE_WALK",
         displayName = "Wait",
-        desc = "Nova stops walking and waits right where it is. Use it when the patient says wait, stop, one moment " +
-            "or that they need a short break while Nova walks with them.",
+        desc = "Otto stops walking and waits right where it is. Use it when the patient says wait, stop, one moment " +
+            "or that they need a short break while Otto walks with them.",
         parameters = emptyList(),
         executor = executor { action, _ -> Clinic.pauseWalk(action.userQuery) },
     )
@@ -78,9 +78,9 @@ object ClinicActions {
     private fun guideToPlace() = Action(
         name = "$NS.GUIDE_TO_PLACE",
         displayName = "Show the way",
-        desc = "Nova walks a visitor to a public place of the practice, for example the exit or the reception, when they ask " +
+        desc = "Otto walks a visitor to a public place of the practice, for example the exit or the reception, when they ask " +
             "to be taken or shown the way there. Only the public places from the screen info. Treatment rooms are " +
-            "assigned by the reception desk, Nova does not take people there on request.",
+            "assigned by the reception desk, Otto does not take people there on request.",
         parameters = listOf(
             Parameter("place", ParameterType.STRING, "Name of the place the visitor wants to go to, as they said it", true),
         ),
@@ -90,8 +90,8 @@ object ClinicActions {
     private fun checkInFor() = Action(
         name = "$NS.CHECK_IN_FOR",
         displayName = "Check in",
-        desc = "Self check-in: a visitor who has an appointment tells Nova which room or which practice member they are " +
-            "here to see. Nova gives them a ticket, lets the team know and walks them to the waiting area. Use it only " +
+        desc = "Self check-in: a visitor who has an appointment tells Otto which room or which practice member they are " +
+            "here to see. Otto gives them a ticket, lets the team know and walks them to the waiting area. Use it only " +
             "for the rooms listed for self check-in in the screen info. If they are not sure, use the reception.",
         parameters = listOf(
             Parameter(
@@ -106,7 +106,7 @@ object ClinicActions {
     private fun waitingStatus() = Action(
         name = "$NS.WAITING_STATUS",
         displayName = "Waiting status",
-        desc = "Looks up a ticket and tells the person where it stands: whether Nova picks them up soon, walks them, " +
+        desc = "Looks up a ticket and tells the person where it stands: whether Otto picks them up soon, walks them, " +
             "their place in line and about how long the wait still is. Use it when someone asks how long they have to " +
             "wait or what happens next. Ask for the ticket number first if you do not know it.",
         parameters = listOf(
@@ -122,7 +122,7 @@ object ClinicActions {
     private fun callStaff() = Action(
         name = "$NS.CALL_STAFF",
         displayName = "Call the team",
-        desc = "Sends a message to the practice team that a person needs a human, for example a question Nova cannot " +
+        desc = "Sends a message to the practice team that a person needs a human, for example a question Otto cannot " +
             "answer, a problem, someone who feels unwell, or an emergency.",
         parameters = listOf(
             Parameter(
@@ -145,14 +145,14 @@ object ClinicActions {
     )
 
     // onExecute has to return at once: the work runs in a coroutine and notify() runs on every path.
-    // the brain counts running actions as "someone is talking to nova" and starts nothing meanwhile.
+    // the brain counts running actions as "someone is talking to otto" and starts nothing meanwhile.
     private fun executor(block: suspend (Action, Bundle?) -> Boolean) = object : ActionExecutor {
         override fun onExecute(action: Action, params: Bundle?): Boolean {
-            NovaBrain.actionStarted()
+            OttoBrain.actionStarted()
             val notified = AtomicBoolean(false)
             fun finish(ok: Boolean) {
                 if (notified.compareAndSet(false, true)) {
-                    NovaBrain.actionEnded()
+                    OttoBrain.actionEnded()
                     action.notify(ActionResult(if (ok) ActionStatus.SUCCEEDED else ActionStatus.FAILED))
                 }
             }

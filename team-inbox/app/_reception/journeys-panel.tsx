@@ -97,7 +97,7 @@ export function JourneysPanel({
         <div className="px-4 pt-6 pb-8 sm:px-6">
           <Footprints size={32} aria-hidden className="text-muted" />
           <p className="mt-3 max-w-prose text-[15px] text-muted">
-            Nobody is on the way right now. When you send Nova, the walk shows up here live, grouped by room, with buttons for
+            Nobody is on the way right now. When you send Otto, the walk shows up here live, grouped by room, with buttons for
             &quot;With me&quot;, the next room and the exit.
           </p>
         </div>

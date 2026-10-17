@@ -48,7 +48,7 @@ export function SimulateClient() {
   const [battery, setBattery] = useState(80);
   const [charging, setCharging] = useState(false);
   const [position, setPosition] = useState("");
-  const [screen, setScreen] = useState<Screen>({ view: "idle", title: "Hello, I'm Nova", step: "I can walk you to your room" });
+  const [screen, setScreen] = useState<Screen>({ view: "idle", title: "Hello, I'm Otto", step: "I can walk you to your room" });
   const [log, setLog] = useState<RobotCall[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -136,21 +136,21 @@ export function SimulateClient() {
       state: "idle",
       goal: null,
       position: reception,
-      screen: { view: "idle", title: "Hello, I'm Nova", step: "I can walk you to your room" },
+      screen: { view: "idle", title: "Hello, I'm Otto", step: "I can walk you to your room" },
     });
   };
 
   return (
     <main className={`${PAGE} pb-16`}>
       <div className="pt-6 pb-4">
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Simulate Nova</h1>
+        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Simulate Otto</h1>
         <p className="mt-1 max-w-prose text-[15px] text-muted">
           Plays the robot, so the whole loop can be shown without the hardware. It sends the same requests as the Nova Clinic app.
         </p>
       </div>
       <p className="mb-4 flex items-start gap-2 rounded-xl bg-warn-soft px-4 py-3 text-[15px] text-warn">
         <Warning size={20} aria-hidden className="mt-0.5 shrink-0" />
-        Keep automatic checking off while the real Nova is running, otherwise the simulator takes its jobs.
+        Keep automatic checking off while the real Otto is running, otherwise the simulator takes its jobs.
       </p>
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
@@ -158,7 +158,7 @@ export function SimulateClient() {
           <section className={PANEL} aria-labelledby="job-title">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 id="job-title" className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-                <Robot size={24} aria-hidden /> Nova&apos;s job
+                <Robot size={24} aria-hidden /> Otto&apos;s job
               </h2>
               <Button kind="primary" disabled={busy || Boolean(command)} onClick={() => act(poll)}>
                 <ArrowsClockwise size={18} aria-hidden /> Check for jobs
@@ -218,7 +218,7 @@ export function SimulateClient() {
                     : command.type === "ask"
                       ? command.origin === "phone"
                         ? "The patient asked on the phone"
-                        : "Staff told Nova"
+                        : "Staff told Otto"
                       : command.type === "walk_control"
                         ? command.origin === "phone"
                           ? "The patient tapped on the phone"
@@ -281,7 +281,7 @@ export function SimulateClient() {
               <Switch id="auto-beat" checked={autoBeat} onChange={setAutoBeat} label="Every 15 s" />
             </div>
             <label htmlFor="position" className="mt-2 block text-[15px] font-semibold">
-              Where Nova is
+              Where Otto is
             </label>
             <input
               id="position"
@@ -412,7 +412,7 @@ function GuideJob({
                               step: `Going to ${command.to.name}`,
                             },
                           });
-                          await feed([{ who: "nova", kind: "said", text: `Ticket ${t}, please come to Nova.` }]);
+                          await feed([{ who: "nova", kind: "said", text: `Ticket ${t}, please come to Otto.` }]);
                           setStep("confirm");
                         })
                       }
@@ -503,7 +503,7 @@ function GuideJob({
                         disabled={busy}
                         onClick={() =>
                           run(async () => {
-                            ok(await patch({ event: { type: "waiting_for_patient", detail: "Patient 4 m behind, Nova waits" } }));
+                            ok(await patch({ event: { type: "waiting_for_patient", detail: "Patient 4 m behind, Otto waits" } }));
                             ok(await patch({ event: { type: "slowed_down", detail: "Slowed down one step" } }));
                             await beat({
                               state: "walking",
@@ -531,7 +531,7 @@ function GuideJob({
                         onClick={() =>
                           run(async () => {
                             const near = position || command.from.name;
-                            ok(await patch({ event: { type: "lost_patient", detail: `Nobody behind Nova near ${near}` } }));
+                            ok(await patch({ event: { type: "lost_patient", detail: `Nobody behind Otto near ${near}` } }));
                             await help(`Lost the patient with ticket ${t} near ${near}`);
                             await beat({
                               state: "error",
@@ -624,7 +624,7 @@ function GuideJob({
       </ol>
       {step === "failed" && (
         <div className="mt-3 rounded-xl border border-danger bg-danger-soft p-3">
-          <p className="font-semibold text-danger">The leg failed. Staff can send Nova again on the Reception page.</p>
+          <p className="font-semibold text-danger">The leg failed. Staff can send Otto again on the Reception page.</p>
           <Button className="mt-3" disabled={busy} onClick={() => run(goHome)}>
             Back at reception
           </Button>
@@ -635,7 +635,7 @@ function GuideJob({
 }
 
 function TalkPanel({ feed }: { feed: (items: Feed[]) => Promise<RobotCall> }) {
-  const [nova, setNova] = useState("");
+  const [otto, setOtto] = useState("");
   const [patient, setPatient] = useState("");
   const [result, setResult] = useState<string | null>(null);
   return (
@@ -647,17 +647,17 @@ function TalkPanel({ feed }: { feed: (items: Feed[]) => Promise<RobotCall> }) {
         className="mt-3"
         onSubmit={async (e) => {
           e.preventDefault();
-          if (!nova.trim()) return;
-          await feed([{ who: "nova", kind: "said", text: nova }]);
-          setNova("");
+          if (!otto.trim()) return;
+          await feed([{ who: "nova", kind: "said", text: otto }]);
+          setOtto("");
         }}
       >
-        <label htmlFor="nova-says" className="text-[15px] font-semibold">
-          Nova says
+        <label htmlFor="otto-says" className="text-[15px] font-semibold">
+          Otto says
         </label>
         <div className="mt-2 flex gap-2">
-          <input id="nova-says" className={INPUT} value={nova} onChange={(e) => setNova(e.target.value)} />
-          <Button kind="secondary" className="h-12" type="submit" disabled={!nova.trim()}>
+          <input id="otto-says" className={INPUT} value={otto} onChange={(e) => setOtto(e.target.value)} />
+          <Button kind="secondary" className="h-12" type="submit" disabled={!otto.trim()}>
             Send
           </Button>
         </div>
@@ -732,7 +732,7 @@ function CheckInPanel({ robot, record }: { robot: string; record: (c: RobotCall)
           Reload places
         </Button>
       </div>
-      <p className="mt-1 text-sm text-muted">What a patient picks on Nova&apos;s screen. Still no name, just a ticket.</p>
+      <p className="mt-1 text-sm text-muted">What a patient picks on Otto&apos;s screen. Still no name, just a ticket.</p>
 
       <p className="mt-4 text-[15px] font-semibold">Who are you here to see?</p>
       {rooms.length === 0 ? (
@@ -790,7 +790,7 @@ function CheckInPanel({ robot, record }: { robot: string; record: (c: RobotCall)
             .map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
-                {p.public ? "" : " (staff only, Nova refuses)"}
+                {p.public ? "" : " (staff only, Otto refuses)"}
               </option>
             ))}
         </select>
@@ -858,7 +858,7 @@ function HelpPanel({ robot, record }: { robot: string; record: (c: RobotCall) =>
         }}
       >
         <label htmlFor="help-summary" className="text-[15px] font-semibold">
-          What Nova reports (no health details)
+          What Otto reports (no health details)
         </label>
         <input
           id="help-summary"

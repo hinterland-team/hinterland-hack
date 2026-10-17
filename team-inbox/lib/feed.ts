@@ -5,13 +5,13 @@ import type { FeedItem } from "./types";
 export const FEED_MAX = 200;
 export const FEED_HOURS = 12;
 
-const g = globalThis as unknown as { __novaFeed?: FeedItem[] };
-const feed = (): FeedItem[] => (g.__novaFeed ??= []);
+const g = globalThis as unknown as { __ottoFeed?: FeedItem[] };
+const feed = (): FeedItem[] => (g.__ottoFeed ??= []);
 
 function trim(now: number) {
   const cutoff = new Date(now - FEED_HOURS * 3600_000).toISOString();
   const list = feed().filter((i) => i.at >= cutoff);
-  g.__novaFeed = list.slice(-FEED_MAX);
+  g.__ottoFeed = list.slice(-FEED_MAX);
 }
 
 // items in time order (oldest first) are appended, the list keeps the newest 200
@@ -32,9 +32,9 @@ export function listFeed(robot: string, limit = 50, now = Date.now()): FeedItem[
 }
 
 export function clearFeedForJourney(journeyId: string) {
-  g.__novaFeed = feed().filter((i) => i.journeyId !== journeyId);
+  g.__ottoFeed = feed().filter((i) => i.journeyId !== journeyId);
 }
 
 export function clearFeed() {
-  g.__novaFeed = [];
+  g.__ottoFeed = [];
 }

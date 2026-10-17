@@ -52,7 +52,7 @@ class MapRate(
     }
 }
 
-// why nova can't drive. title/hint for the screen, detail for the heartbeat and the log
+// why otto can't drive. title/hint for the screen, detail for the heartbeat and the log
 enum class ChassisIssue(val hint: String, val detail: String) {
     NOT_STARTED(
         "Please start me from the robot's home screen.",
@@ -104,7 +104,7 @@ object LiveMap {
     @Volatile private var mapNameAt = 0L
     @Volatile private var failures = 0
 
-    // the map spots nova knows (for "near <spot>" in the heartbeat)
+    // the map spots otto knows (for "near <spot>" in the heartbeat)
     fun knownPlaces(): List<MapPlace> = places
 
     // runs with the brain
@@ -122,7 +122,7 @@ object LiveMap {
         val moving = Clinic.ui.value.walking || guide?.walking == true
         if (!rate.due(now, moving)) return
         val pose = Robot.robotPose() ?: return
-        // map spots: every minute, every 15 s while nova has none yet
+        // map spots: every minute, every 15 s while otto has none yet
         if (now - placesAt >= PLACES_REFRESH_MS || (places.isEmpty() && now - placesAt >= PLACES_RETRY_MS)) {
             placesAt = now
             Robot.mapPlaces().takeIf { it.isNotEmpty() }?.let { places = it }

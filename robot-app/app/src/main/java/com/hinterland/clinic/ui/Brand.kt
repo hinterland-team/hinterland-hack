@@ -39,7 +39,7 @@ import androidx.compose.ui.unit.sp
 import com.hinterland.clinic.QrMatrix
 import kotlinx.coroutines.delay
 
-// the Nova logo: a small round face with the teal plus of the app icon, and the word mark.
+// the Nova Clinic logo: a small round face with the teal plus of the app icon, and the word mark.
 // holding it for 3 s opens the staff menu; a thin ring fills up while the finger stays on it.
 @Composable
 fun NovaLogo(onLongPress: (() -> Unit)? = null, modifier: Modifier = Modifier) {

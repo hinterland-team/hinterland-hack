@@ -23,8 +23,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     return callPageHtml({
       status: 200,
       pill: "On the way",
-      heading: "Nova is on the way",
-      lines: [`Nova picks up ticket ${journey.ticket} and walks to ${to}.`],
+      heading: "Otto is on the way",
+      lines: [`Otto picks up ticket ${journey.ticket} and walks to ${to}.`],
       note: "You can close this page.",
       moving: true,
     });

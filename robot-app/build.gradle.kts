@@ -21,13 +21,13 @@ subprojects {
         val store = local("signing.storeFile").takeIf { it.isNotEmpty() }?.let { rootProject.file(it) }
         if (store != null && store.exists()) {
             extensions.configure<ApplicationExtension> {
-                val nova = signingConfigs.create("nova") {
+                val otto = signingConfigs.create("nova") {
                     storeFile = store
                     storePassword = local("signing.storePassword")
                     keyAlias = local("signing.keyAlias")
                     keyPassword = local("signing.keyPassword")
                 }
-                buildTypes.matching { it.name == "debug" }.configureEach { signingConfig = nova }
+                buildTypes.matching { it.name == "debug" }.configureEach { signingConfig = otto }
             }
         }
     }

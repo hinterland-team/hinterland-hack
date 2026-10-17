@@ -2,7 +2,7 @@ package com.hinterland.clinic
 
 import java.util.Locale
 
-// picking a patient up: nova calls the ticket, reminds every 45 s and gives up after 3 min.
+// picking a patient up: otto calls the ticket, reminds every 45 s and gives up after 3 min.
 // plain kotlin, unit tested.
 
 enum class PickupStep { WAIT, REMIND, TIMEOUT }
@@ -15,7 +15,7 @@ class PickupTimeline(
 
     val remindersDone get() = reminders
 
-    // elapsed = ms since nova first called the ticket
+    // elapsed = ms since otto first called the ticket
     fun next(elapsed: Long): PickupStep {
         if (elapsed >= timeoutMs) return PickupStep.TIMEOUT
         if (elapsed >= (reminders + 1) * remindEveryMs) {

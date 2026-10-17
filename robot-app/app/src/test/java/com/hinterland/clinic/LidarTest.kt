@@ -161,7 +161,7 @@ class LidarTest {
             val pose = RobotPose(2.0 + 0.5 * t, 0.0, 0.0)
             val sim = ScanSim(seed = (t * 10).toInt()).corridor(from = -20.0, to = 40.0)
             if (patient) sim.person(-1.1, 0.05)
-            // a chair that stands on the map: in the robot frame it falls back as nova drives on
+            // a chair that stands on the map: in the robot frame it falls back as otto drives on
             chairAtMapX?.let { sim.box(it - pose.x, 0.6, w = 0.4, h = 0.4) }
             val c = LegDetector.candidates(sim.scan(), Sector.REAR)
             out += tracker.update(t0 + (t * 1000).toLong(), c, pose)
@@ -182,11 +182,11 @@ class LidarTest {
     }
 
     @Test
-    fun furnitureNovaDrivesPastIsNotAFollower() {
+    fun furnitureOttoDrivesPastIsNotAFollower() {
         val tr = FollowerTracker()
         // the chair is 0.8 m behind at the start, nobody follows
         val fixes = drive(4.0, patient = false, chairAtMapX = 1.2, tracker = tr)
-        // it may look like someone for a moment, but once nova drove 0.6 m away from it, it is dropped
+        // it may look like someone for a moment, but once otto drove 0.6 m away from it, it is dropped
         assertTrue(fixes.takeLast(5).all { it == null })
     }
 

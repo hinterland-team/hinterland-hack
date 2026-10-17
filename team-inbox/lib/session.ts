@@ -2,7 +2,7 @@
 // the signing key comes from DASHBOARD_PASSWORD (+ SESSION_SECRET when set):
 // a new password signs everybody out
 
-export const SESSION_COOKIE = "nova_staff";
+export const SESSION_COOKIE = "otto_staff";
 export const SESSION_DAYS = 7;
 
 const enc = new TextEncoder();

@@ -24,7 +24,7 @@ export function MapClient() {
       <div className="pt-6 pb-4">
         <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Map</h1>
         <p className="mt-1 max-w-prose text-[15px] text-muted">
-          Where Nova is, where it goes and what its LiDAR sees, live from the robot. Select a place to send Nova there.
+          Where Otto is, where it goes and what its LiDAR sees, live from the robot. Select a place to send Otto there.
         </p>
       </div>
 
@@ -37,7 +37,7 @@ export function MapClient() {
           </div>
           {stale && (
             <p className="mt-3 rounded-xl bg-warn-soft px-4 py-3 text-[15px] font-medium text-warn" role="status">
-              No new position for a while. Nova may be offline or the Nova Clinic app is closed. This is its last known spot.
+              No new position for a while. Otto may be offline or the Nova Clinic app is closed. This is its last known spot.
             </p>
           )}
           <div className="mt-4 grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:gap-5">
@@ -49,7 +49,7 @@ export function MapClient() {
                 onPick={setPicked}
                 stale={stale}
                 className="aspect-[4/3] sm:aspect-auto sm:h-[min(68vh,760px)] sm:min-h-[340px]"
-                label={`Live map of ${map.mapName ?? "Nova's floor"}: Nova${map.target ? ` heading to ${map.target.name}` : ""}, ${spots.length} spots`}
+                label={`Live map of ${map.mapName ?? "Otto's floor"}: Otto${map.target ? ` heading to ${map.target.name}` : ""}, ${spots.length} spots`}
                 toolbarStart={
                   <div className="hidden sm:block">
                     <MapLegend follower={Boolean(map.follower)} target={Boolean(map.target)} />
@@ -69,7 +69,7 @@ export function MapClient() {
                 <SpotPanel key={spot.name} spot={spot} map={map} robot={data?.robot ?? null} onClose={() => setPicked(null)} />
               ) : (
                 <p className="rounded-xl border border-dashed border-line-strong px-4 py-4 text-[15px] text-muted">
-                  Select a place on the map or in the list to send Nova there.
+                  Select a place on the map or in the list to send Otto there.
                 </p>
               )}
               <section aria-labelledby="spots-title" className="rounded-2xl border border-line bg-surface shadow-panel">
@@ -78,7 +78,7 @@ export function MapClient() {
                   <span className="text-sm font-normal text-muted tabular">{spots.length}</span>
                 </h2>
                 {sorted.length === 0 ? (
-                  <p className="px-4 pb-4 text-[15px] text-muted sm:px-5">Nova has not sent the spots of its map yet.</p>
+                  <p className="px-4 pb-4 text-[15px] text-muted sm:px-5">Otto has not sent the spots of its map yet.</p>
                 ) : (
                   <ul className="pb-2">
                     {sorted.map((s) => {

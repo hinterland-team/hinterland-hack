@@ -12,7 +12,7 @@ const BAD_KEYS = 10;
 const BAD_WINDOW_SECONDS = 600;
 
 // the nurse's system: header X-Api-Key: <INTEGRATION_KEY>, body { to: placeId | place name, pace?, wheelchair? }.
-// same as a journey from the reception board (a room with a waiting room: Nova walks to the waiting room).
+// same as a journey from the reception board (a room with a waiting room: Otto walks to the waiting room).
 // -> 201 { ticket, journeyId, to, via?, walkUrl }. nothing about the patient is taken
 export const POST = route(async (req) => {
   const key = process.env.INTEGRATION_KEY?.trim();
@@ -29,7 +29,7 @@ export const POST = route(async (req) => {
   const body = await readJson(req);
   const extra = Object.keys(body).filter((k) => !FIELDS.includes(k));
   if (extra.length) {
-    throw new ApiError(400, `unknown field ${extra[0]}: Nova keeps no patient data, send only ${FIELDS.join(", ")}`);
+    throw new ApiError(400, `unknown field ${extra[0]}: Otto keeps no patient data, send only ${FIELDS.join(", ")}`);
   }
   const wanted = typeof body.to === "string" ? body.to.trim() : "";
   if (!wanted) throw new ApiError(400, "to is required (a place id or a place name)");

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LoginNeeded, api } from "@/lib/ui";
 
-// polls a json url. the delay can depend on the last answer (fast while nova moves).
+// polls a json url. the delay can depend on the last answer (fast while otto moves).
 // pauses while the tab is hidden and catches up when it comes back
 export function usePoll<T>(url: string | null, delay: (data: T | null) => number) {
   const [data, setData] = useState<T | null>(null);

@@ -15,7 +15,7 @@ data class RobotPose(val x: Double, val y: Double, val theta: Double) {
     val point: Point get() = Point(x, y)
 }
 
-// the frame the radar points come in. the docs do not say, so Nova finds out (ScanMath.guessFrame).
+// the frame the radar points come in. the docs do not say, so Otto finds out (ScanMath.guessFrame).
 enum class ScanFrame { MAP, ROBOT }
 
 object ScanMath {
@@ -200,7 +200,7 @@ class Coverage(private val binDeg: Int = 10) {
     }
 }
 
-// where to look for legs: behind nova while she drives, in front after she turned around
+// where to look for legs: behind otto while he drives, in front after he turned around
 enum class Sector(val fromDeg: Double, val toDeg: Double) {
     REAR(100.0, 180.0),
     FRONT(0.0, 60.0),
@@ -310,11 +310,11 @@ object LegDetector {
     private fun centroid(c: List<Point>): Point = Point(c.sumOf { it.x } / c.size, c.sumOf { it.y } / c.size)
 }
 
-// the follower estimate nova keeps while she walks
+// the follower estimate otto keeps while he walks
 data class FollowerFix(val robot: Point, val map: Point?, val distance: Double, val at: Long)
 
-// follows one leg-like shape behind nova from frame to frame. a shape that stays put on the map while
-// nova drives on is furniture, not a patient: it is ignored for a while.
+// follows one leg-like shape behind otto from frame to frame. a shape that stays put on the map while
+// otto drives on is furniture, not a patient: it is ignored for a while.
 class FollowerTracker(
     private val gateM: Double = 0.8,
     private val keepMs: Long = 1_500,

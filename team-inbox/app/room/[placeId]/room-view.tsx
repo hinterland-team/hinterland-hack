@@ -97,7 +97,7 @@ export function RoomView({ placeId }: { placeId: string }) {
           <Footprints size={36} aria-hidden className="mx-auto text-muted" />
           <h2 className="mt-3 text-lg font-semibold">Nobody is on the way to {place.name}</h2>
           <p className="mx-auto mt-1 max-w-sm text-[15px] text-muted">
-            When reception sends Nova here, the ticket shows up on this screen with its arrival time. Keep this page open.
+            When reception sends Otto here, the ticket shows up on this screen with its arrival time. Keep this page open.
           </p>
         </div>
       )}

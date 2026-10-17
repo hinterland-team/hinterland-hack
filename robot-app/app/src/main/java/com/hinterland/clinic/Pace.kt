@@ -58,7 +58,7 @@ object PaceRules {
     fun start(staffPace: Pace, wheelchair: Boolean): Pace =
         if (wheelchair && Pace.SLOW.isSlowerThan(staffPace)) Pace.SLOW else staffPace
 
-    // nova only asks "normally or a bit slower?" when nobody chose a slower pace already
+    // otto only asks "normally or a bit slower?" when nobody chose a slower pace already
     fun shouldAsk(staffPace: Pace, wheelchair: Boolean, chosenByPatient: Boolean): Boolean =
         !chosenByPatient && start(staffPace, wheelchair) == Pace.NORMAL
 }

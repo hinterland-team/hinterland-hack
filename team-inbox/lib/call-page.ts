@@ -34,10 +34,10 @@ main { max-width: 448px; margin: 0 auto; padding: 48px 16px; }
 .face { width: 96px; height: 96px; margin: 0 auto 24px; }
 .face svg { width: 96px; height: 96px; display: block; }
 .moving .face { animation: bob 1.6s ease-in-out infinite; }
-.nova-eyes { transform-box: fill-box; transform-origin: center; animation: blink 5s infinite; }
+.otto-eyes { transform-box: fill-box; transform-origin: center; animation: blink 5s infinite; }
 @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 @keyframes blink { 0%, 94%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.1); } }
-@media (prefers-reduced-motion: reduce) { .moving .face, .nova-eyes { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .moving .face, .otto-eyes { animation: none; } }
 .pill { display: inline-block; background: var(--soft); color: var(--primary); border-radius: 999px; padding: 4px 12px; font-size: 14px; line-height: 20px; font-weight: 600; margin: 0 0 16px; }
 h1 { font-size: 24px; line-height: 32px; font-weight: 650; margin: 0 0 12px; overflow-wrap: anywhere; }
 p { margin: 0 0 4px; color: var(--muted); overflow-wrap: anywhere; }

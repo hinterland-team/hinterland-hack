@@ -46,11 +46,11 @@ import kotlin.time.TimeSource
 
 private typealias Anim = Animatable<Float, AnimationVector1D>
 
-// she starts her little idle habits after this long with nothing going on
+// he starts his little idle habits after this long with nothing going on
 private const val IDLE_ACT_AFTER_MS = 15_000L
 
-// nova's face: the doctor art as a rig (FaceParts.kt). every mood has a pose; on top she blinks,
-// glances around, nods, hops when happy, droops when sorry, and her mouth talks in any mood.
+// otto's face: the doctor art as a rig (FaceParts.kt). every mood has a pose; on top he blinks,
+// glances around, nods, hops when happy, droops when sorry, and his mouth talks in any mood.
 // with reduced motion the face stays still and only changes its expression.
 @Composable
 fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) {
@@ -145,7 +145,7 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
         }
     }
 
-    // where she looks, and her little habits when nobody needs her
+    // where he looks, and his little habits when nobody needs him
     LaunchedEffect(shown, talking, reduced) {
         act = Act.NONE
         launch { wink.animateTo(1f, tween(120)) }
@@ -318,7 +318,7 @@ fun Mascot(mood: Mood, modifier: Modifier = Modifier, talking: Boolean = false) 
                                 val lidS = (open * if (side == 0) wink.value else 1f).coerceAtLeast(0.04f)
                                 val sprites = if (side == 0) eyesL else eyesR
                                 withTransform({
-                                    // the eye stays inside its lens, however far she looks
+                                    // the eye stays inside its lens, however far he looks
                                     clipPath(Path().apply { addOval(Rect(lens, Rig.LENS_R)) })
                                     translate(c.x, c.y)
                                     scale(eyeScale.value, eyeScale.value * lidS, Offset.Zero)

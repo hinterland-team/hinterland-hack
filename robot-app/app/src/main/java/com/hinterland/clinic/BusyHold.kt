@@ -1,6 +1,6 @@
 package com.hinterland.clinic
 
-// busy hold for nova deploy (docs/deploy.md): while nova drives someone around, nova deploy must
+// busy hold for nova deploy (docs/deploy.md): while otto drives someone around, nova deploy must
 // not replace this app. plain kotlin, unit tested; DeployHold sends what this says.
 
 data class HoldMessage(val seconds: Int, val reason: String)
@@ -10,7 +10,7 @@ class BusyHold(private val renewMs: Long = RENEW_MS) {
     private var sentAt = 0L
     private var sentReason: String? = null
 
-    // state = what nova's running task does (null = no task). the broadcast to send now, or null.
+    // state = what otto's running task does (null = no task). the broadcast to send now, or null.
     fun next(state: RobotState?, now: Long): HoldMessage? {
         val reason = state?.let(::reason)
         if (reason == null) {

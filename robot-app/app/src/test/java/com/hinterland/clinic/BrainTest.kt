@@ -88,7 +88,7 @@ class BrainTest {
     }
 
     @Test
-    fun afterTwentySecondsNovaSaysSorryAndGoes() {
+    fun afterTwentySecondsOttoSaysSorryAndGoes() {
         val s = idle.copy(commands = listOf(call()), talk = TalkLevel.ACTIVE, waitingSince = now - 20_000)
         assertEquals(Plan.RunCommand(call(), excuse = true), decide(s))
         assertEquals(Plan.RunCommand(goTo(), excuse = true), decide(s.copy(commands = listOf(goTo()))))
@@ -116,7 +116,7 @@ class BrainTest {
 
     @Test
     fun commandBeatsChargingAndGreeting() {
-        val docked = idle.copy(dockedByNova = true, charging = true, battery = 22, visitor = visitor, commands = listOf(goTo()))
+        val docked = idle.copy(dockedByOtto = true, charging = true, battery = 22, visitor = visitor, commands = listOf(goTo()))
         assertEquals(Plan.RunCommand(goTo(), excuse = false), decide(docked))
     }
 
@@ -133,7 +133,7 @@ class BrainTest {
     }
 
     @Test
-    fun listeningStatusAloneStillLetsNovaGreet() {
+    fun listeningStatusAloneStillLetsOttoGreet() {
         assertEquals(Plan.Greet(7), decide(idle.copy(visitor = visitor, talk = TalkLevel.LISTENING)))
         assertEquals(Plan.Talk, decide(idle.copy(talk = TalkLevel.LISTENING)))
     }
@@ -207,7 +207,7 @@ class BrainTest {
 
     @Test
     fun staysOnTheChargerUntilThirtyPercent() {
-        val docked = idle.copy(dockedByNova = true, charging = true, battery = 25, atHome = false, quietSince = now - 600_000)
+        val docked = idle.copy(dockedByOtto = true, charging = true, battery = 25, atHome = false, quietSince = now - 600_000)
         assertEquals(Plan.Charge, decide(docked))
         assertEquals("Charging (25 %)", Brain.goal(Plan.Charge, docked))
         assertEquals(Plan.LeaveCharger, decide(docked.copy(battery = 30)))
@@ -267,7 +267,7 @@ class BrainTest {
         assertEquals(TalkLevel.NONE, Brain.talkLevel(t, AgentMode.IDLE, 0, 0, 0, 0))
         assertEquals(TalkLevel.ACTIVE, Brain.talkLevel(t, AgentMode.IDLE, 0, t - 7_000, 0, 0))
         assertEquals(TalkLevel.NONE, Brain.talkLevel(t, AgentMode.IDLE, 0, t - 9_000, 0, 0))
-        // nova's own speech and running actions count too
+        // otto's own speech and running actions count too
         assertEquals(TalkLevel.ACTIVE, Brain.talkLevel(t, AgentMode.IDLE, 0, 0, t - 1_000, 0))
         assertEquals(TalkLevel.ACTIVE, Brain.talkLevel(t, AgentMode.IDLE, 0, 0, 0, 1))
         assertEquals(TalkLevel.ACTIVE, Brain.talkLevel(t, AgentMode.THINKING, t - 5_000, 0, 0, 0))

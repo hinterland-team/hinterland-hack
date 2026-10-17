@@ -30,7 +30,7 @@ export type Place = {
   waitingPlaceId?: string;
   // shown to patients on the robot's check-in screen
   selfCheckIn: boolean;
-  // a map spot nova tries once when the normal way is blocked
+  // a map spot otto tries once when the normal way is blocked
   viaSpot?: string;
   // second channel next to teams (needs RESEND_API_KEY + EMAIL_FROM)
   notifyEmail?: string;
@@ -102,7 +102,7 @@ export type Journey = {
   pace: Pace;
   wheelchair: boolean;
   status: JourneyStatus;
-  // the room the patient is here for, when Nova first walks them to its waiting room
+  // the room the patient is here for, when Otto first walks them to its waiting room
   forPlaceId?: string;
   legs: Leg[];
   createdBy: "staff" | "robot";
@@ -134,7 +134,7 @@ export type GuideCommand = CommandBase & {
   walkUrl?: string;
 };
 export type SayCommand = CommandBase & { type: "say"; text: string };
-// origin phone = the patient typed or said it on the walk page. its text is wiped once nova has it
+// origin phone = the patient typed or said it on the walk page. its text is wiped once otto has it
 export type AskCommand = CommandBase & { type: "ask"; text: string; journeyId?: string; origin?: "staff" | "phone" };
 export type GoToCommand = CommandBase & { type: "go_to"; spot: string };
 export const WALK_ACTIONS = ["wait", "resume", "slower", "faster"] as const;

@@ -77,13 +77,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // nova's brain runs while this screen is in front: it greets, takes the team's guide commands,
+        // otto's brain runs while this screen is in front: it greets, takes the team's guide commands,
         // charges and goes home on its own, and sends the heartbeat and the live feed
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 Robot.connect(this@MainActivity)
                 Clinic.refreshScreenInfo()
-                NovaBrain.run()
+                OttoBrain.run()
             }
         }
     }

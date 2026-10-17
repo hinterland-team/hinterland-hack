@@ -6,7 +6,7 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-// the walk planner: when nova checks back, what she does for each distance, how long she waits for
+// the walk planner: when otto checks back, what he does for each distance, how long he waits for
 // a patient who fell behind, milestones and progress. plain kotlin without android, unit tested.
 // times are epoch ms (or ms since a start), distances meters.
 
@@ -33,7 +33,7 @@ object LegStatus {
 }
 
 // counts driving time between check-backs. blocked time and stops (check-back, pause) do not count.
-// right after nova had to wait for an obstacle a check-back is due at once.
+// right after otto had to wait for an obstacle a check-back is due at once.
 class CheckBackClock(
     // driving time until the next check-back; the adaptive schedule changes it on the way
     var everyMs: Long = EVERY_MS,
@@ -84,7 +84,7 @@ class CheckBackClock(
     }
 }
 
-// who is behind nova when she turns around
+// who is behind otto when he turns around
 enum class Proximity { CLOSE, FAR, NOBODY, UNKNOWN }
 
 object CheckBack {
@@ -117,7 +117,7 @@ object CheckBack {
         Proximity.NOBODY -> listOf(JourneyEvent.LOST_PATIENT)
     }
 
-    // camera first (it is what the turn is for); the radar in front of nova backs it up when the camera
+    // camera first (it is what the turn is for); the radar in front of otto backs it up when the camera
     // sees nobody, for example in a dim corridor. lidarAhead = nearest leg-like shape after the turn.
     fun decide(samples: List<List<Double>?>, lidarAhead: Double?): Proximity {
         val camera = classify(samples)
@@ -135,7 +135,7 @@ object CheckBack {
         listOfNotNull(camera?.takeIf { it > 0.0 }, lidar?.takeIf { it > 0.0 }).minOrNull()
 }
 
-// why nova turns around now (docs/journeys.md 6.3)
+// why otto turns around now (docs/journeys.md 6.3)
 enum class CheckReason(val detail: String) {
     FIRST("first check after the start"),
     REGULAR("regular check"),
@@ -149,14 +149,14 @@ enum class CheckReason(val detail: String) {
 // 45 deg (not the turn on the spot every drive starts with) and one right after an obstacle wait.
 // the radar watch can ask for one at any time.
 // field test 17.10: a 34 s walk had no check at all (25 s of "driving" never added up). so the time
-// counts all navigation time (a blocked flag that never clears can't stop it), and nova builds trust
+// counts all navigation time (a blocked flag that never clears can't stop it), and otto builds trust
 // step by step: the second check comes at most 15 s after the first, then 20 s, 25 s, 30 s.
 class CheckSchedule(
     private val firstMs: Long = FIRST_MS,
     private val turnDeg: Double = TURN_DEG,
     private val minGapMs: Long = MIN_GAP_MS,
 ) {
-    // only for "nova had to wait for an obstacle"; its own time count is not used
+    // only for "otto had to wait for an obstacle"; its own time count is not used
     private val obstacles = CheckBackClock(Long.MAX_VALUE)
     private var elapsed = 0L
     private var lastTick: Long? = null
@@ -206,7 +206,7 @@ class CheckSchedule(
         if (turnPending) turnedDeg = fromRef
     }
 
-    // nova stopped driving (check-back, pause, new pace): the next tick starts a new stretch
+    // otto stopped driving (check-back, pause, new pace): the next tick starts a new stretch
     fun pause() {
         obstacles.pause()
         lastTick = null
@@ -309,8 +309,8 @@ object NearGoal {
 
 enum class TalkStep { LISTEN, REPLY, DONE }
 
-// the short face-to-face talk at a check-back (docs/journeys.md 6.4): nova asked a yes/no question,
-// listens about 6 s, gives nova's ai time to answer when the patient spoke, then nova walks on.
+// the short face-to-face talk at a check-back (docs/journeys.md 6.4): otto asked a yes/no question,
+// listens about 6 s, gives otto's ai time to answer when the patient spoke, then otto walks on.
 class TalkWindow(
     private val startedAt: Long,
     private val listenMs: Long = LISTEN_MS,
@@ -322,7 +322,7 @@ class TalkWindow(
     // true once the patient spoke in this window
     val answeredByVoice get() = spokeAt != null
 
-    // userSpokeAt = last time the mic heard the patient; talking = nova's ai is busy (thinking, speaking,
+    // userSpokeAt = last time the mic heard the patient; talking = otto's ai is busy (thinking, speaking,
     // an action); decided = the patient chose already (tap, pace change, wait)
     fun next(now: Long, userSpokeAt: Long, talking: Boolean, decided: Boolean): TalkStep {
         if (spokeAt == null && userSpokeAt >= startedAt) spokeAt = userSpokeAt
@@ -331,7 +331,7 @@ class TalkWindow(
             if (decided) return TalkStep.DONE
             return if (now - startedAt >= listenMs) TalkStep.DONE else TalkStep.LISTEN
         }
-        // they spoke: wait for nova's answer, at most replyMaxMs after the last words
+        // they spoke: wait for otto's answer, at most replyMaxMs after the last words
         val lastWords = maxOf(spoke, userSpokeAt)
         if (now - lastWords >= replyMaxMs) return TalkStep.DONE
         if (talking || now - lastWords < REPLY_START_MS) {
@@ -356,7 +356,7 @@ class TalkWindow(
 
 enum class BlockedStep { NONE, ASK, GIVE_UP }
 
-// something is in nova's way (docs/journeys.md 6.6): ask people to step aside, ask once more after
+// something is in otto's way (docs/journeys.md 6.6): ask people to step aside, ask once more after
 // 10 s, give up on this way 8 s after the second ask (the guide then tries the place's viaSpot once,
 // then calls the team). blocked longer than 25 s in total during one drive also ends it.
 class BlockedWatch(
@@ -416,7 +416,7 @@ object Detour {
 
 enum class FarStep { WAIT, CAME, STILL_FAR, GONE }
 
-// patient 3-6 m behind: nova waits up to 20 s for them to come close
+// patient 3-6 m behind: otto waits up to 20 s for them to come close
 class FarWait(
     private val startedAt: Long,
     private val maxMs: Long = MAX_MS,
@@ -440,7 +440,7 @@ class FarWait(
 
 enum class LostStep { CALL, REPORT, GIVE_UP, WATCH }
 
-// nobody behind nova: call out twice, after 30 s tell the team, after 60 s more give up
+// nobody behind otto: call out twice, after 30 s tell the team, after 60 s more give up
 class LostTimeline(
     private val callsAtMs: List<Long> = listOf(0L, SECOND_CALL_MS),
     private val reportAtMs: Long = REPORT_MS,
@@ -452,7 +452,7 @@ class LostTimeline(
     val callsDone get() = calls
     val hasReported get() = reported
 
-    // elapsed = ms since nova found nobody. each step comes once, in order.
+    // elapsed = ms since otto found nobody. each step comes once, in order.
     fun next(elapsed: Long): LostStep {
         if (elapsed >= giveUpAtMs && reported) return LostStep.GIVE_UP
         if (elapsed >= reportAtMs && !reported) {
@@ -530,7 +530,7 @@ object WalkMath {
             if (m <= 5) append("Only a few meters to go. ") else append("About $m meters to go in a straight line. ")
             append("That is ${duration(seconds)} at the ${pace.label.lowercase()}. ")
         }
-        near?.let { append("Nova is near the spot called $it. ") }
+        near?.let { append("Otto is near the spot called $it. ") }
     }
 
     fun roundMeters(m: Double): Int = if (m < 5) ceil(m).toInt() else ((m / 5.0).roundToInt() * 5)

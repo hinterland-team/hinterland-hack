@@ -31,8 +31,8 @@ export async function limit(key: string, max: number, windowSeconds: number, mes
 }
 
 // in this instance's memory only: cheap enough for page polls
-const g = globalThis as unknown as { __novaRate?: Map<string, number[]> };
-const rateMap = (): Map<string, number[]> => (g.__novaRate ??= new Map<string, number[]>());
+const g = globalThis as unknown as { __ottoRate?: Map<string, number[]> };
+const rateMap = (): Map<string, number[]> => (g.__ottoRate ??= new Map<string, number[]>());
 
 export function memoryLimit(key: string, max: number, windowSeconds: number, message: string) {
   const map = rateMap();

@@ -162,7 +162,7 @@ class JsonTest {
         assertTrue(idle.isNull("goal"))
         assertFalse(idle.has("screen"))
         assertEquals("Could not get off the charger", idle.getString("detail"))
-        val bare = Json.screen(ScreenMirror(view = "idle", title = "Hello, I'm Nova"))
+        val bare = Json.screen(ScreenMirror(view = "idle", title = "Hello, I'm Otto"))
         assertEquals(setOf("view", "title"), bare.keys().asSequence().toSet())
         assertEquals(
             listOf("idle", "greeting", "talking", "fetching", "walking", "returning", "charging", "error"),
@@ -174,7 +174,7 @@ class JsonTest {
     fun buildsTheFeed() {
         val body = Json.feed(
             "nova", "j1",
-            listOf(FeedItem(0L, FeedItem.NOVA, FeedItem.SAID, "Please follow me"), FeedItem(1_000L, FeedItem.PATIENT, FeedItem.INTENT, "Asked to walk slower")),
+            listOf(FeedItem(0L, FeedItem.OTTO, FeedItem.SAID, "Please follow me"), FeedItem(1_000L, FeedItem.PATIENT, FeedItem.INTENT, "Asked to walk slower")),
         )
         assertEquals("nova", body.getString("robot"))
         assertEquals("j1", body.getString("journeyId"))

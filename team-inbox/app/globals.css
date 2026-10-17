@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* one palette, light and dark. one accent (nova blue), stage colors only for state.
+/* one palette, light and dark. one accent (otto blue), stage colors only for state.
    radius: panels 16px, controls 12px, pills round. spacing 4/8/12/16/24/32/48 */
 :root {
   --canvas: #f3f6fa;
@@ -121,7 +121,7 @@ body {
 }
 
 /* motion: only to show that something changed or is alive. all of it stops for reduced motion */
-.nova-eyes {
+.otto-eyes {
   transform-box: fill-box;
   transform-origin: center;
   animation: blink 6s infinite;
@@ -196,7 +196,7 @@ body {
   }
 }
 
-/* nova walking along the progress line */
+/* otto walking along the progress line */
 .walk-line {
   transition: width 1.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -214,7 +214,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .nova-eyes,
+  .otto-eyes,
   .live-dot,
   .arrive,
   .rise,
@@ -234,8 +234,8 @@ body {
   --m-grid-strong: #d6dee9;
   --m-scan: #7f90a8;
   --m-trail: #2361d4;
-  --m-nova: #2361d4;
-  --m-nova-ink: #ffffff;
+  --m-otto: #2361d4;
+  --m-otto-ink: #ffffff;
   --m-label: #0f1b2d;
   --m-label-muted: #56667c;
   --m-halo: #f6f8fb;
@@ -257,8 +257,8 @@ body {
   --m-grid-strong: #1f2e4a;
   --m-scan: #6f86a8;
   --m-trail: #6aa3ff;
-  --m-nova: #6aa3ff;
-  --m-nova-ink: #071022;
+  --m-otto: #6aa3ff;
+  --m-otto-ink: #071022;
   --m-label: #e6edf7;
   --m-label-muted: #97a7bf;
   --m-halo: #0b1322;
@@ -279,8 +279,8 @@ body {
     --m-grid-strong: #1f2e4a;
     --m-scan: #6f86a8;
     --m-trail: #6aa3ff;
-    --m-nova: #6aa3ff;
-    --m-nova-ink: #071022;
+    --m-otto: #6aa3ff;
+    --m-otto-ink: #071022;
     --m-label: #e6edf7;
     --m-label-muted: #97a7bf;
     --m-halo: #0b1322;
@@ -311,8 +311,8 @@ body {
   stroke-width: 3px;
 }
 
-/* nova's position glides between frames instead of jumping */
-.map-nova {
+/* otto's position glides between frames instead of jumping */
+.map-otto {
   transition: transform 0.9s linear;
 }
 
@@ -349,7 +349,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .map-nova {
+  .map-otto {
     transition: none;
   }
   .map-target-pulse,

@@ -533,7 +533,7 @@ export function createPgStore(sql: SqlClient): Store {
       return toCommand(rows[0]) as typeof command;
     },
     async takeNextCommand(robot, now) {
-      // a phone question loses its text in the db once nova has it (old_text is the value before)
+      // a phone question loses its text in the db once otto has it (old_text is the value before)
       const rows = await sql.query(
         `update robot_commands c set delivered_at = $2::timestamptz,
            text = case when c.type = 'ask' and c.origin = 'phone' then null else c.text end

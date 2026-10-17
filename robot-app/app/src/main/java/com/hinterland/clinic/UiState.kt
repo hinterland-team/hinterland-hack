@@ -8,7 +8,7 @@ enum class Health { UNKNOWN, OK, DOWN }
 // what the agentos planner is doing (from OnAgentStatusChangedListener)
 enum class AgentMode { IDLE, LISTENING, THINKING }
 
-// how nova feels. talking is separate (UiState.speaking): she can talk happily, sorrily, sleepily...
+// how otto feels. talking is separate (UiState.speaking): he can talk happily, sorrily, sleepily...
 enum class Mood {
     IDLE, LISTENING, THINKING, WALKING, HAPPY, SORRY,
     // a big moment: arrived, "that's me"
@@ -26,11 +26,11 @@ enum class Mood {
     TIRED,
     // a patient found again, the team informed
     RELIEVED,
-    // nova greets someone walking up
+    // otto greets someone walking up
     GREETING,
 }
 
-// below this battery level nova looks tired (unless charging)
+// below this battery level otto looks tired (unless charging)
 const val LOW_BATTERY = 15
 
 // step = on-screen english for the current step, view = heartbeat screen.view
@@ -60,7 +60,7 @@ data class GuideUi(
     val from: String = "",
     val phase: GuidePhase = GuidePhase.PICKUP,
     val pace: Pace = Pace.NORMAL,
-    // 0..1 along the way, null when nova can't tell
+    // 0..1 along the way, null when otto can't tell
     val progress: Float? = null,
     // why it failed, in short english
     val note: String? = null,
@@ -72,7 +72,7 @@ data class GuideUi(
     val walkUrl: String? = null,
     // the face-to-face talk at a check-back (6.4), null when there is none
     val talk: TalkUi? = null,
-    // nova takes the place's waypoint because the way was blocked (6.6)
+    // otto takes the place's waypoint because the way was blocked (6.6)
     val detour: Boolean = false,
 ) {
     fun step(): String = when (phase) {
@@ -91,14 +91,14 @@ data class GuideUi(
         GuidePhase.CANCELLED -> "The team ended this walk"
     }
 
-    // the screen during a guide, with the patient behind or in front of nova
+    // the screen during a guide, with the patient behind or in front of otto
     val walkingNow get() = phase == GuidePhase.WALKING
     val needsPresence get() = phase in setOf(GuidePhase.CHECKING, GuidePhase.WAITING, GuidePhase.LOOKING, GuidePhase.LOST) && talk == null
 }
 
 enum class TalkStage { ASKING, LISTENING, REPLYING }
 
-// the check-back talk on the screen: the question, and since when nova listens (for the ring)
+// the check-back talk on the screen: the question, and since when otto listens (for the ring)
 data class TalkUi(
     val question: String,
     val stage: TalkStage = TalkStage.ASKING,
@@ -109,7 +109,7 @@ data class TalkUi(
     val id: Long = 0,
 )
 
-// the staff menu (long-press the Nova logo 3 s): what staff need to see on the robot itself
+// the staff menu (long-press the Nova Clinic logo 3 s): what staff need to see on the robot itself
 data class StaffUi(
     val robotName: String = "",
     val version: String = "",
@@ -156,10 +156,10 @@ data class CheckInUi(
     }
 }
 
-// urgent help was called: nova stays and shows this
+// urgent help was called: otto stays and shows this
 data class HelpUi(val urgent: Boolean, val sent: Boolean?)
 
-// what the screen shows next to nova's face. a new key = something new happened, the face moves aside
+// what the screen shows next to otto's face. a new key = something new happened, the face moves aside
 // and the info comes up. holds = the screen waits for a tap, so the info stays until it doesn't.
 data class Focus(val key: String, val holds: Boolean)
 
@@ -184,7 +184,7 @@ data class UiState(
     val help: HelpUi? = null,
     // from GET /api/places
     val places: List<Place> = emptyList(),
-    // nova can't drive (out-of-service screen, 6.6)
+    // otto can't drive (out-of-service screen, 6.6)
     val chassis: ChassisIssue? = null,
     // the staff menu is open
     val staff: StaffUi? = null,
@@ -258,30 +258,30 @@ data class UiState(
         checkIn?.let { c ->
             return ScreenMirror(view = "checkin", title = "Self check-in", step = c.stepLabel())
         }
-        return ScreenMirror(view = "idle", title = "Hello, I'm Nova", step = brain.goal)
+        return ScreenMirror(view = "idle", title = "Hello, I'm Otto", step = brain.goal)
     }
 
     // what the planner should know about the screen (uploadInterfaceInfo replaces it every time)
     fun screenInfo(): String = buildString {
-        appendLine("Nova Clinic robot screen. Nova right now: ${brain.goal}.")
+        appendLine("Nova Clinic robot screen. Otto right now: ${brain.goal}.")
         val public = Places.public(places)
         val rooms = Places.selfCheckIn(places)
         when {
             help != null -> appendLine(
-                if (help.urgent) "Urgent help was called. Nova stays with the person; the team is on the way."
-                else "Nova called a team member.",
+                if (help.urgent) "Urgent help was called. Otto stays with the person; the team is on the way."
+                else "Otto called a team member.",
             )
             guide != null -> {
                 appendLine("Guide for ticket ${guide.ticket} to ${guide.destination}${guide.destinationNote?.let { " ($it)" }.orEmpty()}.")
                 appendLine("Step: ${guide.step()}. Current pace: ${guide.pace.wire}.")
                 guide.progress?.let { appendLine("About ${(it * 100).toInt()} % of the way done.") }
                 when (guide.phase) {
-                    GuidePhase.PICKUP -> appendLine("Nova is calling ticket ${guide.ticket}. The person with that ticket confirms with CONFIRM_TICKET.")
-                    GuidePhase.PACE -> appendLine("Nova asked how fast to walk. The answer goes to SET_PACE.")
+                    GuidePhase.PICKUP -> appendLine("Otto is calling ticket ${guide.ticket}. The person with that ticket confirms with CONFIRM_TICKET.")
+                    GuidePhase.PACE -> appendLine("Otto asked how fast to walk. The answer goes to SET_PACE.")
                     GuidePhase.PAUSED -> appendLine("The walk is paused. When the person is ready, use SET_PACE with the pace they want.")
                     GuidePhase.CHECKING -> if (guide.talk != null) {
                         appendLine(
-                            "Nova turned around and asked the patient if all is good and whether to slow down. " +
+                            "Otto turned around and asked the patient if all is good and whether to slow down. " +
                                 "If they say yes or all good, answer in a few warm words. Slower: SET_PACE. Wait or a break: PAUSE_WALK.",
                         )
                     }
@@ -290,7 +290,7 @@ data class UiState(
                 }
             }
             chassis != null -> appendLine(
-                "Nova cannot drive right now (${chassis.detail}). She can still talk, but she cannot walk anyone " +
+                "Otto cannot drive right now (${chassis.detail}). He can still talk, but he cannot walk anyone " +
                     "anywhere; the reception desk helps.",
             )
             checkIn != null -> {
@@ -298,7 +298,7 @@ data class UiState(
                 checkIn.room?.let { appendLine("Chosen: ${it.label} (${it.name}).") }
             }
             else -> appendLine(
-                "Welcome screen: Nova can check visitors in for a room, walk them to public places, " +
+                "Welcome screen: Otto can check visitors in for a room, walk them to public places, " +
                     "tell them about their wait by ticket and call a team member.",
             )
         }
