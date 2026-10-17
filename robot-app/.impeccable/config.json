@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "robot-app/remote/src/main/assets/web/index.html"
+        ],
+        "createdAt": "2026-10-17T08:07:50.578Z",
+        "reason": "model decided: #screen <img> is populated at runtime from websocket jpeg frames via object URLs (see app.js), not a static asset"
+      }
+    ]
+  }
+}

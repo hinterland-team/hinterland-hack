@@ -7,6 +7,14 @@
       "module": "app",
       "package": "com.hinterland.relay",
       "launch": "home"
+    },
+    {
+      "id": "nova-remote",
+      "name": "Nova Remote",
+      "project": "robot-app",
+      "module": "remote",
+      "package": "com.novaremote.agent",
+      "launch": "home"
     }
   ]
 }

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Nova Remote</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- pairing -->
+  <section id="pair" class="card">
+    <h1>Nova Remote</h1>
+    <p class="muted">Enter the 9-digit code shown on the robot.</p>
+    <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="9" placeholder="123456789" />
+    <button id="pairBtn">Connect</button>
+    <p id="pairMsg" class="msg"></p>
+  </section>
+
+  <!-- control -->
+  <main id="control" hidden>
+    <header>
+      <strong>Nova Remote</strong>
+      <span id="stat" class="muted"></span>
+    </header>
+
+    <div class="grid">
+      <div class="screenWrap">
+        <img id="screen" alt="robot screen" />
+        <p id="screenHint" class="muted">Press <b>Start screen view</b> on the robot, then tap here to tap there.</p>
+      </div>
+
+      <aside>
+        <div class="pad">
+          <button class="nav" data-key="recents">▭ Recents</button>
+          <button class="nav" data-key="home">● Home</button>
+          <button class="nav" data-key="back">‹ Back</button>
+        </div>
+
+        <h2>Drive <span class="muted">(hold arrow keys)</span></h2>
+        <div class="dpad">
+          <button data-dir="forward">▲</button>
+          <div class="row">
+            <button data-dir="left">◀</button>
+            <button data-dir="stop" class="stop">■</button>
+            <button data-dir="right">▶</button>
+          </div>
+          <button data-dir="back">▼</button>
+        </div>
+
+        <h2>Type into focused field</h2>
+        <div class="typeRow">
+          <input id="text" placeholder="text…" />
+          <button id="typeBtn">Send</button>
+        </div>
+
+        <h2>Install an app</h2>
+        <label id="drop" class="drop">Drop an .apk here, or tap to pick
+          <input id="apk" type="file" accept=".apk" hidden />
+        </label>
+        <p id="installMsg" class="msg"></p>
+
+        <h2>Apps on the robot</h2>
+        <button id="refreshApps" class="small">Refresh</button>
+        <ul id="apps"></ul>
+      </aside>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

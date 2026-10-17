@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nova Remote</string>
+    <string name="a11y_label">Nova Remote (remote taps)</string>
+    <string name="a11y_description">Lets you tap, swipe and type on this robot from a paired laptop on the same Wi-Fi. You turn it on here and can turn it off any time. It only acts on commands from a device that entered the 9-digit code shown on the robot.</string>
+</resources>

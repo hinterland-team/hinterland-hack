@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "robot-app"
 include(":app")
+include(":remote")
