@@ -21,6 +21,8 @@ data class Place(
     val active: Boolean = true,
     val selfCheckIn: Boolean = false,
     val waitingPlaceId: String? = null,
+    // optional waypoint nova tries once when the way to this place is blocked (docs/journeys.md 6.6)
+    val viaSpot: String? = null,
 ) {
     // what nova calls it: "Room B204" when it has a room number, else its name
     val label: String get() = room?.let { "Room $it" } ?: name

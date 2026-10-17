@@ -15,7 +15,7 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { JourneyWithQueue, Pace, Place, RobotCommand, RobotScreen as Screen } from "@/lib/types";
-import { PACE_LABEL, PAGE, clockTime, placeText } from "@/lib/ui";
+import { PACE_LABEL, PAGE, WALK_ACTION_DONE, WALK_ACTION_LABEL, clockTime, placeText } from "@/lib/ui";
 import { Button, Segmented, Switch } from "../components/button";
 import { RobotScreen } from "../components/robot-screen";
 import {
@@ -213,10 +213,24 @@ export function SimulateClient() {
             ) : (
               <div className="mt-4 rounded-xl border border-line p-4">
                 <p className="text-sm font-semibold text-muted">
-                  {command.type === "say" ? "Say out loud" : command.type === "ask" ? "Staff told Nova" : "Drive to"}
+                  {command.type === "say"
+                    ? "Say out loud"
+                    : command.type === "ask"
+                      ? command.origin === "phone"
+                        ? "The patient asked on the phone"
+                        : "Staff told Nova"
+                      : command.type === "walk_control"
+                        ? command.origin === "phone"
+                          ? "The patient tapped on the phone"
+                          : "Staff tapped on the board"
+                        : "Drive to"}
                 </p>
                 <p className="mt-1 text-lg font-semibold break-words">
-                  {command.type === "go_to" ? command.spot : `“${command.text}”`}
+                  {command.type === "go_to"
+                    ? command.spot
+                    : command.type === "walk_control"
+                      ? WALK_ACTION_LABEL[command.action]
+                      : `“${command.text}”`}
                 </p>
                 <Button
                   kind="primary"
@@ -228,6 +242,8 @@ export function SimulateClient() {
                       if (command.type === "ask")
                         await feed([{ who: "nova", kind: "action", text: `Thinking about: ${command.text}` }]);
                       if (command.type === "go_to") await beat({ state: "idle", goal: null, position: command.spot });
+                      if (command.type === "walk_control")
+                        await feed([{ who: "nova", kind: "action", text: WALK_ACTION_DONE[command.action] }]);
                       await finish();
                     })
                   }

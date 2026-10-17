@@ -1,5 +1,7 @@
+import type { MapFrame, NewLog } from "./robot-data";
 import type {
   Counters,
+  FeedItem,
   HelpRequest,
   HelpStatus,
   Journey,
@@ -7,6 +9,9 @@ import type {
   JourneyStatus,
   Leg,
   LegStatus,
+  LogLevel,
+  LogLine,
+  MapState,
   Place,
   RobotCommand,
   RobotHeartbeat,
@@ -18,6 +23,8 @@ export type PlacePatch = Partial<Pick<Place, "name" | "spot" | "kind" | "public"
   room?: string | null;
   teamsWebhookUrl?: string | null;
   waitingPlaceId?: string | null;
+  viaSpot?: string | null;
+  notifyEmail?: string | null;
 };
 
 // a journey as stored. version guards against two writers at the same time
@@ -39,12 +46,25 @@ export type NewJourney = Omit<Journey, "legs" | "events"> & { ticketDay: string 
 export type RobotRecord = { lastSeenAt?: string; heartbeat?: RobotHeartbeat };
 
 export type PurgeCutoffs = {
-  // journeys ended before this, done help requests, old say/go_to/ask commands
+  // journeys ended before this, done help requests, old say/go_to/ask commands, feed lines
   ended: string;
   // open journeys untouched since this (forgotten ones)
   stale: string;
-  // login failures older than this
+  // login failures and rate limit hits older than this
   logins: string;
+  // log lines and map frames received before this
+  logs: string;
+};
+
+export type LogQuery = {
+  robot: string;
+  // only lines with an id above (live tail, oldest first) or below (older pages, newest first)
+  after?: number;
+  before?: number;
+  levels?: LogLevel[];
+  sources?: string[];
+  search?: string;
+  limit: number;
 };
 
 export interface Store {
@@ -96,6 +116,29 @@ export interface Store {
   countLoginFailures(key: string, since: string): Promise<number>;
   addLoginFailure(key: string, at: string): Promise<void>;
   clearLoginFailures(key: string): Promise<void>;
+
+  // the open or closed journey with that phone code
+  findJourneyByWalkCode(code: string): Promise<StoredJourney | null>;
+
+  // log lines from the robot. drops lines received before keepSince and all but the newest maxRows per robot
+  addLogs(robot: string, items: NewLog[], receivedAt: string, keepSince: string, maxRows: number): Promise<number>;
+  // always oldest first
+  listLogs(query: LogQuery): Promise<LogLine[]>;
+  countLogs(robot: string, levels: LogLevel[], since: string): Promise<{ count: number; lastAt: string | null }>;
+
+  // latest map frame per robot plus a trail of the last poses (a new map name starts a new trail)
+  saveMap(frame: MapFrame, trailMax: number): Promise<MapState>;
+  getMap(robot: string): Promise<MapState | null>;
+
+  // nova's lines and understood intents (never what a patient said word for word). newest maxPerRobot kept
+  addFeedItems(robot: string, items: FeedItem[], maxPerRobot: number, since: string): Promise<void>;
+  // newest first, only items at or after since
+  listFeedItems(robot: string, limit: number, since: string): Promise<FeedItem[]>;
+  deleteFeedForJourney(journeyId: string): Promise<void>;
+
+  // generic rate limit counter per hashed key
+  countHits(key: string, since: string): Promise<number>;
+  addHit(key: string, at: string): Promise<void>;
 
   // retention. returns the ids of the journeys that were deleted
   purge(cutoffs: PurgeCutoffs): Promise<string[]>;

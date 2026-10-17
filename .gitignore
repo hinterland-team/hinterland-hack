@@ -22,3 +22,6 @@ Thumbs.db
 
 # personal drafts
 docs/mail-*.txt
+
+# pitch deck + generated media (large)
+pitch/

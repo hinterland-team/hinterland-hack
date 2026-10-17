@@ -1,6 +1,16 @@
 // in-memory store for local demos. only type imports here so tests can load it directly
-import type { JourneyChange, NewJourney, PlacePatch, PurgeCutoffs, Store, StoredJourney } from "./store-types";
-import type { Counters, HelpRequest, Place, RobotCommand, RobotHeartbeat, StatsRow } from "./types";
+import type { JourneyChange, LogQuery, NewJourney, PlacePatch, PurgeCutoffs, Store, StoredJourney } from "./store-types";
+import type {
+  Counters,
+  FeedItem,
+  HelpRequest,
+  LogLine,
+  MapState,
+  Place,
+  RobotCommand,
+  RobotHeartbeat,
+  StatsRow,
+} from "./types";
 
 type Data = {
   places: Place[];
@@ -12,6 +22,11 @@ type Data = {
   stats: Record<string, StatsRow & { day: string }>;
   settings: Record<string, string>;
   logins: { key: string; at: string }[];
+  logs: (LogLine & { receivedAt: string })[];
+  logSeq: number;
+  maps: Record<string, MapState>;
+  feed: FeedItem[];
+  hits: { key: string; at: string }[];
 };
 
 const fresh = (): Data => ({
@@ -24,6 +39,11 @@ const fresh = (): Data => ({
   stats: {},
   settings: {},
   logins: [],
+  logs: [],
+  logSeq: 0,
+  maps: {},
+  feed: [],
+  hits: [],
 });
 
 // lives on globalThis so it survives hot reload. gone on restart.
@@ -31,6 +51,10 @@ const fresh = (): Data => ({
 const g = globalThis as unknown as { __novaClinic?: unknown; __novaClinicV3?: Data };
 delete g.__novaClinic;
 const data: Data = (g.__novaClinicV3 ??= fresh());
+// after a hot reload the data from before has no v3.2 lists yet
+for (const [key, value] of Object.entries(fresh())) {
+  if (!(key in data)) (data as Record<string, unknown>)[key] = value;
+}
 
 const copy = <T>(value: T): T => structuredClone(value);
 const closed = (s: string) => s === "done" || s === "cancelled";
@@ -70,7 +94,7 @@ export const memoryStore: Store = {
     for (const key of ["name", "spot", "kind", "public", "avgMinutes", "active", "selfCheckIn"] as const) {
       if (patch[key] !== undefined) (p as Record<string, unknown>)[key] = patch[key];
     }
-    for (const key of ["room", "teamsWebhookUrl", "waitingPlaceId"] as const) {
+    for (const key of ["room", "teamsWebhookUrl", "waitingPlaceId", "viaSpot", "notifyEmail"] as const) {
       if (patch[key] === undefined) continue;
       if (patch[key]) p[key] = patch[key] as string;
       else delete p[key];
@@ -141,7 +165,10 @@ export const memoryStore: Store = {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
     if (!c) return null;
     c.deliveredAt = now;
-    return copy(c);
+    const out = copy(c);
+    // what a patient typed on the phone stays only until nova has it
+    if (c.type === "ask" && c.origin === "phone") c.text = "";
+    return out;
   },
   async finishCommand(id, now) {
     const c = data.commands.find((x) => x.id === id);
@@ -151,7 +178,7 @@ export const memoryStore: Store = {
   },
   async closeJourneyCommands(journeyId, now, onlyUndelivered) {
     for (const c of data.commands) {
-      if (c.type !== "guide" || c.journeyId !== journeyId || c.doneAt) continue;
+      if (!("journeyId" in c) || c.journeyId !== journeyId || c.doneAt) continue;
       if (onlyUndelivered && c.deliveredAt) continue;
       c.doneAt = now;
     }
@@ -243,16 +270,114 @@ export const memoryStore: Store = {
     data.logins = data.logins.filter((l) => l.key !== key);
   },
 
+  async findJourneyByWalkCode(code) {
+    const j = data.journeys.find((x) => x.walkCode === code);
+    return j ? outJourney(j) : null;
+  },
+
+  async addLogs(robot, items, receivedAt, keepSince, maxRows) {
+    for (const i of items) data.logs.push({ id: ++data.logSeq, robot, ...i, receivedAt });
+    const mine = data.logs.filter((l) => l.robot === robot && l.receivedAt >= keepSince);
+    const keep = new Set(mine.slice(-maxRows).map((l) => l.id));
+    data.logs = data.logs.filter((l) => l.robot !== robot || keep.has(l.id));
+    return items.length;
+  },
+  async listLogs(q: LogQuery) {
+    const search = q.search?.toLowerCase();
+    const match = data.logs.filter(
+      (l) =>
+        l.robot === q.robot &&
+        (q.after === undefined || l.id > q.after) &&
+        (q.before === undefined || l.id < q.before) &&
+        (!q.levels || q.levels.includes(l.level)) &&
+        (!q.sources || q.sources.includes(l.source)) &&
+        (!search || l.text.toLowerCase().includes(search)),
+    );
+    const page = q.after !== undefined ? match.slice(0, q.limit) : match.slice(-q.limit);
+    return page.map((l) => {
+      const out: LogLine & { receivedAt?: string } = copy(l);
+      delete out.receivedAt;
+      return out;
+    });
+  },
+  async countLogs(robot, levels, since) {
+    const list = data.logs.filter((l) => l.robot === robot && levels.includes(l.level) && l.receivedAt >= since);
+    return { count: list.length, lastAt: list.map((l) => l.at).sort().at(-1) ?? null };
+  },
+
+  async saveMap(f, trailMax) {
+    const before = data.maps[f.robot];
+    const newMap = Boolean(before && f.mapName && before.mapName !== f.mapName);
+    const last = newMap ? undefined : before?.trail.at(-1);
+    const moved = !last || Math.abs(last.x - f.pose.x) >= 0.05 || Math.abs(last.y - f.pose.y) >= 0.05;
+    const trail = newMap || !before ? [] : [...before.trail];
+    if (moved) trail.push({ x: f.pose.x, y: f.pose.y, at: f.at });
+    const map: MapState = {
+      robot: f.robot,
+      pose: f.pose,
+      places: f.places ?? (newMap ? [] : (before?.places ?? [])),
+      scan: f.scan,
+      trail: trail.slice(-trailMax),
+      updatedAt: f.at,
+    };
+    const name = f.mapName ?? before?.mapName;
+    if (name) map.mapName = name;
+    if (f.follower) map.follower = f.follower;
+    if (f.target) map.target = f.target;
+    if (f.remainingMeters !== undefined) map.remainingMeters = f.remainingMeters;
+    data.maps[f.robot] = copy(map);
+    return map;
+  },
+  async getMap(robot) {
+    const m = data.maps[robot];
+    return m ? copy(m) : null;
+  },
+
+  async addFeedItems(robot, items, maxPerRobot, since) {
+    data.feed.push(...copy(items));
+    data.feed.sort((a, b) => a.at.localeCompare(b.at));
+    const mine = data.feed.filter((i) => i.robot === robot && i.at >= since);
+    const keep = new Set(mine.slice(-maxPerRobot).map((i) => i.id));
+    data.feed = data.feed.filter((i) => i.robot !== robot || keep.has(i.id));
+  },
+  async listFeedItems(robot, limit, since) {
+    return copy(
+      data.feed
+        .filter((i) => i.robot === robot && i.at >= since)
+        .slice(-limit)
+        .reverse(),
+    );
+  },
+  async deleteFeedForJourney(journeyId) {
+    data.feed = data.feed.filter((i) => i.journeyId !== journeyId);
+  },
+
+  async countHits(key, since) {
+    return data.hits.filter((h) => h.key === key && h.at >= since).length;
+  },
+  async addHit(key, at) {
+    data.hits.push({ key, at });
+  },
+
   async purge(c: PurgeCutoffs) {
     const gone = data.journeys.filter((j) => (j.endedAt && j.endedAt < c.ended) || j.updatedAt < c.stale).map((j) => j.id);
+    const set = new Set(gone);
     if (gone.length) {
-      const set = new Set(gone);
       data.journeys = data.journeys.filter((j) => !set.has(j.id));
-      data.commands = data.commands.filter((x) => x.type !== "guide" || !set.has(x.journeyId));
+      data.commands = data.commands.filter((x) => !("journeyId" in x && x.journeyId && set.has(x.journeyId)));
     }
-    data.commands = data.commands.filter((x) => x.type === "guide" || (x.doneAt ?? x.createdAt) >= c.ended);
+    // commands of a journey go with it, the others after 12 h
+    data.commands = data.commands.filter(
+      (x) => ("journeyId" in x && x.journeyId) || (x.doneAt ?? x.createdAt) >= c.ended,
+    );
     data.help = data.help.filter((h) => !(h.handledAt && h.handledAt < c.ended) && h.createdAt >= c.stale);
     data.logins = data.logins.filter((l) => l.at >= c.logins);
+    data.hits = data.hits.filter((h) => h.at >= c.logins);
+    data.feed = data.feed.filter((i) => i.at >= c.ended && !(i.journeyId && set.has(i.journeyId)));
+    if (c.logs) {
+      data.logs = data.logs.filter((l) => l.receivedAt >= c.logs);
+      for (const [robot, m] of Object.entries(data.maps)) if (m.updatedAt < c.logs) delete data.maps[robot];
+    }
     return gone;
   },
 };

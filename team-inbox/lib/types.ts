@@ -30,6 +30,10 @@ export type Place = {
   waitingPlaceId?: string;
   // shown to patients on the robot's check-in screen
   selfCheckIn: boolean;
+  // a map spot nova tries once when the normal way is blocked
+  viaSpot?: string;
+  // second channel next to teams (needs RESEND_API_KEY + EMAIL_FROM)
+  notifyEmail?: string;
   createdAt: string;
 };
 
@@ -54,6 +58,9 @@ export const EVENT_TYPES = [
   "teams_notified",
   "teams_skipped",
   "teams_failed",
+  "email_sent",
+  "email_failed",
+  "walk_control",
   "robot_assigned",
   "pickup_started",
   "patient_confirmed",
@@ -103,6 +110,8 @@ export type Journey = {
   updatedAt: string;
   endedAt?: string;
   events: JourneyEvent[];
+  // 8 random characters for the patient's phone page (/walk/<code>). valid while the journey is open
+  walkCode?: string;
 };
 
 export type QueueInfo = { queuePosition: number | null; estimatedWaitMinutes: number | null };
@@ -119,12 +128,24 @@ export type GuideCommand = CommandBase & {
   pace: Pace;
   wheelchair: boolean;
   from: { name: string; spot: string };
-  to: { name: string; spot: string; room?: string };
+  to: { name: string; spot: string; room?: string; viaSpot?: string };
+  walkCode?: string;
+  // absolute link of the phone page for the qr code. added on the way out, not stored
+  walkUrl?: string;
 };
 export type SayCommand = CommandBase & { type: "say"; text: string };
-export type AskCommand = CommandBase & { type: "ask"; text: string };
+// origin phone = the patient typed or said it on the walk page. its text is wiped once nova has it
+export type AskCommand = CommandBase & { type: "ask"; text: string; journeyId?: string; origin?: "staff" | "phone" };
 export type GoToCommand = CommandBase & { type: "go_to"; spot: string };
-export type RobotCommand = GuideCommand | SayCommand | AskCommand | GoToCommand;
+export const WALK_ACTIONS = ["wait", "resume", "slower", "faster"] as const;
+export type WalkAction = (typeof WALK_ACTIONS)[number];
+export type WalkControlCommand = CommandBase & {
+  type: "walk_control";
+  journeyId: string;
+  action: WalkAction;
+  origin?: "staff" | "phone";
+};
+export type RobotCommand = GuideCommand | SayCommand | AskCommand | GoToCommand | WalkControlCommand;
 
 // ---------- robot status
 
@@ -146,6 +167,10 @@ export type RobotHeartbeat = {
   goal: string | null;
   detail: string | null;
   screen: RobotScreen | null;
+  // which server address the robot uses right now (it picks the first that answers /api/health)
+  server: string | null;
+  // the nova clinic app version on the robot
+  version: string | null;
   at: string;
 };
 
@@ -158,6 +183,8 @@ export type RobotStatus = {
   goal?: string | null;
   detail?: string | null;
   screen?: RobotScreen | null;
+  server?: string | null;
+  version?: string | null;
   lastSeenAt?: string;
   online: boolean;
 };
@@ -175,6 +202,73 @@ export type FeedItem = {
   kind: (typeof FEED_KINDS)[number];
   text: string;
 };
+
+// ---------- robot logs (db, 24 h / 5000 rows per robot, never patient words)
+
+export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
+export const LOG_SOURCES = ["app", "net", "nav", "voice", "brain", "vision", "lidar"] as const;
+export type LogSource = (typeof LOG_SOURCES)[number];
+export const LOG_KEEP_HOURS = 24;
+export const LOG_MAX_ROWS = 5000;
+
+export type LogLine = { id: number; robot: string; at: string; level: LogLevel; source: LogSource; text: string };
+
+// "warn" -> ["warn", "error"]
+export function levelsFrom(min: LogLevel): LogLevel[] {
+  return LOG_LEVELS.slice(LOG_LEVELS.indexOf(min));
+}
+
+// ---------- live map (latest frame per robot + a short trail of poses)
+
+export const MAP_SCAN_MAX = 240;
+export const MAP_TRAIL_MAX = 120;
+export const MAP_PLACES_MAX = 200;
+
+export type MapPose = { x: number; y: number; theta: number };
+export type MapPoint = { x: number; y: number };
+export type MapSpot = { name: string; x: number; y: number };
+export type MapFollower = { x: number; y: number; source: "lidar" | "camera" };
+export type MapTrailPoint = { x: number; y: number; at: string };
+
+export type MapState = {
+  robot: string;
+  mapName?: string;
+  pose: MapPose;
+  places: MapSpot[];
+  scan: [number, number][];
+  follower?: MapFollower;
+  target?: MapSpot;
+  remainingMeters?: number;
+  trail: MapTrailPoint[];
+  updatedAt: string;
+};
+
+// ---------- patient phone page
+
+// no 0/O, 1/I/L: easy to read out and type
+export const WALK_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+export const WALK_CODE_LENGTH = 8;
+export const WALK_CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/;
+
+// bytes from crypto.getRandomValues. 31^8 codes, rejection keeps every letter equally likely
+export function walkCodeFrom(bytes: Uint8Array) {
+  const n = WALK_CODE_ALPHABET.length;
+  const limit = 256 - (256 % n);
+  let out = "";
+  for (const b of bytes) {
+    if (b >= limit) continue;
+    out += WALK_CODE_ALPHABET[b % n];
+    if (out.length === WALK_CODE_LENGTH) return out;
+  }
+  return null;
+}
+
+export function normalizeWalkCode(value: unknown) {
+  if (typeof value !== "string") return null;
+  const code = value.trim().toUpperCase();
+  return WALK_CODE_RE.test(code) ? code : null;
+}
 
 // ---------- help
 
@@ -425,6 +519,8 @@ export function robotStatus(
     goal: beat?.goal ?? null,
     detail: beat?.detail ?? null,
     screen: beat?.screen ?? null,
+    server: beat?.server ?? null,
+    version: beat?.version ?? null,
     lastSeenAt: seen,
     online: now - Date.parse(seen) <= ROBOT_ONLINE_SECONDS * 1000,
   };

@@ -19,7 +19,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-enum class GlyphKind { ROUTE, DOOR, PERSON, CHECK, LOCK, MIC, THUMB_UP, THUMB_DOWN, WHEELCHAIR, PACE_1, PACE_2, PACE_3, TICKET, BACK }
+enum class GlyphKind { ROUTE, DOOR, PERSON, CHECK, LOCK, MIC, THUMB_UP, THUMB_DOWN, WHEELCHAIR, PACE_1, PACE_2, PACE_3, TICKET, BACK, PAUSE, PHONE, PLUG, CLOSE }
 
 // simple line icons, all on one 24-unit grid with round caps
 @Composable
@@ -108,6 +108,33 @@ fun Glyph(kind: GlyphKind, color: Color, size: Dp = 32.dp, modifier: Modifier = 
                 }
                 drawPath(path, color, style = stroke)
                 drawLine(color, p(14f, 8f), p(14f, 16f), 1.6f * u, StrokeCap.Round, PathEffect.dashPathEffect(floatArrayOf(1.6f * u, 2f * u)))
+            }
+            GlyphKind.PAUSE -> {
+                drawRoundRect(color, p(6.5f, 5f), Size(3.6f * u, 14f * u), CornerRadius(1.4f * u))
+                drawRoundRect(color, p(13.9f, 5f), Size(3.6f * u, 14f * u), CornerRadius(1.4f * u))
+            }
+            GlyphKind.PHONE -> {
+                drawRoundRect(color, p(6.5f, 2.5f), Size(11f * u, 19f * u), CornerRadius(2.4f * u), style = stroke)
+                drawLine(color, p(10.5f, 18.2f), p(13.5f, 18.2f), 2.2f * u, StrokeCap.Round)
+            }
+            GlyphKind.PLUG -> {
+                // a plug with its cable: "driving is switched off"
+                drawLine(color, p(9f, 3f), p(9f, 7f), 2.2f * u, StrokeCap.Round)
+                drawLine(color, p(15f, 3f), p(15f, 7f), 2.2f * u, StrokeCap.Round)
+                val body = Path().apply {
+                    moveTo(5.5f * u, 7f * u)
+                    lineTo(18.5f * u, 7f * u)
+                    lineTo(18.5f * u, 10.5f * u)
+                    cubicTo(18.5f * u, 14.5f * u, 15.5f * u, 16.5f * u, 12f * u, 16.5f * u)
+                    cubicTo(8.5f * u, 16.5f * u, 5.5f * u, 14.5f * u, 5.5f * u, 10.5f * u)
+                    close()
+                }
+                drawPath(body, color, style = stroke)
+                drawLine(color, p(12f, 16.5f), p(12f, 21f), 2.2f * u, StrokeCap.Round)
+            }
+            GlyphKind.CLOSE -> {
+                drawLine(color, p(6f, 6f), p(18f, 18f), 2.4f * u, StrokeCap.Round)
+                drawLine(color, p(18f, 6f), p(6f, 18f), 2.4f * u, StrokeCap.Round)
             }
             GlyphKind.BACK -> {
                 drawLine(color, p(19f, 12f), p(5f, 12f), 2.4f * u, StrokeCap.Round)

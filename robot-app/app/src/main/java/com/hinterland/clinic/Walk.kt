@@ -1,5 +1,6 @@
 package com.hinterland.clinic
 
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.hypot
 import kotlin.math.max
@@ -34,7 +35,8 @@ object LegStatus {
 // counts driving time between check-backs. blocked time and stops (check-back, pause) do not count.
 // right after nova had to wait for an obstacle a check-back is due at once.
 class CheckBackClock(
-    private val everyMs: Long = EVERY_MS,
+    // driving time until the next check-back; the adaptive schedule changes it on the way
+    var everyMs: Long = EVERY_MS,
     private val obstacleMinMs: Long = OBSTACLE_MIN_MS,
 ) {
     private var driven = 0L
@@ -89,8 +91,6 @@ object CheckBack {
 
     const val CLOSE_M = 3.0
     const val FAR_M = 6.0
-    // near the destination the arrival itself is the check
-    const val SKIP_FROM_PROGRESS = 0.92f
 
     // nearest person over a few looks. null = the vision api gave nothing at all (not "nobody")
     fun nearest(samples: List<List<Double>?>): Double? =
@@ -117,7 +117,301 @@ object CheckBack {
         Proximity.NOBODY -> listOf(JourneyEvent.LOST_PATIENT)
     }
 
-    fun shouldSkip(progress: Float?): Boolean = progress != null && progress >= SKIP_FROM_PROGRESS
+    // camera first (it is what the turn is for); the radar in front of nova backs it up when the camera
+    // sees nobody, for example in a dim corridor. lidarAhead = nearest leg-like shape after the turn.
+    fun decide(samples: List<List<Double>?>, lidarAhead: Double?): Proximity {
+        val camera = classify(samples)
+        if (camera == Proximity.CLOSE || camera == Proximity.FAR) return camera
+        val d = lidarAhead?.takeIf { it > 0.0 } ?: return camera
+        return when {
+            d <= CLOSE_M -> Proximity.CLOSE
+            d <= FAR_M -> Proximity.FAR
+            else -> camera
+        }
+    }
+
+    // the nearest distance from both sensors, null when neither saw anyone
+    fun nearestOf(camera: Double?, lidar: Double?): Double? =
+        listOfNotNull(camera?.takeIf { it > 0.0 }, lidar?.takeIf { it > 0.0 }).minOrNull()
+}
+
+// why nova turns around now (docs/journeys.md 6.3)
+enum class CheckReason(val detail: String) {
+    FIRST("first check after the start"),
+    REGULAR("regular check"),
+    TURN("after a turn"),
+    OBSTACLE("after waiting for an obstacle"),
+    FOLLOWER_LOST("nobody behind on the radar"),
+}
+
+// the adaptive check-back schedule (docs/journeys.md 6.3): the first check 10 s after the start, then
+// 10-30 s depending on how close the patient was last, plus one check right after a turn of more than
+// 45 deg (not the turn on the spot every drive starts with) and one right after an obstacle wait.
+// the radar watch can ask for one at any time.
+// field test 17.10: a 34 s walk had no check at all (25 s of "driving" never added up). so the time
+// counts all navigation time (a blocked flag that never clears can't stop it), and nova builds trust
+// step by step: the second check comes at most 15 s after the first, then 20 s, 25 s, 30 s.
+class CheckSchedule(
+    private val firstMs: Long = FIRST_MS,
+    private val turnDeg: Double = TURN_DEG,
+    private val minGapMs: Long = MIN_GAP_MS,
+) {
+    // only for "nova had to wait for an obstacle"; its own time count is not used
+    private val obstacles = CheckBackClock(Long.MAX_VALUE)
+    private var elapsed = 0L
+    private var lastTick: Long? = null
+    private var stretchStart = 0L
+    private var checks = 0
+    private var lastDistance: Double? = null
+    private var refHeading: Double? = null
+    private var turnPending = false
+    private var turnedDeg = 0.0
+    private var settleHeading = 0.0
+    private var settleSince = 0L
+    private var lostWanted = false
+
+    // navigation time from the last check (or the start) until the next one
+    var intervalMs: Long = firstMs
+        private set
+    val checksDone: Int get() = checks
+    val elapsedMs: Long get() = elapsed
+    // how much the last turn was, for the log
+    val lastTurnDeg: Double get() = turnedDeg
+
+    fun nextInMs(): Long = (intervalMs - elapsed).coerceAtLeast(0)
+
+    // every quarter second while navigating. heading = robot theta in radians (null when unknown)
+    fun tick(now: Long, blocked: Boolean, heading: Double?) {
+        obstacles.tick(now, blocked)
+        val last = lastTick
+        if (last == null) stretchStart = now else elapsed += (now - last).coerceIn(0, MAX_STEP_MS)
+        lastTick = now
+        if (heading == null) return
+        val ref = refHeading
+        // every drive starts by turning on the spot towards the path: that is no corner
+        if (ref == null || (!turnPending && now - stretchStart < TURN_ARM_MS)) {
+            refHeading = heading
+            return
+        }
+        val fromRef = Math.toDegrees(abs(ScanMath.wrap(heading - ref)))
+        if (!turnPending && fromRef > turnDeg) {
+            turnPending = true
+            settleHeading = heading
+            settleSince = now
+        } else if (turnPending && Math.toDegrees(abs(ScanMath.wrap(heading - settleHeading))) > SETTLE_DEG) {
+            // still turning
+            settleHeading = heading
+            settleSince = now
+        }
+        if (turnPending) turnedDeg = fromRef
+    }
+
+    // nova stopped driving (check-back, pause, new pace): the next tick starts a new stretch
+    fun pause() {
+        obstacles.pause()
+        lastTick = null
+    }
+
+    // the radar lost the follower
+    fun followerLost() {
+        lostWanted = true
+    }
+
+    // the latest patient distance from the radar: closer = longer between checks.
+    // true when the next check moved by 5 s or more (worth a log line)
+    fun noteDistance(d: Double?): Boolean {
+        if (d == null || d <= 0.0) return false
+        lastDistance = d
+        if (checks == 0) return false
+        val next = intervalAfter(checks, d)
+        val moved = abs(next - intervalMs) >= LOG_CHANGE_MS
+        intervalMs = next
+        return moved
+    }
+
+    fun due(now: Long): CheckReason? {
+        if (lostWanted) return CheckReason.FOLLOWER_LOST
+        val gapOk = checks == 0 || elapsed >= minGapMs
+        if (obstacles.obstacleWasReason() && gapOk) return CheckReason.OBSTACLE
+        if (turnPending && now - settleSince >= TURN_SETTLE_MS && gapOk) return CheckReason.TURN
+        if (elapsed >= intervalMs) return if (checks == 0) CheckReason.FIRST else CheckReason.REGULAR
+        return null
+    }
+
+    // a check-back happened; distance = how far the patient was (null = unknown)
+    fun done(distance: Double?, heading: Double?) {
+        checks++
+        distance?.takeIf { it > 0.0 }?.let { lastDistance = it }
+        intervalMs = intervalAfter(checks, lastDistance)
+        restart(heading)
+    }
+
+    // near the destination: no turning around, just start the count again
+    fun skip(heading: Double?) = restart(heading)
+
+    private fun restart(heading: Double?) {
+        elapsed = 0
+        lastTick = null
+        obstacles.reset()
+        lostWanted = false
+        turnPending = false
+        turnedDeg = 0.0
+        refHeading = heading ?: refHeading
+    }
+
+    companion object {
+        const val FIRST_MS = 10_000L
+        const val MIN_MS = 10_000L
+        const val MAX_MS = 30_000L
+        const val UNKNOWN_MS = 20_000L
+        const val NEAR_M = 1.5
+        const val FAR_M = 3.0
+        const val TURN_DEG = 45.0
+        // the turn is over when the heading stays within this for TURN_SETTLE_MS
+        const val SETTLE_DEG = 8.0
+        const val TURN_SETTLE_MS = 1_500L
+        // turns in the first seconds of each drive are the robot facing its path
+        const val TURN_ARM_MS = 4_000L
+        // a turn or obstacle check needs this much navigation time since the last check
+        const val MIN_GAP_MS = 6_000L
+        // trust grows per check: at most 15 s after the first, +5 s per check, up to MAX_MS
+        const val RAMP_FIRST_MS = 15_000L
+        const val RAMP_STEP_MS = 5_000L
+        // a paused thread or a clock jump never counts as minutes
+        private const val MAX_STEP_MS = 2_000L
+        private const val LOG_CHANGE_MS = 5_000L
+
+        // 1.5 m or closer -> 30 s, 3 m or further -> 10 s, in between linear; unknown -> 20 s
+        fun intervalFor(distance: Double?): Long {
+            val d = distance?.takeIf { it > 0.0 } ?: return UNKNOWN_MS
+            if (d <= NEAR_M) return MAX_MS
+            if (d >= FAR_M) return MIN_MS
+            val f = (d - NEAR_M) / (FAR_M - NEAR_M)
+            return (MAX_MS - f * (MAX_MS - MIN_MS)).toLong()
+        }
+
+        // the interval after the n-th check: by distance, but never more than the trust ramp allows
+        fun intervalAfter(checks: Int, distance: Double?): Long {
+            val ramp = RAMP_FIRST_MS + RAMP_STEP_MS * (checks - 1).coerceAtLeast(0)
+            return minOf(intervalFor(distance), ramp, MAX_MS)
+        }
+    }
+}
+
+// no turning around in the last meters: the arrival itself is the check. the remaining straight-line
+// distance, not the progress share (a route round a corner reached 92 % far too early).
+object NearGoal {
+    const val SKIP_WITHIN_M = 2.0
+
+    fun skipCheck(here: Point?, dest: Point?): Boolean =
+        here != null && dest != null && here.distanceTo(dest) <= SKIP_WITHIN_M
+}
+
+enum class TalkStep { LISTEN, REPLY, DONE }
+
+// the short face-to-face talk at a check-back (docs/journeys.md 6.4): nova asked a yes/no question,
+// listens about 6 s, gives nova's ai time to answer when the patient spoke, then nova walks on.
+class TalkWindow(
+    private val startedAt: Long,
+    private val listenMs: Long = LISTEN_MS,
+    private val replyMaxMs: Long = REPLY_MAX_MS,
+) {
+    private var spokeAt: Long? = null
+    private var quietSince: Long? = null
+
+    // true once the patient spoke in this window
+    val answeredByVoice get() = spokeAt != null
+
+    // userSpokeAt = last time the mic heard the patient; talking = nova's ai is busy (thinking, speaking,
+    // an action); decided = the patient chose already (tap, pace change, wait)
+    fun next(now: Long, userSpokeAt: Long, talking: Boolean, decided: Boolean): TalkStep {
+        if (spokeAt == null && userSpokeAt >= startedAt) spokeAt = userSpokeAt
+        val spoke = spokeAt
+        if (spoke == null) {
+            if (decided) return TalkStep.DONE
+            return if (now - startedAt >= listenMs) TalkStep.DONE else TalkStep.LISTEN
+        }
+        // they spoke: wait for nova's answer, at most replyMaxMs after the last words
+        val lastWords = maxOf(spoke, userSpokeAt)
+        if (now - lastWords >= replyMaxMs) return TalkStep.DONE
+        if (talking || now - lastWords < REPLY_START_MS) {
+            quietSince = null
+            return TalkStep.REPLY
+        }
+        val q = quietSince ?: now.also { quietSince = it }
+        return if (now - q >= QUIET_END_MS) TalkStep.DONE else TalkStep.REPLY
+    }
+
+    // 0..1 of the listening time, for the ring on the screen
+    fun listened(now: Long): Float = ((now - startedAt).toFloat() / listenMs).coerceIn(0f, 1f)
+
+    companion object {
+        const val LISTEN_MS = 6_000L
+        const val REPLY_MAX_MS = 9_000L
+        // the planner needs a moment before it shows that it works on an answer
+        const val REPLY_START_MS = 1_500L
+        const val QUIET_END_MS = 1_200L
+    }
+}
+
+enum class BlockedStep { NONE, ASK, GIVE_UP }
+
+// something is in nova's way (docs/journeys.md 6.6): ask people to step aside, ask once more after
+// 10 s, give up on this way 8 s after the second ask (the guide then tries the place's viaSpot once,
+// then calls the team). blocked longer than 25 s in total during one drive also ends it.
+class BlockedWatch(
+    private val askEveryMs: Long = ASK_EVERY_MS,
+    private val maxAsks: Int = MAX_ASKS,
+    private val graceMs: Long = GRACE_AFTER_LAST_ASK_MS,
+    private val totalLimitMs: Long = TOTAL_LIMIT_MS,
+) {
+    private val clock = BlockedClock()
+    private var asks = 0
+    private var lastAskAt = 0L
+
+    val isBlocked: Boolean get() = clock.isBlocked()
+    val asksDone: Int get() = asks
+
+    fun blocked(now: Long) = clock.blocked(now)
+
+    fun clear(now: Long) {
+        clock.clear(now)
+        asks = 0
+    }
+
+    // the robot drove on while "blocked" (the end-of-obstacle status never came): it is not blocked.
+    // movedM = meters since the blocked status started. true when that cleared it
+    fun moved(now: Long, movedM: Double): Boolean {
+        if (!clock.isBlocked() || movedM < MOVED_CLEARS_M) return false
+        clear(now)
+        return true
+    }
+
+    fun step(now: Long): BlockedStep {
+        if (clock.total(now) > totalLimitMs) return BlockedStep.GIVE_UP
+        if (!clock.isBlocked()) return BlockedStep.NONE
+        if (asks == 0 || (asks < maxAsks && now - lastAskAt >= askEveryMs)) {
+            asks++
+            lastAskAt = now
+            return BlockedStep.ASK
+        }
+        if (asks >= maxAsks && now - lastAskAt >= graceMs) return BlockedStep.GIVE_UP
+        return BlockedStep.NONE
+    }
+
+    companion object {
+        const val ASK_EVERY_MS = 10_000L
+        const val MAX_ASKS = 2
+        const val GRACE_AFTER_LAST_ASK_MS = 8_000L
+        const val TOTAL_LIMIT_MS = 25_000L
+        const val MOVED_CLEARS_M = 0.5
+    }
+}
+
+// after a failed stretch: try the place's waypoint once when the way was blocked or had no path
+object Detour {
+    fun shouldTry(why: NavFailure, viaSpot: String?, tried: Boolean): Boolean =
+        !tried && !viaSpot.isNullOrBlank() && why in setOf(NavFailure.BLOCKED, NavFailure.NO_PATH)
 }
 
 enum class FarStep { WAIT, CAME, STILL_FAR, GONE }

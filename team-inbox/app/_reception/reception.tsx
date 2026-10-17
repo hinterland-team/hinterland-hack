@@ -1,14 +1,15 @@
 "use client";
 
-import { BellRinging, ThumbsDown, ThumbsUp } from "@phosphor-icons/react";
+import { BellRinging, ThumbsDown, ThumbsUp, WarningOctagon } from "@phosphor-icons/react";
 import type { Board } from "@/lib/board";
-import type { HelpRequest } from "@/lib/types";
+import type { HelpRequest, RobotStatus } from "@/lib/types";
 import { PAGE, clockTime, post, robotLabel } from "@/lib/ui";
 import { Button, Dot } from "../components/button";
 import { useAction, useBoard } from "../components/use-board";
 import { GuidePanel } from "./guide-panel";
 import { JourneysPanel } from "./journeys-panel";
-import { LivePanel } from "./live-panel";
+import { ControlsCard, ConversationCard, RobotCard } from "./live-panel";
+import { MapPanel } from "./map-panel";
 
 export function Reception() {
   const { data, offline, now, reload } = useBoard();
@@ -40,6 +41,8 @@ export function Reception() {
         </div>
       )}
 
+      {data && data.robot.online && data.robot.state === "error" && <OutOfService robot={data.robot} />}
+
       {data && data.help.length > 0 && (
         <div className="mb-4 grid gap-3">
           {data.help.map((h) => (
@@ -59,8 +62,11 @@ export function Reception() {
           <div className="mt-4 grid items-start gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] xl:grid-cols-[minmax(0,4fr)_minmax(0,5fr)_minmax(0,4fr)] xl:gap-5">
             <GuidePanel places={data.places} open={data.journeys} onSent={reload} />
             <JourneysPanel journeys={data.journeys} places={data.places} now={now} run={run} busy={busy} />
-            <div className="lg:col-span-2 xl:col-span-1">
-              <LivePanel data={data} now={now} run={run} busy={busy} />
+            <div className="grid items-start gap-4 lg:col-span-2 lg:grid-cols-2 xl:col-span-1 xl:grid-cols-1 xl:gap-5">
+              <RobotCard data={data} now={now} run={run} busy={busy} />
+              <MapPanel places={data.places} robot={data.robot} />
+              <ConversationCard data={data} run={run} />
+              <ControlsCard data={data} run={run} busy={busy} />
             </div>
           </div>
         </>
@@ -83,6 +89,22 @@ function LiveBadge({ offline, ready }: { offline: boolean; ready: boolean }) {
     <span className="inline-flex h-9 items-center gap-2 rounded-full bg-ok-soft px-3 text-sm font-semibold text-ok">
       <Dot className="bg-ok" live={ready} /> Live
     </span>
+  );
+}
+
+function OutOfService({ robot }: { robot: RobotStatus }) {
+  return (
+    <div role="alert" className="rise mb-4 flex flex-wrap items-center gap-4 rounded-2xl border-2 border-danger bg-danger-soft px-4 py-4 sm:px-6">
+      <WarningOctagon size={32} weight="fill" aria-hidden className="text-danger" />
+      <div className="min-w-0 flex-1 basis-60">
+        <p className="text-[17px] font-semibold text-danger">Out of service: {robotLabel(robot.robot)} can&apos;t drive right now</p>
+        <p className="text-[15px] break-words">{robot.detail ?? "The robot reported an error."}</p>
+        <p className="text-sm text-muted">
+          Not started from the home screen: start Nova Clinic again from there. Emergency stop, low battery or an update: check
+          the robot.
+        </p>
+      </div>
+    </div>
   );
 }
 

@@ -1,6 +1,7 @@
 import { event, now, retention, robotName, today } from "./common";
-import { clearFeedForJourney } from "./feed";
+import { cardToEmail, emailConfigured, sendEmail } from "./email";
 import { ApiError, type Caller, text } from "./http";
+import { clearJourneyFeed } from "./live-feed";
 import { getStore } from "./store";
 import type { JourneyChange, StoredJourney } from "./store-types";
 import { type CardLinks, onTheWayCard, placeLabel, robotLabel, sendToTeams, visitorCard, webhookFor } from "./teams";
@@ -15,6 +16,7 @@ import {
   type LegStatus,
   PACES,
   type Place,
+  type RobotCommand,
   ROBOT_LEG_STATUSES,
   ROOM_KINDS,
   currentLeg,
@@ -25,6 +27,7 @@ import {
   pickTicket,
   queueFor,
   statusForLeg,
+  walkCodeFrom,
 } from "./types";
 
 // the only fields a new journey takes. anything else (a name, a note) is refused, not ignored
@@ -94,6 +97,8 @@ async function addEvents(id: string, events: JourneyEvent[]) {
   await mutate(id, (j) => (isClosed(j.status) ? null : { updatedAt: now(), events }));
 }
 
+export const addJourneyEvents = addEvents;
+
 async function bump(placeId: string, delta: Partial<Counters>) {
   await getStore().bumpStats(today(), placeId, delta);
 }
@@ -126,7 +131,23 @@ function newLegTo(to: Place, from: { id: string | null; name?: string; spot?: st
   return leg;
 }
 
+// every guide command that leaves the server carries the absolute phone page link (the robot's qr code)
+export function withWalkUrl<C extends RobotCommand>(command: C, base: string): C {
+  if (command.type !== "guide" || !command.walkCode) return command;
+  return { ...command, walkUrl: `${base}/walk/${command.walkCode}` };
+}
+
+// 8 characters for the patient's phone page
+export function newWalkCode() {
+  for (;;) {
+    const code = walkCodeFrom(crypto.getRandomValues(new Uint8Array(24)));
+    if (code) return code;
+  }
+}
+
 async function queueGuide(j: Journey, leg: Leg) {
+  // the detour spot of the destination, for when the normal way is blocked
+  const place = await getStore().getPlace(leg.toPlaceId);
   const command: GuideCommand = {
     id: crypto.randomUUID(),
     robot: j.robot,
@@ -137,7 +158,13 @@ async function queueGuide(j: Journey, leg: Leg) {
     pace: j.pace,
     wheelchair: j.wheelchair,
     from: { name: leg.fromName ?? leg.toName, spot: leg.fromSpot ?? leg.toSpot },
-    to: { name: leg.toName, spot: leg.toSpot, ...(leg.toRoom ? { room: leg.toRoom } : {}) },
+    to: {
+      name: leg.toName,
+      spot: leg.toSpot,
+      ...(leg.toRoom ? { room: leg.toRoom } : {}),
+      ...(place?.viaSpot ? { viaSpot: place.viaSpot } : {}),
+    },
+    ...(j.walkCode ? { walkCode: j.walkCode } : {}),
     createdAt: now(),
   };
   return getStore().createCommand(command);
@@ -162,11 +189,24 @@ async function expectedIn(placeId: string) {
   return `about ${Math.max(1, Math.ceil(row.walkSeconds / row.walks / 60))} min`;
 }
 
-async function send(url: string | undefined, card: unknown, who: string): Promise<JourneyEvent> {
+async function sendTeams(url: string | undefined, card: unknown, who: string): Promise<JourneyEvent> {
   if (!url) return event("teams_skipped", `No Teams channel for ${who}, the board shows it`);
   return (await sendToTeams(url, card))
     ? event("teams_notified", `Teams card sent to ${who}`)
     : event("teams_failed", "Teams did not take the card");
+}
+
+// the same message by email when the place has an address and resend is set up
+async function sendMail(place: Place, card: unknown): Promise<JourneyEvent | null> {
+  if (!place.notifyEmail || !emailConfigured()) return null;
+  return (await sendEmail(place.notifyEmail, cardToEmail(card)))
+    ? event("email_sent", `Email sent to ${place.name}`)
+    : event("email_failed", `The email to ${place.name} did not go out`);
+}
+
+async function send(place: Place, card: unknown): Promise<JourneyEvent[]> {
+  const [teams, mail] = await Promise.all([sendTeams(webhookFor(place), card, place.name), sendMail(place, card)]);
+  return mail ? [teams, mail] : [teams];
 }
 
 // card when a leg starts: "A17 is on the way" to the destination. a walk to a waiting room
@@ -181,7 +221,7 @@ async function notifyLeg(j: Journey, leg: Leg, base: string) {
     return;
   }
   const card = onTheWayCard(j, to, await expectedIn(to.id), links(base, j, places));
-  await addEvents(j.id, [await send(webhookFor(to), card, to.name)]);
+  await addEvents(j.id, await send(to, card));
 }
 
 async function notifyVisitor(j: Journey, leg: Leg, base: string) {
@@ -190,12 +230,18 @@ async function notifyVisitor(j: Journey, leg: Leg, base: string) {
   const waiting = places.find((p) => p.id === leg.toPlaceId);
   if (!room || !waiting) return;
   const card = visitorCard(j, room, waiting, links(base, j, places));
-  await addEvents(j.id, [await send(webhookFor(room), card, room.name)]);
+  await addEvents(j.id, await send(room, card));
 }
 
 // ---------- create
 
-export async function createJourney(body: Record<string, unknown>, who: Caller, base: string) {
+// source integration = the clinic's own system with INTEGRATION_KEY (counts as staff)
+export async function createJourney(
+  body: Record<string, unknown>,
+  who: Caller,
+  base: string,
+  source: "board" | "integration" = "board",
+) {
   await retention();
   const extra = Object.keys(body).filter((k) => !JOURNEY_FIELDS.includes(k));
   if (extra.length) {
@@ -230,7 +276,9 @@ export async function createJourney(body: Record<string, unknown>, who: Caller, 
   const robot = robotName(body.robot);
   const forPlaceId = forPlace && forPlace.id !== to.id ? forPlace.id : undefined;
   const leg = newLegTo(to, { id: reception.id, name: reception.name, spot: reception.spot }, at);
-  const how = who === "robot" ? `Checked in on ${robotLabel(robot)}` : "Sent by reception";
+  const how =
+    who === "robot" ? `Checked in on ${robotLabel(robot)}` : source === "integration" ? "Sent by the clinic system" : "Sent by reception";
+  const walkCode = newWalkCode();
   const target = forPlace ? placeLabel(forPlace) : placeLabel(to);
 
   let created: StoredJourney | null = null;
@@ -250,6 +298,7 @@ export async function createJourney(body: Record<string, unknown>, who: Caller, 
         createdBy: who,
         createdAt: at,
         updatedAt: at,
+        walkCode,
       },
       leg,
       [event("created", `${how}: ticket ${ticket} for ${target}`, at)],
@@ -261,7 +310,7 @@ export async function createJourney(body: Record<string, unknown>, who: Caller, 
   await bump(forPlaceId ?? to.id, { journeys: 1 });
   await bump(to.id, { guides: 1 });
   await notifyLeg(created, leg, base);
-  return { journey: await getJourney(created.id), command };
+  return { journey: await getJourney(created.id), command: withWalkUrl(command, base) };
 }
 
 // ---------- robot and staff updates
@@ -390,11 +439,11 @@ export async function nextLeg(id: string, toId: unknown, base: string, via: "boa
   const command = await queueGuide(journey, leg);
   await bump(to.id, { guides: 1 });
   await notifyLeg(journey, leg, base);
-  return { journey: await getJourney(id), command };
+  return { journey: await getJourney(id), command: withWalkUrl(command, base) };
 }
 
 // staff: nova gave up on a leg (nobody came, lost the patient). try the same walk again
-export async function retryLeg(id: string) {
+export async function retryLeg(id: string, base: string) {
   await retention();
   const at = now();
   let leg: Leg | undefined;
@@ -416,7 +465,7 @@ export async function retryLeg(id: string) {
   if (!leg) throw new ApiError(500, "no leg");
   const command = await queueGuide(journey, leg);
   await bump(leg.toPlaceId, { guides: 1 });
-  return { journey: await getJourney(id), command };
+  return { journey: await getJourney(id), command: withWalkUrl(command, base) };
 }
 
 export async function finishJourney(id: string, via: "board" | "teams" = "board") {
@@ -442,7 +491,7 @@ export async function finishJourney(id: string, via: "board" | "teams" = "board"
   if (changed) {
     await getStore().closeJourneyCommands(id, at, true);
     await bump(currentLeg(journey).toPlaceId, { done: 1 });
-    clearFeedForJourney(id);
+    await clearJourneyFeed(id);
   }
   return { journey: await getJourney(id), already: !changed };
 }
@@ -458,7 +507,7 @@ export async function cancelJourney(id: string) {
   if (changed) {
     await getStore().closeJourneyCommands(id, at, false);
     await bump(lineKey(journey), { cancelled: 1 });
-    clearFeedForJourney(id);
+    await clearJourneyFeed(id);
   }
   return getJourney(id);
 }

@@ -28,6 +28,15 @@ android {
 
         // base url of team-inbox without a path, e.g. http://192.168.2.214:3000
         buildConfigField("String", "BACKEND_URL", "\"${local("teamInbox.url")}\"")
+        // several servers, comma separated, first = preferred (online, then the laptop). nova uses the
+        // first one whose /api/health answers. empty = only teamInbox.url (docs/journeys.md 6.1)
+        buildConfigField("String", "BACKEND_URLS", "\"${local("teamInbox.urls")}\"")
+        // where phones open the walk companion (<base>/walk/<code>); empty = the server nova uses
+        buildConfigField("String", "WALK_BASE_URL", "\"${local("walk.baseUrl")}\"")
+        // radar point frame: auto (nova finds out), map or robot
+        buildConfigField("String", "SCAN_FRAME", "\"${local("robot.scanFrame", "auto")}\"")
+        // true = debug log lines go to the server too (they always show in the staff menu)
+        buildConfigField("boolean", "LOG_DEBUG", local("robot.logDebug", "false").toBoolean().toString())
         buildConfigField("String", "BACKEND_TOKEN", "\"${local("teamInbox.token")}\"")
         buildConfigField("String", "ROBOT_NAME", "\"${local("robot.name", "nova")}\"")
         // map spot nova drives back to after a walk, used when /api/places has no reception place
@@ -73,6 +82,8 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    // QR code for the phone companion, drawn on the robot (pure java, no network)
+    implementation("com.google.zxing:core:3.5.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")

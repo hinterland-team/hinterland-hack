@@ -121,3 +121,40 @@ The Terra brief asks that the **visitor** gives their concern and contact person
 
 ### App icon
 - Nova Clinic gets a proper adaptive launcher icon (foreground + background vectors + monochrome): friendly, recognisable on the robot's home screen at small size. Nova's face theme, calm medical blue/teal, no text.
+
+## 6. v3.2 - smarter walk, logs, live map, patient phone companion
+
+Field test 17.10: the walk works, but the patient can't talk to Nova from behind (mics and screen face forward, wheels are loud), and Nova notices too late that nobody follows (it only looks every ~25 s). The online server was not reachable from the robot's Wi-Fi.
+
+### 6.1 Server choice on the robot
+- New `GET /api/health` (no auth) -> `{ ok: true, version, time }`.
+- Robot: `teamInbox.urls` in local.properties (comma list, first = preferred, e.g. the online url then the laptop url); falls back to `teamInbox.url`. Nova checks `/api/health` on start and every 60 s, uses the first that answers, and shows which one on the staff menu and in the heartbeat (`server`). No other change: both servers have the same API.
+
+### 6.2 Logs
+- `POST /api/robot/logs` (robot bearer) `{ robot, items: [{ at, level: "debug"|"info"|"warn"|"error", source: "app"|"net"|"nav"|"voice"|"brain"|"vision"|"lidar", text }] }`. Stored in the db, last 24 h / 5000 rows per robot. Logs never contain patient words or names (same rules as the feed).
+- Dashboard **Logs** page: live tail (3 s), filter by level and source, search, pause, copy. Errors also show as a small count on the robot card.
+- On the robot: a staff menu (long-press the Nova logo 3 s) with the same log, the server status, version, chassis status and battery.
+
+### 6.3 Faster "is the patient still behind me?"
+- LiDAR: Nova enables RobotApi radar data (`setNavigationLineData` + `STATUS_LINE_DATA`, see RobotAPI_en.md) while guiding and looks for a leg-like cluster behind it (points 0.3-2.5 m behind, inside the rear sector). On the first data it logs which angles the scan covers, so we learn if the back is visible on this robot.
+- If the scan covers the back: follower watch is continuous; no follower for 4 s -> immediate check-back (turn + camera). If it does not: adaptive schedule.
+- Adaptive schedule either way: first check 10 s after start, then 10-30 s depending on how close the patient was last time, plus one check right after every bigger turn (heading change > 45 deg from `getPosition`) and after obstacle waits.
+- Camera (PersonApi) confirms at each check-back, live only, nothing stored.
+
+### 6.4 Talking at the stops and from behind
+- Each check-back is a short face-to-face talk window: Nova turns, asks a yes/no question ("All good? Shall I slow down?"), listens ~6 s, answers, then goes on.
+- **Patient phone companion:** the pickup screen shows a QR code `<PUBLIC_BASE_URL>/walk/<walkCode>` (walkCode = 8 random characters per journey, in the `guide` command, valid only while the journey is open). The phone page (no login, no personal data) shows ticket, destination, distance left, and big buttons **Wait**, **Slower**, **Faster**, **Go on**, **Talk** (browser speech-to-text, the text goes to Nova as `ask`). Rate limited.
+- New command `{ type: "walk_control", journeyId, action: "wait"|"resume"|"slower"|"faster" }` from the phone page or the dashboard.
+
+### 6.5 Live map on the dashboard
+- `POST /api/robot/map` (robot bearer), ~1 per second while moving, every 15 s idle: `{ robot, mapName?, pose: { x, y, theta }, places: [{ name, x, y }] (on change / every 60 s), scan: [[x, y], ...] (map frame, at most 240 points), follower?: { x, y, source: "lidar"|"camera" }, target?: { name, x, y }, remainingMeters? }`. The latest one per robot is kept (db row), plus a short trail (last 120 poses).
+- Dashboard **Map** panel/page: places as labelled dots, Nova as an arrow with its trail, the LiDAR points, the patient's estimated position, the target and the remaining distance. Fit-to-view, zoom, light/dark.
+- Click a place on the map -> "Send Nova here" (`go_to`, same as "Send Nova to").
+
+### 6.6 More of the list
+- Waiting room stop: places of kind `waiting` (needs a map spot) — already in the data, now in the robot flow and on the map.
+- Blocked path: after asking people to step aside twice, Nova tries the optional place field `viaSpot` (a waypoint) once, then calls staff.
+- Out of service: when the chassis is not available (app not started from the home screen, emergency stop, suspended), the robot shows a clear screen ("I can't drive right now - please start me from the home screen") and the heartbeat says `state: "error"` with the reason; the dashboard shows a warning on the robot card.
+- Email as second channel: place field `notifyEmail`; when `RESEND_API_KEY` + `EMAIL_FROM` are set the same message as the Teams card goes out by email (plain REST call, no name, ticket + room only).
+- Integration for the nurse's system: `POST /api/integrations/journeys` with header `X-Api-Key: <INTEGRATION_KEY>`, body `{ to: placeId | place name, pace?, wheelchair? }` -> same as a staff journey, returns the ticket.
+- `docs/demo.md`: a 3-minute demo script (who stands where, what to say, what the judges see on the dashboard, plan B without Wi-Fi).

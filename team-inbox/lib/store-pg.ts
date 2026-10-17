@@ -1,12 +1,27 @@
 // postgres store (neon). only type imports here so the sql can be tested outside next
-import type { JourneyChange, NewJourney, PlacePatch, PurgeCutoffs, RobotRecord, Store, StoredJourney } from "./store-types";
+import type { MapFrame } from "./robot-data";
+import type {
+  JourneyChange,
+  LogQuery,
+  NewJourney,
+  PlacePatch,
+  PurgeCutoffs,
+  RobotRecord,
+  Store,
+  StoredJourney,
+} from "./store-types";
 import type {
   Counters,
+  FeedItem,
   HelpRequest,
   JourneyEvent,
   JourneyStatus,
   Leg,
   LegStatus,
+  LogLevel,
+  LogLine,
+  LogSource,
+  MapState,
   Pace,
   Place,
   PlaceKind,
@@ -14,6 +29,7 @@ import type {
   RobotHeartbeat,
   RobotScreen,
   StatsRow,
+  WalkAction,
 } from "./types";
 
 type Row = Record<string, unknown>;
@@ -50,6 +66,8 @@ function toPlace(r: Row): Place {
   if (r.room) p.room = String(r.room);
   if (r.teams_webhook_url) p.teamsWebhookUrl = String(r.teams_webhook_url);
   if (r.waiting_place_id) p.waitingPlaceId = String(r.waiting_place_id);
+  if (r.via_spot) p.viaSpot = String(r.via_spot);
+  if (r.notify_email) p.notifyEmail = String(r.notify_email);
   return p;
 }
 
@@ -97,6 +115,7 @@ function toJourney(r: Row): StoredJourney {
   if (r.for_place_id) j.forPlaceId = String(r.for_place_id);
   const ended = isoOrUndefined(r.ended_at);
   if (ended) j.endedAt = ended;
+  if (r.walk_code) j.walkCode = String(r.walk_code);
   return j;
 }
 
@@ -107,9 +126,17 @@ function toCommand(r: Row): RobotCommand {
   const createdAt = iso(r.created_at);
   let c: RobotCommand;
   if (r.type === "say") c = { id, robot, type: "say", text: String(r.text), createdAt };
-  else if (r.type === "ask") c = { id, robot, type: "ask", text: String(r.text), createdAt };
-  else if (r.type === "go_to") c = { id, robot, type: "go_to", spot: String(r.spot), createdAt };
-  else {
+  else if (r.type === "ask") {
+    // old_text: the text before the delivery wiped a phone question
+    const t = r.old_text ?? r.text;
+    c = { id, robot, type: "ask", text: t === null || t === undefined ? "" : String(t), createdAt };
+    if (r.journey_id) c.journeyId = String(r.journey_id);
+    if (r.origin === "phone" || r.origin === "staff") c.origin = r.origin;
+  } else if (r.type === "go_to") c = { id, robot, type: "go_to", spot: String(r.spot), createdAt };
+  else if (r.type === "walk_control") {
+    c = { id, robot, type: "walk_control", journeyId: String(r.journey_id), action: String(r.action) as WalkAction, createdAt };
+    if (r.origin === "phone" || r.origin === "staff") c.origin = r.origin;
+  } else {
     c = {
       id,
       robot,
@@ -120,7 +147,13 @@ function toCommand(r: Row): RobotCommand {
       pace: String(r.pace) as Pace,
       wheelchair: Boolean(r.wheelchair),
       from: { name: String(r.from_name), spot: String(r.from_spot) },
-      to: { name: String(r.to_name), spot: String(r.to_spot), ...(r.to_room ? { room: String(r.to_room) } : {}) },
+      to: {
+        name: String(r.to_name),
+        spot: String(r.to_spot),
+        ...(r.to_room ? { room: String(r.to_room) } : {}),
+        ...(r.to_via_spot ? { viaSpot: String(r.to_via_spot) } : {}),
+      },
+      ...(r.walk_code ? { walkCode: String(r.walk_code) } : {}),
       createdAt,
     };
   }
@@ -141,8 +174,50 @@ function toHeartbeat(r: Row): RobotHeartbeat {
     goal: textOrNull(r.goal),
     detail: textOrNull(r.detail),
     screen: r.screen === null || r.screen === undefined ? null : json<RobotScreen>(r.screen),
+    server: textOrNull(r.server),
+    version: textOrNull(r.app_version),
     at: iso(r.updated_at),
   };
+}
+
+function toLog(r: Row): LogLine {
+  return {
+    id: Number(r.id),
+    robot: String(r.robot),
+    at: iso(r.at),
+    level: String(r.level) as LogLevel,
+    source: String(r.source) as LogSource,
+    text: String(r.text),
+  };
+}
+
+function toMap(r: Row): MapState {
+  const m: MapState = {
+    robot: String(r.robot),
+    pose: json<MapState["pose"]>(r.pose),
+    places: json<MapState["places"] | null>(r.places) ?? [],
+    scan: json<MapState["scan"] | null>(r.scan) ?? [],
+    trail: json<MapState["trail"] | null>(r.trail) ?? [],
+    updatedAt: iso(r.updated_at),
+  };
+  if (r.map_name) m.mapName = String(r.map_name);
+  if (r.follower) m.follower = json<NonNullable<MapState["follower"]>>(r.follower);
+  if (r.target) m.target = json<NonNullable<MapState["target"]>>(r.target);
+  if (r.remaining_meters !== null && r.remaining_meters !== undefined) m.remainingMeters = Number(r.remaining_meters);
+  return m;
+}
+
+function toFeed(r: Row): FeedItem {
+  const f: FeedItem = {
+    id: String(r.id),
+    robot: String(r.robot),
+    at: iso(r.at),
+    who: r.who === "patient" ? "patient" : "nova",
+    kind: String(r.kind) as FeedItem["kind"],
+    text: String(r.text),
+  };
+  if (r.journey_id) f.journeyId = String(r.journey_id);
+  return f;
 }
 
 function toHelp(r: Row): HelpRequest {
@@ -218,8 +293,8 @@ export function createPgStore(sql: SqlClient): Store {
     },
     async createPlace(p) {
       const rows = await sql.query(
-        `insert into places (id, name, room, spot, kind, public, avg_minutes, teams_webhook_url, active, waiting_place_id, self_check_in, created_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz) returning *`,
+        `insert into places (id, name, room, spot, kind, public, avg_minutes, teams_webhook_url, active, waiting_place_id, self_check_in, created_at, via_spot, notify_email)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13, $14) returning *`,
         [
           p.id,
           p.name,
@@ -233,6 +308,8 @@ export function createPgStore(sql: SqlClient): Store {
           p.waitingPlaceId ?? null,
           p.selfCheckIn,
           p.createdAt,
+          p.viaSpot ?? null,
+          p.notifyEmail ?? null,
         ],
       );
       return toPlace(rows[0]);
@@ -249,7 +326,9 @@ export function createPgStore(sql: SqlClient): Store {
            self_check_in = coalesce($8::boolean, self_check_in),
            room = case when $9::boolean then $10::text else room end,
            teams_webhook_url = case when $11::boolean then $12::text else teams_webhook_url end,
-           waiting_place_id = case when $13::boolean then $14::text else waiting_place_id end
+           waiting_place_id = case when $13::boolean then $14::text else waiting_place_id end,
+           via_spot = case when $15::boolean then $16::text else via_spot end,
+           notify_email = case when $17::boolean then $18::text else notify_email end
          where id = $1 returning *`,
         [
           id,
@@ -266,6 +345,10 @@ export function createPgStore(sql: SqlClient): Store {
           patch.teamsWebhookUrl || null,
           patch.waitingPlaceId !== undefined,
           patch.waitingPlaceId || null,
+          patch.viaSpot !== undefined,
+          patch.viaSpot || null,
+          patch.notifyEmail !== undefined,
+          patch.notifyEmail || null,
         ],
       );
       return rows[0] ? toPlace(rows[0]) : null;
@@ -283,8 +366,8 @@ export function createPgStore(sql: SqlClient): Store {
     async createJourney(j: NewJourney, leg: Leg, events) {
       const rows = await sql.query(
         `with j as (
-           insert into journeys (id, ticket, ticket_day, robot, pace, wheelchair, status, for_place_id, created_by, created_at, updated_at, version)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11::timestamptz, 1)
+           insert into journeys (id, ticket, ticket_day, robot, pace, wheelchair, status, for_place_id, created_by, created_at, updated_at, version, walk_code)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11::timestamptz, 1, $23)
            on conflict (ticket_day, ticket) do nothing
            returning id
          ), l as (
@@ -320,6 +403,7 @@ export function createPgStore(sql: SqlClient): Store {
           leg.status,
           leg.createdAt,
           eventsParam(events),
+          j.walkCode ?? null,
         ],
       );
       return rows[0] ? getJourney(j.id) : null;
@@ -418,15 +502,16 @@ export function createPgStore(sql: SqlClient): Store {
     async createCommand(command) {
       const c: RobotCommand = command;
       const g = c.type === "guide" ? c : null;
+      const journeyId = c.type === "guide" || c.type === "walk_control" ? c.journeyId : c.type === "ask" ? c.journeyId : undefined;
       const rows = await sql.query(
         `insert into robot_commands (id, robot, type, journey_id, leg_id, ticket, pace, wheelchair,
-           from_name, from_spot, to_name, to_spot, to_room, spot, text, created_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz) returning *`,
+           from_name, from_spot, to_name, to_spot, to_room, spot, text, created_at, to_via_spot, walk_code, action, origin)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz, $17, $18, $19, $20) returning *`,
         [
           c.id,
           c.robot,
           c.type,
-          g?.journeyId ?? null,
+          journeyId ?? null,
           g?.legId ?? null,
           g?.ticket ?? null,
           g?.pace ?? null,
@@ -439,21 +524,28 @@ export function createPgStore(sql: SqlClient): Store {
           c.type === "go_to" ? c.spot : null,
           c.type === "say" || c.type === "ask" ? c.text : null,
           c.createdAt,
+          g?.to.viaSpot ?? null,
+          g?.walkCode ?? null,
+          c.type === "walk_control" ? c.action : null,
+          c.type === "walk_control" || c.type === "ask" ? (c.origin ?? null) : null,
         ],
       );
       return toCommand(rows[0]) as typeof command;
     },
     async takeNextCommand(robot, now) {
+      // a phone question loses its text in the db once nova has it (old_text is the value before)
       const rows = await sql.query(
-        `update robot_commands set delivered_at = $2::timestamptz
-         where id = (
-           select id from robot_commands
+        `update robot_commands c set delivered_at = $2::timestamptz,
+           text = case when c.type = 'ask' and c.origin = 'phone' then null else c.text end
+         from (
+           select id, text as old_text from robot_commands
            where robot = $1 and delivered_at is null and done_at is null
            order by created_at, id
            limit 1
            for update skip locked
-         )
-         returning *`,
+         ) p
+         where c.id = p.id
+         returning c.*, p.old_text`,
         [robot, now],
       );
       return rows[0] ? toCommand(rows[0]) : null;
@@ -490,22 +582,35 @@ export function createPgStore(sql: SqlClient): Store {
     async saveHeartbeat(h) {
       await sql.query(
         `with s as (
-           insert into robot_status (robot, battery, charging, state, position, goal, detail, screen, updated_at)
-           values ($1, $2, $3, $4, $5, $6, $7, $9::jsonb, $8::timestamptz)
+           insert into robot_status (robot, battery, charging, state, position, goal, detail, screen, updated_at, server, app_version)
+           values ($1, $2, $3, $4, $5, $6, $7, $9::jsonb, $8::timestamptz, $10, $11)
            on conflict (robot) do update set
              battery = excluded.battery, charging = excluded.charging, state = excluded.state,
              position = excluded.position, goal = excluded.goal, detail = excluded.detail,
-             screen = excluded.screen, updated_at = excluded.updated_at
+             screen = excluded.screen, updated_at = excluded.updated_at, server = excluded.server,
+             app_version = excluded.app_version
            returning robot
          )
          insert into robots (name, last_seen_at) select robot, $8::timestamptz from s
          on conflict (name) do update set last_seen_at = excluded.last_seen_at`,
-        [h.robot, h.battery, h.charging, h.state, h.position, h.goal, h.detail, h.at, h.screen ? JSON.stringify(h.screen) : null],
+        [
+          h.robot,
+          h.battery,
+          h.charging,
+          h.state,
+          h.position,
+          h.goal,
+          h.detail,
+          h.at,
+          h.screen ? JSON.stringify(h.screen) : null,
+          h.server,
+          h.version,
+        ],
       );
     },
     async getRobot(name): Promise<RobotRecord> {
       const rows = await sql.query(
-        `select r.last_seen_at, s.robot as status_robot, s.battery, s.charging, s.state, s.position, s.goal, s.detail, s.screen, s.updated_at
+        `select r.last_seen_at, s.robot as status_robot, s.battery, s.charging, s.state, s.position, s.goal, s.detail, s.screen, s.server, s.app_version, s.updated_at
          from (select $1::text as name) q
          left join robots r on r.name = q.name
          left join robot_status s on s.robot = q.name`,
@@ -592,12 +697,163 @@ export function createPgStore(sql: SqlClient): Store {
       await sql.query(`delete from login_failures where key = $1`, [key]);
     },
 
+    async findJourneyByWalkCode(code) {
+      const rows = await sql.query(`${JOURNEY_SELECT} where j.walk_code = $1`, [code]);
+      return rows[0] ? toJourney(rows[0]) : null;
+    },
+
+    async addLogs(robot, items, receivedAt, keepSince, maxRows) {
+      if (items.length) {
+        await sql.query(
+          `insert into robot_logs (robot, at, received_at, level, source, text)
+           select $1, x.at, $2::timestamptz, x.level, x.source, x.text
+           from json_to_recordset($3::json) as x(at timestamptz, level text, source text, text text)`,
+          [robot, receivedAt, JSON.stringify(items)],
+        );
+      }
+      await sql.query(
+        `delete from robot_logs where robot = $1 and (
+           received_at < $2::timestamptz
+           or id <= coalesce((select id from robot_logs where robot = $1 order by id desc offset $3 limit 1), 0)
+         )`,
+        [robot, keepSince, maxRows],
+      );
+      return items.length;
+    },
+    async listLogs(q: LogQuery) {
+      const tail = q.after !== undefined;
+      const rows = await sql.query(
+        `select * from robot_logs
+         where robot = $1
+           and ($2::bigint is null or id > $2::bigint)
+           and ($3::bigint is null or id < $3::bigint)
+           and ($4::text[] is null or level = any($4::text[]))
+           and ($5::text[] is null or source = any($5::text[]))
+           and ($6::text is null or strpos(lower(text), lower($6::text)) > 0)
+         order by id ${tail ? "asc" : "desc"}
+         limit $7`,
+        [q.robot, q.after ?? null, q.before ?? null, q.levels ?? null, q.sources ?? null, q.search ?? null, q.limit],
+      );
+      const list = rows.map(toLog);
+      return tail ? list : list.reverse();
+    },
+    async countLogs(robot, levels, since) {
+      const rows = await sql.query(
+        `select count(*)::int as n, max(at) as last_at from robot_logs
+         where robot = $1 and level = any($2::text[]) and received_at >= $3::timestamptz`,
+        [robot, levels, since],
+      );
+      return { count: Number(rows[0]?.n ?? 0), lastAt: isoOrUndefined(rows[0]?.last_at) ?? null };
+    },
+
+    async saveMap(f: MapFrame, trailMax) {
+      const pose = JSON.stringify({ x: f.pose.x, y: f.pose.y, at: f.at });
+      const rows = await sql.query(
+        `insert into robot_maps (robot, map_name, pose, places, scan, follower, target, remaining_meters, trail, updated_at)
+         values ($1, $2, $3::jsonb, coalesce($4::jsonb, '[]'::jsonb), $5::jsonb, $6::jsonb, $7::jsonb, $8, jsonb_build_array($9::jsonb), $10::timestamptz)
+         on conflict (robot) do update set
+           map_name = coalesce(excluded.map_name, robot_maps.map_name),
+           pose = excluded.pose,
+           places = case
+             when $4::jsonb is not null then excluded.places
+             when excluded.map_name is not null and robot_maps.map_name is distinct from excluded.map_name then '[]'::jsonb
+             else robot_maps.places end,
+           scan = excluded.scan,
+           follower = excluded.follower,
+           target = excluded.target,
+           remaining_meters = excluded.remaining_meters,
+           trail = case
+             when excluded.map_name is not null and robot_maps.map_name is distinct from excluded.map_name then excluded.trail
+             when jsonb_array_length(robot_maps.trail) > 0
+               and abs((robot_maps.trail->-1->>'x')::float8 - ($9::jsonb->>'x')::float8) < 0.05
+               and abs((robot_maps.trail->-1->>'y')::float8 - ($9::jsonb->>'y')::float8) < 0.05
+               then robot_maps.trail
+             else (
+               select coalesce(jsonb_agg(e order by ord), '[]'::jsonb) from (
+                 select e, ord from jsonb_array_elements(robot_maps.trail || excluded.trail) with ordinality as t(e, ord)
+                 order by ord desc limit $11
+               ) s
+             ) end,
+           updated_at = excluded.updated_at
+         returning *`,
+        [
+          f.robot,
+          f.mapName ?? null,
+          JSON.stringify(f.pose),
+          f.places ? JSON.stringify(f.places) : null,
+          JSON.stringify(f.scan),
+          f.follower ? JSON.stringify(f.follower) : null,
+          f.target ? JSON.stringify(f.target) : null,
+          f.remainingMeters ?? null,
+          pose,
+          f.at,
+          trailMax,
+        ],
+      );
+      return toMap(rows[0]);
+    },
+    async getMap(robot) {
+      const rows = await sql.query(`select * from robot_maps where robot = $1`, [robot]);
+      return rows[0] ? toMap(rows[0]) : null;
+    },
+
+    async addFeedItems(robot, items, maxPerRobot, since) {
+      if (items.length) {
+        await sql.query(
+          `insert into feed_items (id, robot, journey_id, at, who, kind, text)
+           select x.id, $1, x.journey_id, x.at, x.who, x.kind, x.text
+           from json_to_recordset($2::json) as x(id text, journey_id text, at timestamptz, who text, kind text, text text)
+           on conflict (id) do nothing`,
+          [
+            robot,
+            JSON.stringify(
+              items.map((i) => ({ id: i.id, journey_id: i.journeyId ?? null, at: i.at, who: i.who, kind: i.kind, text: i.text })),
+            ),
+          ],
+        );
+      }
+      await sql.query(
+        `delete from feed_items where robot = $1 and (
+           at < $2::timestamptz
+           or id in (select id from feed_items where robot = $1 order by at desc, id desc offset $3)
+         )`,
+        [robot, since, maxPerRobot],
+      );
+    },
+    async listFeedItems(robot, limit, since) {
+      const rows = await sql.query(
+        `select * from feed_items where robot = $1 and at >= $2::timestamptz order by at desc, id desc limit $3`,
+        [robot, since, limit],
+      );
+      return rows.map(toFeed);
+    },
+    async deleteFeedForJourney(journeyId) {
+      await sql.query(`delete from feed_items where journey_id = $1`, [journeyId]);
+    },
+
+    async countHits(key, since) {
+      const rows = await sql.query(`select count(*)::int as n from rate_hits where key = $1 and at >= $2::timestamptz`, [key, since]);
+      return Number(rows[0]?.n ?? 0);
+    },
+    async addHit(key, at) {
+      await sql.query(`insert into rate_hits (key, at) values ($1, $2::timestamptz)`, [key, at]);
+    },
+
     async purge(c: PurgeCutoffs) {
       const rows = await sql.query(
         `with j as (
            delete from journeys
            where (ended_at is not null and ended_at < $1::timestamptz) or updated_at < $2::timestamptz
            returning id
+         ), f as (
+           delete from feed_items where at < $1::timestamptz or journey_id in (select id from j)
+           returning id
+         ), lg as (
+           delete from robot_logs where received_at < $4::timestamptz returning id
+         ), m as (
+           delete from robot_maps where updated_at < $4::timestamptz returning robot
+         ), rh as (
+           delete from rate_hits where at < $3::timestamptz returning key
          ), c as (
            delete from robot_commands
            where journey_id is null and coalesce(done_at, created_at) < $1::timestamptz
@@ -610,7 +866,7 @@ export function createPgStore(sql: SqlClient): Store {
            delete from login_failures where at < $3::timestamptz returning key
          )
          select id from j`,
-        [c.ended, c.stale, c.logins],
+        [c.ended, c.stale, c.logins, c.logs],
       );
       return rows.map((r) => String(r.id));
     },

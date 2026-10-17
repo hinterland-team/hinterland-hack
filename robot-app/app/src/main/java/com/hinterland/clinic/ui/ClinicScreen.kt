@@ -1,6 +1,7 @@
 package com.hinterland.clinic.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -8,6 +9,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
@@ -72,13 +75,23 @@ class ScreenActions(
     val checkInBack: () -> Unit = {},
     val checkInClose: () -> Unit = {},
     val checkInConfirm: () -> Unit = {},
+    // the talk at a check-back
+    val allGood: () -> Unit = {},
+    val talkSlower: () -> Unit = {},
+    val talkWait: () -> Unit = {},
+    // staff menu: long-press the logo, close, any touch keeps it open, check the servers now
+    val openStaff: () -> Unit = {},
+    val closeStaff: () -> Unit = {},
+    val staffTouched: () -> Unit = {},
+    val recheckServers: () -> Unit = {},
 )
 
-private enum class View { IDLE, CHECK_IN, GUIDE, HELP }
+private enum class View { IDLE, CHECK_IN, GUIDE, HELP, OUT_OF_SERVICE }
 
 private fun UiState.view(): View = when {
     help != null -> View.HELP
     guide != null -> View.GUIDE
+    chassis != null -> View.OUT_OF_SERVICE
     checkIn != null -> View.CHECK_IN
     else -> View.IDLE
 }
@@ -106,7 +119,7 @@ fun ClinicScreen(state: UiState, actions: ScreenActions = ScreenActions()) {
                         .padding(Space.page),
                     horizontalArrangement = Arrangement.spacedBy(Space.page),
                 ) {
-                    FaceColumn(state, Modifier.width(Space.faceColumn).fillMaxHeight())
+                    FaceColumn(state, actions, Modifier.width(Space.faceColumn).fillMaxHeight())
                     AnimatedContent(
                         targetState = state.view(),
                         transitionSpec = {
@@ -123,10 +136,21 @@ fun ClinicScreen(state: UiState, actions: ScreenActions = ScreenActions()) {
                         when (view) {
                             View.HELP -> HelpContent(state)
                             View.GUIDE -> GuideContent(state, actions)
+                            View.OUT_OF_SERVICE -> OutOfServiceContent(state)
                             View.CHECK_IN -> CheckInContent(state, actions)
                             View.IDLE -> IdleContent(state, actions)
                         }
                     }
+                }
+                // staff only, over everything
+                val shownStaff = rememberLast(state.staff)
+                AnimatedVisibility(
+                    visible = state.staff != null,
+                    enter = if (reduced) fadeIn(tween(0)) else fadeIn(tween(260)) + scaleIn(tween(260), initialScale = 0.985f),
+                    exit = if (reduced) fadeOut(tween(0)) else fadeOut(tween(180)) + scaleOut(tween(180), targetScale = 0.985f),
+                ) {
+                    // the last menu stays drawn while it fades out
+                    shownStaff?.let { StaffMenu(it, actions, Modifier.size(DESIGN_WIDTH, DESIGN_HEIGHT)) }
                 }
             }
         }
@@ -139,8 +163,9 @@ private val DESIGN_HEIGHT = 720.dp
 // ---- left: face, caption, status ----
 
 @Composable
-private fun FaceColumn(state: UiState, modifier: Modifier) {
+private fun FaceColumn(state: UiState, actions: ScreenActions, modifier: Modifier) {
     Column(modifier) {
+        NovaLogo(onLongPress = actions.openStaff)
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             Mascot(state.mood(), Modifier.fillMaxSize())
         }
@@ -185,12 +210,13 @@ private val CAPTION_HEIGHT = 188.dp
 @Composable
 private fun StatusLine(state: UiState) {
     val brain = state.brain
-    val online = state.backend != Health.DOWN && state.robot != Health.DOWN
+    val online = state.backend != Health.DOWN && state.robot != Health.DOWN && state.chassis == null
     Row(Modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(12.dp).clip(CircleShape).background(if (online) Nova.Done else Nova.Fail))
         Spacer(Modifier.width(10.dp))
         Text(
             when {
+                state.chassis != null -> "Driving off"
                 state.robot == Health.DOWN -> "Driving not ready"
                 state.backend == Health.DOWN -> "Practice offline"
                 else -> "Online"
@@ -283,6 +309,42 @@ private fun Capability(glyph: GlyphKind, title: String, caption: String) {
             Spacer(Modifier.height(4.dp))
             Text(caption, style = text(Type.caption, FontWeight.Normal, Nova.InkSoft))
         }
+    }
+}
+
+// ---- out of service: no chassis rights, emergency stop, the system took over ----
+
+@Composable
+private fun OutOfServiceContent(state: UiState) {
+    val issue = state.chassis ?: return
+    Column(Modifier.fillMaxSize()) {
+        Pill("Out of service", Nova.Amber, Nova.AmberSoft, GlyphKind.PLUG)
+        Spacer(Modifier.height(Space.m))
+        Text(issue.title, style = text(Type.endTitle, FontWeight.Bold, Nova.Ink), maxLines = 2)
+        Spacer(Modifier.height(Space.s))
+        Text(issue.hint, style = text(Type.bodyLarge, FontWeight.Normal, Nova.InkSoft), maxLines = 3)
+        Spacer(Modifier.weight(1f))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(Space.radius))
+                .background(Nova.Card)
+                .border(1.5.dp, Nova.Line, RoundedCornerShape(Space.radius))
+                .padding(horizontal = Space.l, vertical = Space.m),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(64.dp).clip(CircleShape).background(Nova.SkySoft), contentAlignment = Alignment.Center) {
+                Glyph(GlyphKind.MIC, Nova.Blue, 34.dp)
+            }
+            Spacer(Modifier.width(Space.m))
+            Column {
+                Text("I can still talk with you", style = text(Type.body, FontWeight.SemiBold, Nova.Ink))
+                Spacer(Modifier.height(4.dp))
+                Text("For the way to your room, the reception desk will help.", style = text(Type.caption, FontWeight.Normal, Nova.InkSoft))
+            }
+        }
+        Spacer(Modifier.height(Space.m))
+        Text(issue.detail, style = text(Type.caption, FontWeight.Normal, Nova.InkFaint), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

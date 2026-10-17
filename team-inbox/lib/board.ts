@@ -1,19 +1,21 @@
 import { withQueue } from "./journeys";
+import { errorCount } from "./logs";
 import { getFeed, getRobotStatus, listCommands, stats } from "./robot";
 import { getStore } from "./store";
 
 // everything the reception and room pages show, in one request (polled every 2 s)
 export async function board(robot: string) {
   const store = getStore();
-  const [open, places, help, status, commands, feed, today] = await Promise.all([
+  const [open, places, help, status, feed, today, logErrors] = await Promise.all([
     store.listJourneys({ active: true }),
     store.listPlaces(),
     store.listHelp({ open: true }),
     getRobotStatus(robot),
-    listCommands(robot, 6),
     getFeed(robot, 40),
     stats(),
+    errorCount(robot),
   ]);
+  const commands = await listCommands(robot, 6, feed.showPatientText);
   const journeys = await withQueue(open, open);
   // the journey nova works on: the ticket on its screen, else the guide it fetched last
   const onScreen = status.screen?.ticket ? journeys.find((j) => j.ticket === status.screen?.ticket) : undefined;
@@ -29,6 +31,7 @@ export async function board(robot: string) {
     feed,
     stats: today,
     currentJourneyId,
+    logErrors,
     teamsDefault: Boolean(process.env.TEAMS_WEBHOOK_URL),
   };
 }

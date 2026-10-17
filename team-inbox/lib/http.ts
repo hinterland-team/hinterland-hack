@@ -5,6 +5,7 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public headers?: Record<string, string>,
   ) {
     super(message);
   }
@@ -55,7 +56,7 @@ export function baseUrl(req: Request) {
 
 function fail(err: unknown) {
   if (err instanceof ApiError) {
-    return NextResponse.json({ error: err.message }, { status: err.status });
+    return NextResponse.json({ error: err.message }, { status: err.status, headers: err.headers });
   }
   console.error(err);
   const hint = err instanceof Error && err.message.startsWith("database is not set up") ? err.message : "server error";

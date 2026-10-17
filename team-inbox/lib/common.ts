@@ -1,7 +1,7 @@
 import { clearFeedForJourney } from "./feed";
 import { text } from "./http";
 import { getStore } from "./store";
-import { type JourneyEvent, dayKey } from "./types";
+import { type JourneyEvent, LOG_KEEP_HOURS, dayKey } from "./types";
 
 export const RETENTION_HOURS = 12;
 // open journeys nobody touched for a day are treated as ended
@@ -27,12 +27,16 @@ export function numberOrNull(value: unknown) {
   return Number.isFinite(n) ? n : null;
 }
 
-// runs on every write: journeys that ended 12 h ago go, with their commands, events and feed
+export const hoursAgo = (hours: number, at = Date.now()) => new Date(at - hours * 3600_000).toISOString();
+
+// runs on every write: journeys that ended 12 h ago go, with their commands, events and feed.
+// log lines and map frames older than 24 h too
 export async function retention(at = Date.now()) {
   const gone = await getStore().purge({
-    ended: new Date(at - RETENTION_HOURS * 3600_000).toISOString(),
-    stale: new Date(at - STALE_HOURS * 3600_000).toISOString(),
-    logins: new Date(at - 3600_000).toISOString(),
+    ended: hoursAgo(RETENTION_HOURS, at),
+    stale: hoursAgo(STALE_HOURS, at),
+    logins: hoursAgo(1, at),
+    logs: hoursAgo(LOG_KEEP_HOURS, at),
   });
   for (const id of gone) clearFeedForJourney(id);
   return gone;

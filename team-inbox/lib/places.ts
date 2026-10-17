@@ -1,4 +1,5 @@
 import { now, numberOrNull, retention } from "./common";
+import { emailList } from "./email";
 import { ApiError, text } from "./http";
 import { getStore } from "./store";
 import type { PlacePatch } from "./store-types";
@@ -22,6 +23,16 @@ function cleanWebhook(value: unknown): string | null | undefined {
   if (!url) return null;
   if (!/^https?:\/\/\S+$/i.test(url)) throw new ApiError(400, "teamsWebhookUrl must be a http(s) link");
   return url;
+}
+
+// "a@x.de, b@y.de", at most 5. undefined = not sent, null = remove
+function cleanEmail(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  const raw = text(value, 1300);
+  if (!raw) return null;
+  const list = emailList(raw);
+  if (!list) throw new ApiError(400, "notifyEmail must be one email address, or up to 5 separated by commas");
+  return list.join(", ");
 }
 
 // whole minutes 1-120. undefined = not sent
@@ -101,6 +112,10 @@ export async function createPlace(body: Record<string, unknown>) {
   const webhook = cleanWebhook(body.teamsWebhookUrl);
   if (webhook) place.teamsWebhookUrl = webhook;
   if (waitingPlaceId) place.waitingPlaceId = waitingPlaceId;
+  const via = text(body.viaSpot, 80);
+  if (via) place.viaSpot = via;
+  const email = cleanEmail(body.notifyEmail);
+  if (email) place.notifyEmail = email;
   return store.createPlace(place);
 }
 
@@ -138,6 +153,9 @@ export async function updatePlace(body: Record<string, unknown>) {
   if (m !== undefined) patch.avgMinutes = m;
   const webhook = cleanWebhook(body.teamsWebhookUrl);
   if (webhook !== undefined) patch.teamsWebhookUrl = webhook;
+  if (body.viaSpot !== undefined) patch.viaSpot = text(body.viaSpot, 80) ?? null;
+  const email = cleanEmail(body.notifyEmail);
+  if (email !== undefined) patch.notifyEmail = email;
 
   if (body.waitingPlaceId !== undefined) patch.waitingPlaceId = text(body.waitingPlaceId, 80) ?? null;
   const selfCheckIn = bool(body.selfCheckIn, "selfCheckIn");

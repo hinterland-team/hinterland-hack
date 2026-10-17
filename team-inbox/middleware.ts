@@ -9,13 +9,25 @@ const ROBOT_ROUTES: [string, RegExp][] = [
   ["POST", /^\/api\/robot\/heartbeat$/],
   ["POST", /^\/api\/robot\/commands\/[^/]+\/done$/],
   ["POST", /^\/api\/robot\/feed$/],
+  ["POST", /^\/api\/robot\/logs$/],
+  ["POST", /^\/api\/robot\/map$/],
   ["POST", /^\/api\/help$/],
+  // checks X-Api-Key = INTEGRATION_KEY itself
+  ["POST", /^\/api\/integrations\/journeys$/],
 ];
 
 // teams card buttons open these links. they carry CALL_KEY
 const TEAMS_LINKS = [/^\/api\/journeys\/[^/]+\/(next|done)$/];
 
-const OPEN_PATHS = [/^\/login$/, /^\/api\/login$/, /^\/api\/logout$/];
+// health for the robot's server choice, and the patient's phone page (the walk code is the key, rate limited)
+const OPEN_PATHS = [
+  /^\/login$/,
+  /^\/api\/login$/,
+  /^\/api\/logout$/,
+  /^\/api\/health$/,
+  /^\/walk\/[^/]+$/,
+  /^\/api\/walk\/[^/]+(\/ask)?$/,
+];
 
 export async function middleware(req: NextRequest) {
   const password = process.env.DASHBOARD_PASSWORD;

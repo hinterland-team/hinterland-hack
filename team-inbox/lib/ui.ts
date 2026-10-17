@@ -1,5 +1,5 @@
 // browser helpers for the dashboard pages
-import type { Journey, JourneyWithQueue, Pace, Place, PlaceKind, RobotCommand } from "./types";
+import type { Journey, JourneyWithQueue, Pace, Place, PlaceKind, RobotCommand, WalkAction } from "./types";
 import { currentLeg } from "./types";
 
 export const PAGE = "mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-8";
@@ -116,10 +116,28 @@ export function commandState(c: RobotCommand): CommandState {
   return c.deliveredAt ? "delivered" : "queued";
 }
 
+export const WALK_ACTION_LABEL: Record<WalkAction, string> = {
+  wait: "Wait",
+  resume: "Go on",
+  slower: "Slower",
+  faster: "Faster",
+};
+
+export const WALK_ACTION_DONE: Record<WalkAction, string> = {
+  wait: "Stopped and waits for the patient",
+  resume: "Walks on",
+  slower: "Walks slower",
+  faster: "Walks faster",
+};
+
 export function commandText(c: RobotCommand) {
   if (c.type === "say") return `Say "${c.text}"`;
-  if (c.type === "ask") return `Asked: "${c.text}"`;
+  if (c.type === "ask") {
+    if (c.origin === "phone") return c.text ? `Patient asked on the phone: "${c.text}"` : "Patient asked something on the phone";
+    return `Asked: "${c.text}"`;
+  }
   if (c.type === "go_to") return `Go to ${c.spot}`;
+  if (c.type === "walk_control") return `${WALK_ACTION_LABEL[c.action]} (${c.origin === "phone" ? "patient's phone" : "board"})`;
   return `Guide ${c.ticket} to ${placeText({ name: c.to.name, room: c.to.room })}`;
 }
 

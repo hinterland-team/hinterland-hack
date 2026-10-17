@@ -1,6 +1,7 @@
 package com.hinterland.clinic
 
 import org.json.JSONObject
+import java.io.IOException
 import java.net.ConnectException
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
@@ -11,14 +12,14 @@ import java.net.UnknownHostException
 class BackendException(message: String, val code: Int = 0) : Exception(message)
 
 // team-inbox api from docs/journeys.md. all calls block - run them off the main thread.
-// never sends a patient name: journeys only know a ticket.
+// never sends a patient name: journeys only know a ticket. the server is the one Servers picked.
 object Backend {
 
-    private val base get() = BuildConfig.BACKEND_URL.trim().trimEnd('/')
+    private val base get() = Servers.current
     private val token get() = BuildConfig.BACKEND_TOKEN
     val robot: String get() = BuildConfig.ROBOT_NAME
 
-    val configured get() = base.isNotEmpty()
+    val configured get() = Servers.configured
 
     fun places(): List<Place> = Json.places(call("GET", "/api/places").body)
 
@@ -77,16 +78,49 @@ object Backend {
     // live conversation feed; the answer says if patient words may be sent
     fun feed(body: JSONObject): Boolean? = Json.showPatientText(call("POST", "/api/robot/feed", body).body)
 
-    // short text for the screen, never contains the token
-    fun friendly(e: Throwable): String = when (e) {
-        is BackendException -> e.message ?: "error"
-        is SocketTimeoutException -> "no answer from ${host()} (timeout)"
-        is ConnectException -> "can't reach ${host()}"
-        is UnknownHostException -> "unknown host ${host()}"
-        else -> e.message?.take(120) ?: e.javaClass.simpleName
+    // a batch of robot logs (docs/journeys.md 6.2)
+    fun logs(body: JSONObject) {
+        call("POST", "/api/robot/logs", body)
     }
 
-    private fun host() = runCatching { URL(base).let { "${it.host}:${it.port}" } }.getOrDefault(base)
+    // pose, places, scan, follower and target for the live map (docs/journeys.md 6.5)
+    fun map(body: JSONObject) {
+        call("POST", "/api/robot/map", body)
+    }
+
+    // GET <url>/api/health without the token, short timeouts (docs/journeys.md 6.1)
+    fun health(url: String): HealthResult {
+        val started = System.nanoTime()
+        val conn = URL(url.trimEnd('/') + "/api/health").openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 3_000
+            conn.readTimeout = 3_000
+            conn.setRequestProperty("Accept", "application/json")
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(2_000) }
+            val ms = (System.nanoTime() - started) / 1_000_000
+            val r = ServerList.judge(code, text) ?: HealthResult(false, ms)
+            return r.copy(ms = ms)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    // short text for the screen, never contains the token
+    fun friendly(e: Throwable): String = friendlyFor(base, e)
+
+    fun friendlyFor(url: String, e: Throwable): String {
+        val host = ServerList.host(url)
+        return when (e) {
+            is BackendException -> e.message ?: "error"
+            is SocketTimeoutException -> "no answer from $host (timeout)"
+            is ConnectException -> "can't reach $host"
+            is UnknownHostException -> "unknown host $host"
+            else -> e.message?.take(120) ?: e.javaClass.simpleName
+        }
+    }
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
 
@@ -94,7 +128,16 @@ object Backend {
 
     private fun call(method: String, path: String, body: JSONObject? = null): Reply {
         if (base.isEmpty()) throw BackendException("teamInbox.url is missing in local.properties")
+        try {
+            return send(method, path, body)
+        } catch (e: IOException) {
+            // the network is gone or this server is down: look for another one soon
+            Servers.reportFailure()
+            throw e
+        }
+    }
 
+    private fun send(method: String, path: String, body: JSONObject?): Reply {
         val conn = URL(base + path).openConnection() as HttpURLConnection
         try {
             // android's HttpURLConnection (okhttp inside) accepts PATCH, the plain jvm one would not

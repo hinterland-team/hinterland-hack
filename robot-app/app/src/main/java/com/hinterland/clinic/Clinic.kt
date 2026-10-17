@@ -1,6 +1,5 @@
 package com.hinterland.clinic
 
-import android.util.Log
 import com.ainirobot.agent.AgentCore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,8 +22,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 // network on Dispatchers.IO, never on the main thread. no patient names anywhere: tickets only.
 object Clinic {
 
-    private const val TAG = "NovaClinic"
     private const val OBSTACLE_TALK_EVERY_MS = 10_000L
+    private const val STAFF_REFRESH_MS = 1_000L
+    // the staff menu closes by itself when nobody touches it
+    private const val STAFF_IDLE_MS = 2 * 60_000L
+    private const val NET_LOG_EVERY_MS = 60_000L
     // the self check-in screen closes by itself when nobody touches it
     private const val CHECK_IN_IDLE_MS = 90_000L
     private const val GUIDE_CARD_KEEP_MS = 4_000L
@@ -44,6 +46,8 @@ object Clinic {
     @Volatile private var speakingJob: Job? = null
     @Volatile private var flashJob: Job? = null
     @Volatile private var guideCardJob: Job? = null
+    @Volatile private var staffJob: Job? = null
+    @Volatile private var staffTouchedAt = 0L
 
     private fun now() = System.currentTimeMillis()
 
@@ -108,8 +112,80 @@ object Clinic {
     }
 
     fun reportError(e: Throwable) {
-        Log.w(TAG, "action failed", e)
+        RobotLog.e(LogSource.VOICE, "Action failed: ${e.javaClass.simpleName} ${e.message.orEmpty().take(120)}")
         _ui.update { it.copy(banner = "Something went wrong: ${e.message ?: e.javaClass.simpleName}") }
+    }
+
+    // ---- chassis (out-of-service screen, docs/journeys.md 6.6) ----
+
+    // called by the brain every second
+    fun setChassis(issue: ChassisIssue?) {
+        val before = _ui.value.chassis
+        if (before == issue) return
+        if (issue != null) RobotLog.e(LogSource.NAV, "Out of service: ${issue.detail}")
+        else if (before != null) RobotLog.i(LogSource.NAV, "Chassis ready again")
+        _ui.update { it.copy(chassis = issue) }
+    }
+
+    // ---- staff menu (long-press the Nova logo 3 s) ----
+
+    fun openStaff() {
+        staffTouchedAt = now()
+        RobotLog.i(LogSource.APP, "Staff menu opened")
+        _ui.update { it.copy(staff = staffSnapshot()) }
+        staffJob?.cancel()
+        staffJob = scope.launch {
+            while (true) {
+                delay(STAFF_REFRESH_MS)
+                if (now() - staffTouchedAt > STAFF_IDLE_MS) {
+                    _ui.update { it.copy(staff = null) }
+                    break
+                }
+                _ui.update { s -> if (s.staff != null) s.copy(staff = staffSnapshot()) else s }
+            }
+        }
+    }
+
+    fun closeStaff() {
+        staffJob?.cancel()
+        _ui.update { it.copy(staff = null) }
+    }
+
+    fun staffTouched() {
+        staffTouchedAt = now()
+    }
+
+    fun staffRecheckServers() {
+        staffTouched()
+        scope.launch {
+            Servers.checkAll()
+            _ui.update { s -> if (s.staff != null) s.copy(staff = staffSnapshot()) else s }
+        }
+    }
+
+    private fun staffSnapshot(): StaffUi {
+        val b = _ui.value.brain
+        val issue = Robot.chassisIssue()
+        return StaffUi(
+            robotName = Backend.robot,
+            version = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+            system = Robot.systemVersion,
+            servers = Servers.states.value,
+            current = Servers.current,
+            chassis = when {
+                issue != null -> issue.detail
+                !Robot.connected -> "Connecting to the robot"
+                else -> "Ready" + (Robot.position?.let { ", at $it" } ?: "")
+            },
+            chassisOk = issue == null && Robot.ready,
+            emergency = Robot.emergency,
+            battery = Robot.battery,
+            charging = Robot.chargingNow(),
+            radar = Radar.summary,
+            brain = "${b.state.label}: ${b.goal}",
+            logs = RobotLog.recent.value,
+            logsPending = RobotLog.pending(),
+        )
     }
 
     // ---- places (GET /api/places) ----
@@ -159,7 +235,7 @@ object Clinic {
     }
 
     private fun setWakeFree(on: Boolean) {
-        runCatching { AgentCore.isEnableWakeFree = on }.onFailure { Log.w(TAG, "wake-free not set: ${it.message}") }
+        runCatching { AgentCore.isEnableWakeFree = on }.onFailure { RobotLog.w(LogSource.VOICE, "Wake-free not set: ${it.message}") }
     }
 
     // ---- actions (ClinicActions). sample = what the person said, for the language ----
@@ -294,6 +370,14 @@ object Clinic {
     }
 
     private suspend fun busyWalking(lang: Lang): Boolean {
+        if (Robot.chassisIssue() != null) {
+            speak(
+                "Say kindly that you cannot walk right now because your driving is switched off, and that the team at the reception desk will help.",
+                lang,
+                "I can't walk right now. The desk will help you.",
+            )
+            return true
+        }
         if (Guide.current == null && !NovaBrain.helpActive()) return false
         speak(
             "Say kindly that you are walking with someone right now and the team at the reception desk can help.",
@@ -452,6 +536,26 @@ object Clinic {
         feed.patientIntent(now(), "Ready to go on")
     }
 
+    // the talk at a check-back: "All good", "Slower", "Wait"
+    fun tapAllGood() {
+        touched()
+        Guide.current?.allGood()
+        feed.patientIntent(now(), "Tapped all good")
+    }
+
+    fun tapTalkSlower() {
+        touched()
+        val g = Guide.current ?: return
+        g.choosePace(g.pace.slower())
+        feed.patientIntent(now(), "Tapped slower")
+    }
+
+    fun tapTalkWait() {
+        touched()
+        Guide.current?.pause()
+        feed.patientIntent(now(), "Tapped wait")
+    }
+
     fun tapFeedback(up: Boolean) {
         touched()
         val g = Guide.current ?: return
@@ -603,8 +707,67 @@ object Clinic {
 
     // a command type this app does not know: close it so it does not hang on the board
     suspend fun skipCommand(cmd: RobotCommand) {
-        Log.w(TAG, "unknown command type ${cmd.type}")
+        RobotLog.w(LogSource.BRAIN, "Unknown command type ${cmd.type}")
         commandDone(cmd.id)
+    }
+
+    // walk_control from the patient's phone or the dashboard (docs/journeys.md 6.4). runs at once,
+    // also while nova walks; closed on every path
+    suspend fun walkControl(cmd: RobotCommand) {
+        try {
+            val c = WalkControl.of(cmd.action)
+            val g = Guide.current
+            if (c == null || g == null || (cmd.journeyId != null && cmd.journeyId != g.journeyId)) {
+                RobotLog.i(LogSource.BRAIN, "Walk control ${cmd.action ?: "?"} ignored: no matching walk")
+                return
+            }
+            val applied = g.control(c)
+            RobotLog.i(LogSource.BRAIN, "Walk control ${c.wire} for ${g.ticket.ifBlank { "a patient" }}" + if (applied) "" else " (nothing to change)")
+            feed.patientIntent(
+                now(),
+                when (c) {
+                    WalkControl.WAIT -> "Asked Nova to wait (phone)"
+                    WalkControl.RESUME -> "Ready to go on (phone)"
+                    WalkControl.SLOWER -> "Asked to walk slower (phone)"
+                    WalkControl.FASTER -> "Asked to walk faster (phone)"
+                },
+            )
+            if (applied) {
+                speakLater(
+                    when (c) {
+                        WalkControl.WAIT -> "Say: of course, you wait right here until they are ready. Short."
+                        WalkControl.RESUME -> "Say briefly and warmly that you walk on now."
+                        WalkControl.SLOWER -> "Confirm in a few warm words that you walk a bit slower now."
+                        WalkControl.FASTER -> "Confirm in a few warm words that you walk a bit faster now."
+                    },
+                    g.speechLang,
+                )
+            }
+        } finally {
+            commandDone(cmd.id)
+        }
+    }
+
+    // ask with a journey = the patient's phone ("Talk"): their words, so they only go to the dashboard
+    // feed with the demo switch on and never to the log. nova's ai answers right away, also mid-walk
+    suspend fun askDuringWalk(cmd: RobotCommand) {
+        try {
+            val text = cmd.text?.trim().orEmpty()
+            if (text.isEmpty()) return
+            // with a journey it comes from the walk page on the patient's phone
+            if (cmd.journeyId != null) {
+                Guide.current?.takeIf { it.journeyId == cmd.journeyId }?.heard(text)
+                feed.patientIntent(now(), "Talked to Nova through the phone")
+                feed.patientSaid(now(), text)
+                RobotLog.i(LogSource.VOICE, "Patient talked through the phone")
+            } else {
+                feed.novaDid(now(), "Message from the team: $text")
+            }
+            NovaBrain.heardUser()
+            Voice.ask(text)
+        } finally {
+            commandDone(cmd.id)
+        }
     }
 
     // nova has to go while someone talks to her (after waiting up to 20 s)
@@ -668,7 +831,15 @@ object Clinic {
     // english instruction -> a spoken line in the person's language; the screen text if the llm fails
     suspend fun speak(task: String, lang: Lang, screen: String) {
         val ok = working { Voice.speak(task, lang) }
-        if (!ok) _ui.update { it.copy(subtitle = screen, subtitleFromUser = false) }
+        if (!ok) {
+            RobotLog.w(LogSource.VOICE, "Speech failed, showing it on the screen")
+            _ui.update { it.copy(subtitle = screen, subtitleFromUser = false) }
+        }
+    }
+
+    // the same, without waiting (nova turns or drives meanwhile)
+    fun speakLater(task: String, lang: Lang) {
+        scope.launch { Voice.speak(task, lang) }
     }
 
     private suspend fun <T> working(block: suspend () -> T): T {
@@ -687,7 +858,7 @@ object Clinic {
                 .onSuccess { _ui.update { it.copy(backend = Health.OK, banner = null) } }
                 .onFailure { e ->
                     val why = Backend.friendly(e)
-                    Log.w(TAG, "backend: $why")
+                    netLog(why)
                     // a 404/403 is an answer, not an outage
                     if ((e as? BackendException)?.code !in setOf(403, 404, 409)) {
                         _ui.update { it.copy(backend = Health.DOWN, banner = "Practice server: $why") }
@@ -695,6 +866,17 @@ object Clinic {
                 }
         }
         return if (quiet) call() else working { call() }
+    }
+
+    // the backend may be down for a while: one log line per reason and minute is enough
+    @Volatile private var netLogged: Pair<String, Long>? = null
+
+    private fun netLog(why: String) {
+        val last = netLogged
+        val now = now()
+        if (last != null && last.first == why && now - last.second < NET_LOG_EVERY_MS) return
+        netLogged = why to now
+        RobotLog.w(LogSource.NET, "Practice server: $why")
     }
 
     private fun setTask(task: String?) {

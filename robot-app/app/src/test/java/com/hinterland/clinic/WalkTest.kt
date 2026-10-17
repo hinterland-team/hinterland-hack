@@ -120,9 +120,10 @@ class WalkTest {
 
     @Test
     fun noTurningAroundRightBeforeTheDoor() {
-        assertFalse(CheckBack.shouldSkip(null))
-        assertFalse(CheckBack.shouldSkip(0.5f))
-        assertTrue(CheckBack.shouldSkip(0.95f))
+        // v3.2: by the meters left, not the progress share (ScheduleTest has the details)
+        assertFalse(NearGoal.skipCheck(null, null))
+        assertFalse(NearGoal.skipCheck(Point(0.0, 0.0), Point(6.0, 0.0)))
+        assertTrue(NearGoal.skipCheck(Point(5.0, 0.0), Point(6.0, 0.0)))
     }
 
     // ---- patient 3-6 m behind ----

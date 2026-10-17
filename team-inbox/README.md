@@ -6,8 +6,12 @@ Staff decide where a patient goes, Nova walks with them. A patient is only a tic
 
 - `/` - reception. "Guide a patient": type a name or room (or tap a card), pick the pace, press Enter or "Send Nova". The ticket then shows large ("Tell the patient: A17") with what happens next. Next to it every open journey, grouped by room: on the way, waiting with place in line and minutes, with staff, and the buttons "With me", "Done → exit", "Next room…", "Call in" and "Cancel". "Nova live" shows the robot's screen, the conversation, the current journey's timeline, and has "Tell Nova anything", "Say it out loud", "Send Nova to" and the demo switch "Show what patients say". Help alerts sit on top while open. Today's numbers are anonymous counts. Updates every 2 s.
   - Keyboard in the quick bar: Enter sends, 1 / 2 / 3 = pace, W = wheelchair, Esc = clear, arrow keys move between matches.
+  - The robot card also shows the server Nova uses, errors of the last hour (links to the logs), a red "Out of service" box when the heartbeat says `state: "error"`, and Wait / Go on / Slower / Faster for the walk Nova is on. Below it the live map (it follows Nova during a walk).
+- `/map` - the live map: the spots of Nova's map as labelled dots, Nova as an arrow with its trail, LiDAR points, the patient's estimated position, the target and the metres left. Zoom, fit, own light / dark switch. Select a place and "Send Nova here" (`go_to`).
+- `/logs` - what the robot app reports: live every 3 s, filter by level (and above) and source, search, pause (counts the new lines), copy, load older lines. Kept 24 h, at most 5000 lines per robot.
+- `/walk/<code>` - the patient's phone page (no login, opened from the QR code on Nova's pickup screen): ticket, destination, metres left, big buttons Wait, Go on, Slower, Faster and Talk (the phone's speech-to-text, sent to Nova as `ask`). Works only while the journey is open and only while Nova is with that ticket. Rate limited.
 - `/room` and `/room/<placeId>` - the room view for doctors' phones: who is in the waiting room ("Call in"), who is coming, who is here, with big buttons.
-- `/places` - places Nova can walk to: name, room number, map spot, kind (room, waiting room, reception, exit, other), minutes per patient, waiting room, self check-in on the robot, public, own Teams webhook. Nothing is built in: start with the reception, the exit and your rooms.
+- `/places` - places Nova can walk to: name, room number, map spot, detour spot (`viaSpot`, tried once when the way stays blocked), kind (room, waiting room, reception, exit, other), minutes per patient, waiting room, self check-in on the robot, public, own Teams webhook, email (`notifyEmail`). Nothing is built in: start with the reception, the exit and your rooms.
 - `/simulate` - plays the robot (poll, pickup, walking with check-backs, lost patient, arrival, feedback, heartbeat with screen, conversation, self check-in, waiting status) so the loop can be shown without hardware.
 - `/login` - staff sign-in when `DASHBOARD_PASSWORD` is set.
 
@@ -27,7 +31,23 @@ Without `DATABASE_URL` everything lives in memory and is gone after a restart. W
 2. In the Vercel project set `DATABASE_URL`, `TEAM_INBOX_TOKEN`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`, `CALL_KEY`, `CLINIC_TIMEZONE` (e.g. `Europe/Berlin`), and if used `TEAMS_WEBHOOK_URL` and `PUBLIC_BASE_URL`.
 3. Deploy. Everything runs on the Node runtime and nothing is written to disk.
 
-The conversation feed never goes to the database (by design), it lives in the memory of the running server. On Vercel each instance has its own, so the feed can look empty there. The login rate limit is kept in the database.
+The conversation feed keeps Nova's lines and what it understood in the database for at most 12 h (cleared when the journey ends), so every Vercel instance shows it. What a patient said word for word (only with the demo switch on) stays in the memory of one server instance. The login and phone page rate limits are kept in the database.
+
+## Added in v3.2 (contract: `../docs/journeys.md` section 6)
+
+| Method | Path | Who | What |
+|---|---|---|---|
+| GET | /api/health | anyone | `{ ok, version, time }`, the robot picks the first server that answers |
+| POST | /api/robot/logs | robot | `{ robot, items: [{ at, level, source, text }] }`. Odd levels/sources are mapped, empty lines dropped, at most 200 per call |
+| GET | /api/robot/logs | dashboard | `?robot=&level=` (that level and above) `&source=a,b&q=&after=<id>` (tail) or `&before=<id>` (older) `&limit=` -> `{ lines (oldest first), more }` |
+| POST | /api/robot/map | robot | `{ robot, mapName?, pose, places?, scan?, follower?, target?, remainingMeters? }`. Latest frame per robot + the last 120 poses of Nova (never the patient's) |
+| GET | /api/robot/map | dashboard | `{ map }` |
+| POST | /api/robot/commands | dashboard | also `{ type: "walk_control", journeyId, action: wait / resume / slower / faster }` |
+| GET / POST | /api/walk/:code | anyone with the code | the phone page data / `{ action }` -> `walk_control` command. 409 while Nova is not with the ticket, 410 after the end |
+| POST | /api/walk/:code/ask | anyone with the code | `{ text }` -> `ask` command with `origin: "phone"`. The text is removed from the database once Nova has fetched it |
+| POST | /api/integrations/journeys | header `X-Api-Key` | `{ to: placeId or place name, pace?, wheelchair? }` -> `{ ticket, journeyId, to, via?, status, walkUrl }` |
+
+Every `guide` command the server sends out (create answer, next leg, retry, `/api/robot/next`) has `walkCode`, `to.viaSpot` and `walkUrl` (the absolute phone page link for the QR code, `PUBLIC_BASE_URL` or the request address). Heartbeats may send `server`, `version` and `pose { x, y, theta }`; the pose keeps the map alive when no map frame came for 20 s. Rate limits: phone page reads 90 per minute per address, 20 taps and 6 messages per minute per phone and journey, 20 unknown codes in 10 minutes per address; 10 wrong integration keys in 10 minutes per address.
 
 ## Env
 
@@ -39,8 +59,11 @@ The conversation feed never goes to the database (by design), it lives in the me
 | `SESSION_SECRET` | optional, mixed into the session cookie signature |
 | `CALL_KEY` | secret in the Teams card links |
 | `TEAMS_WEBHOOK_URL` | Teams Workflows webhook of the practice channel. Used when a place has no own webhook, and for help requests |
-| `PUBLIC_BASE_URL` | address phones can open, for links in Teams cards. Empty = the address the request came in on |
+| `PUBLIC_BASE_URL` | address phones can open, for links in Teams cards, emails and the phone page QR code. Empty = the address the request came in on |
 | `CLINIC_TIMEZONE` | e.g. `Europe/Berlin`: tickets per day, today's numbers, clock times in cards |
+| `RESEND_API_KEY` + `EMAIL_FROM` | email as a second channel (Resend REST API): places with an email get the same message as the Teams card, ticket and room only. Both empty = no email |
+| `RESEND_API_URL` | optional, only for tests (a mock). Default `https://api.resend.com/emails` |
+| `INTEGRATION_KEY` | key for `POST /api/integrations/journeys` (header `X-Api-Key`). Empty = the route is off |
 
 ## Demo without the robot
 

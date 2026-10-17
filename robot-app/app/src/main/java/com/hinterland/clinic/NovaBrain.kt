@@ -1,6 +1,5 @@
 package com.hinterland.clinic
 
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -24,10 +23,11 @@ import java.util.concurrent.atomic.AtomicInteger
 // while someone is talking to nova, except what that person asked for.
 object NovaBrain {
 
-    private const val TAG = "NovaBrain"
     private const val TICK_MS = 1_000L
     private const val POLL_MS = 3_000L
     private const val HEARTBEAT_MS = 15_000L
+    // while driving the dashboard wants the position more often
+    private const val HEARTBEAT_MOVING_MS = 5_000L
     // a screen change goes to the dashboard mirror at once, but not more often than this
     private const val SCREEN_PUSH_MIN_MS = 1_500L
     private const val FEED_MS = 2_000L
@@ -116,11 +116,15 @@ object NovaBrain {
     // so a walk that is under way still finishes if the activity pauses.
     suspend fun run() {
         withContext(Dispatchers.Default) {
+            RobotLog.i(LogSource.APP, "Nova Clinic ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) running, servers: ${Servers.list.joinToString { ServerList.host(it) }.ifBlank { "none set" }}")
+            launch { Servers.loop() }
             launch { loop() }
             launch { pollCommands() }
             launch { heartbeat() }
             launch { sendFeed() }
             launch { refreshPlaces() }
+            launch { RobotLog.ship() }
+            launch { LiveMap.loop() }
         }
     }
 
@@ -133,6 +137,18 @@ object NovaBrain {
 
     fun heardRobot() {
         robotSpokeAt = now()
+    }
+
+    // last time the mic heard the person (talk window at a check-back)
+    fun lastUserSpeechAt(): Long = userSpokeAt
+
+    // nova's ai is busy with an answer right now: planning, an action, or nova speaking. tighter than
+    // the brain's talk level, which stays on for 8 s after the last words
+    fun aiBusy(): Boolean {
+        val now = now()
+        val inFlight = now - actionAt < ACTION_MAX_MS && actions.get() > 0
+        val thinking = agent == AgentMode.THINKING && now - agentAt < Brain.THINKING_MAX_MS
+        return inFlight || thinking || Clinic.ui.value.speaking
     }
 
     fun agentStatus(mode: AgentMode) {
@@ -148,13 +164,6 @@ object NovaBrain {
 
     fun actionEnded() {
         actions.updateAndGet { (it - 1).coerceAtLeast(0) }
-    }
-
-    // someone talks with nova right now (the guide waits for an answer)
-    fun conversationActive(): Boolean {
-        val now = now()
-        val inFlight = if (now - actionAt < ACTION_MAX_MS) actions.get() else 0
-        return Brain.talkLevel(now, agent, agentAt, userSpokeAt, robotSpokeAt, inFlight) == TalkLevel.ACTIVE
     }
 
     // ---- requests from the person in front (GUIDE_TO_PLACE, CHECK_IN_FOR, self check-in screen) ----
@@ -228,7 +237,7 @@ object NovaBrain {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "task failed", e)
+                RobotLog.e(LogSource.BRAIN, "Task failed: ${e.javaClass.simpleName} ${e.message.orEmpty().take(120)}")
                 failed(e.message ?: e.javaClass.simpleName)
             }
         }
@@ -259,7 +268,7 @@ object NovaBrain {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "tick failed", e)
+                RobotLog.e(LogSource.BRAIN, "Tick failed: ${e.javaClass.simpleName} ${e.message.orEmpty().take(120)}")
             }
             delay(TICK_MS)
         }
@@ -269,6 +278,7 @@ object NovaBrain {
         val now = now()
         val inFlight = if (now - actionAt < ACTION_MAX_MS) actions.get() else 0
         Clinic.expireCheckIn(now)
+        Clinic.setChassis(Robot.chassisIssue())
         // the self check-in screen counts as a conversation: nothing new starts meanwhile
         val talk = if (Clinic.ui.value.checkIn != null) TalkLevel.ACTIVE
         else Brain.talkLevel(now, agent, agentAt, userSpokeAt, robotSpokeAt, inFlight)
@@ -434,7 +444,9 @@ object NovaBrain {
                 }
             }
             RobotCommand.SAY -> Clinic.sayFromTeam(cmd)
-            RobotCommand.ASK -> Clinic.askFromTeam(cmd)
+            // with a journey it comes from the patient's phone page
+            RobotCommand.ASK -> if (cmd.journeyId != null) Clinic.askDuringWalk(cmd) else Clinic.askFromTeam(cmd)
+            RobotCommand.WALK_CONTROL -> Clinic.walkControl(cmd)
             else -> Clinic.skipCommand(cmd)
         }
     }
@@ -510,17 +522,36 @@ object NovaBrain {
         }
     }
 
-    // commands stay on the server while nova can't take them (walking, urgent help)
+    // commands stay on the server while nova can't take them (urgent help, out of service, a task
+    // other than a walk). during a walk nova keeps polling: walk_control and the phone's ask must
+    // reach her at once (docs/journeys.md 6.4); other commands wait in her queue until the walk ends.
     private suspend fun pollOnce() {
         val now = now()
         checkHelp(now)
         if (!Backend.configured || helpActive()) return
         // right after start the robot api may not be there yet, a walk would fail at once
         if (!Robot.ready && now - startedAt < BOOT_GRACE_MS) return
+        // can't drive: leave the walks on the server, the dashboard shows why (heartbeat)
+        if (Robot.chassisIssue() != null) return
         val running = current
-        if (running != null && !running.preemptible) return
+        val guiding = Guide.current != null
+        if (running != null && !running.preemptible && !guiding) return
         while (commands.size < MAX_QUEUE) {
             val cmd = Clinic.pollCommand() ?: break
+            RobotLog.i(LogSource.BRAIN, "Command ${cmd.type}" + (cmd.ticket?.let { " for $it" } ?: "") + (cmd.action?.let { " ($it)" } ?: ""))
+            if (cmd.type == RobotCommand.WALK_CONTROL) {
+                if (markHandled(cmd.id)) Clinic.walkControl(cmd) else Clinic.commandDone(cmd.id)
+                continue
+            }
+            if (guiding && (cmd.type == RobotCommand.ASK || cmd.type == RobotCommand.SAY)) {
+                // words need no wheels: right away, without waiting for the walk
+                if (markHandled(cmd.id)) {
+                    scope.launch { if (cmd.type == RobotCommand.ASK) Clinic.askDuringWalk(cmd) else Clinic.sayFromTeam(cmd) }
+                } else {
+                    Clinic.commandDone(cmd.id)
+                }
+                continue
+            }
             if (commands.any { it.id == cmd.id }) break
             if (!markHandled(cmd.id)) {
                 // taken before (from the POST answer): close it once that run is over, so it stops coming
@@ -539,21 +570,25 @@ object NovaBrain {
         helpOpen = id in open
     }
 
-    // every 15 s, and right away (at most every 1.5 s) when the screen changes, for the dashboard mirror
+    // every 15 s (5 s while driving), and right away (at most every 1.5 s) when the screen changes,
+    // for the dashboard mirror. with the server in use, the app version and the map position
     private suspend fun heartbeat() {
         var sentAt = 0L
         var sentScreen: ScreenMirror? = null
         while (true) {
             val now = now()
             val screen = Clinic.ui.value.mirror()
-            val due = now - sentAt >= HEARTBEAT_MS || (screen != sentScreen && now - sentAt >= SCREEN_PUSH_MIN_MS)
+            val moving = Clinic.ui.value.walking || Guide.current?.walking == true
+            val every = if (moving) HEARTBEAT_MOVING_MS else HEARTBEAT_MS
+            val due = now - sentAt >= every || (screen != sentScreen && now - sentAt >= SCREEN_PUSH_MIN_MS)
             if (due) {
                 Robot.refreshPower()
-                publish()
+                val pose = Robot.robotPose()
+                publish(pose)
                 sentAt = now
                 sentScreen = screen
                 if (Backend.configured) {
-                    val body = Json.heartbeat(Backend.robot, _status.value, screen)
+                    val body = Json.heartbeat(Backend.robot, _status.value, screen, Servers.current, BuildConfig.VERSION_NAME, pose)
                     withContext(Dispatchers.IO) { runCatching { Backend.heartbeat(body) } }
                         .onFailure { e -> quietLog("heartbeat: ${Backend.friendly(e)}") }
                 }
@@ -590,26 +625,38 @@ object NovaBrain {
 
     // ---- status for the screen and the board ----
 
-    private fun publish() {
+    @Volatile private var lastPose: RobotPose? = null
+
+    private fun publish(pose: RobotPose? = null) {
         val now = now()
+        if (pose != null) lastPose = pose
         val plan = lastPlan
         val task = doing
+        val issue = Robot.chassisIssue()
         var state = task?.first ?: Brain.state(plan, Robot.home)
-        if (task == null && plan == Plan.Wait && !Robot.ready && now - startedAt > BOOT_GRACE_MS) {
+        if (issue != null || (task == null && plan == Plan.Wait && !Robot.ready && now - startedAt > BOOT_GRACE_MS)) {
             state = RobotState.ERROR
         }
         _status.value = BrainStatus(
-            goal = task?.second ?: Brain.goal(plan, lastSnap),
+            goal = if (issue != null) "Out of service" else task?.second ?: Brain.goal(plan, lastSnap),
             state = state,
             battery = Robot.battery,
             charging = Robot.chargingNow(),
-            position = Robot.position,
-            detail = detail(now),
+            position = Robot.position ?: whereNow(),
+            detail = detail(now, issue),
         )
     }
 
-    private fun detail(now: Long): String? = when {
+    // while driving: "near <spot>" from the map position, so the board is never empty
+    private fun whereNow(): String? {
+        val p = Robot.latestPose() ?: lastPose ?: return null
+        val near = WalkMath.nearestSpot(p.point, LiveMap.knownPlaces())
+        return near?.let { "near $it" } ?: String.format(java.util.Locale.ROOT, "x %.1f, y %.1f", p.x, p.y)
+    }
+
+    private fun detail(now: Long, issue: ChassisIssue?): String? = when {
         helpActive() -> "Urgent help was called at reception"
+        issue != null -> issue.detail
         !Robot.ready && now - startedAt > BOOT_GRACE_MS -> Robot.note ?: "Robot API not connected"
         else -> failure?.takeIf { now - it.first < FAILURE_SHOW_MS }?.second
     }
@@ -619,6 +666,6 @@ object NovaBrain {
         val now = now()
         if (now - loggedAt < LOG_EVERY_MS) return
         loggedAt = now
-        Log.w(TAG, msg)
+        RobotLog.w(LogSource.NET, msg)
     }
 }

@@ -226,3 +226,134 @@ body {
     transition: none;
   }
 }
+
+/* live map: its own light / dark switch (auto follows the system) */
+.map-surface {
+  --m-bg: #f6f8fb;
+  --m-grid: #e7ecf3;
+  --m-grid-strong: #d6dee9;
+  --m-scan: #7f90a8;
+  --m-trail: #2361d4;
+  --m-nova: #2361d4;
+  --m-nova-ink: #ffffff;
+  --m-label: #0f1b2d;
+  --m-label-muted: #56667c;
+  --m-halo: #f6f8fb;
+  --m-spot: #8392a8;
+  --m-room: #3a4a63;
+  --m-reception: #2361d4;
+  --m-waiting: #0d7f86;
+  --m-exit: #0b8457;
+  --m-target: #2361d4;
+  --m-patient: #c26a00;
+  --m-select: #0f1b2d;
+  background: var(--m-bg);
+  color: var(--m-label);
+}
+
+.map-dark {
+  --m-bg: #0b1322;
+  --m-grid: #152137;
+  --m-grid-strong: #1f2e4a;
+  --m-scan: #6f86a8;
+  --m-trail: #6aa3ff;
+  --m-nova: #6aa3ff;
+  --m-nova-ink: #071022;
+  --m-label: #e6edf7;
+  --m-label-muted: #97a7bf;
+  --m-halo: #0b1322;
+  --m-spot: #7d8ea8;
+  --m-room: #c3cfe0;
+  --m-reception: #6aa3ff;
+  --m-waiting: #3cc7c9;
+  --m-exit: #4fcf9b;
+  --m-target: #6aa3ff;
+  --m-patient: #f3ac55;
+  --m-select: #e6edf7;
+}
+
+@media (prefers-color-scheme: dark) {
+  .map-auto {
+    --m-bg: #0b1322;
+    --m-grid: #152137;
+    --m-grid-strong: #1f2e4a;
+    --m-scan: #6f86a8;
+    --m-trail: #6aa3ff;
+    --m-nova: #6aa3ff;
+    --m-nova-ink: #071022;
+    --m-label: #e6edf7;
+    --m-label-muted: #97a7bf;
+    --m-halo: #0b1322;
+    --m-spot: #7d8ea8;
+    --m-room: #c3cfe0;
+    --m-reception: #6aa3ff;
+    --m-waiting: #3cc7c9;
+    --m-exit: #4fcf9b;
+    --m-target: #6aa3ff;
+    --m-patient: #f3ac55;
+    --m-select: #e6edf7;
+  }
+}
+
+.map-label {
+  paint-order: stroke;
+  stroke: var(--m-halo);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+.map-spot:focus-visible {
+  outline: none;
+}
+
+.map-spot:focus-visible .map-spot-ring {
+  stroke: var(--primary);
+  stroke-width: 3px;
+}
+
+/* nova's position glides between frames instead of jumping */
+.map-nova {
+  transition: transform 0.9s linear;
+}
+
+.map-target-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: target-pulse 2.4s ease-out infinite;
+}
+
+@keyframes target-pulse {
+  from {
+    opacity: 0.5;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+/* phone page: the listening state of the talk button */
+.listening {
+  animation: listening 1.4s ease-in-out infinite;
+}
+
+@keyframes listening {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 10px color-mix(in srgb, var(--primary) 0%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .map-nova {
+    transition: none;
+  }
+  .map-target-pulse,
+  .listening {
+    animation: none;
+  }
+}

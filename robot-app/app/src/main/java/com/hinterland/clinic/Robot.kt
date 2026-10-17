@@ -1,7 +1,6 @@
 package com.hinterland.clinic
 
 import android.content.Context
-import android.util.Log
 import com.ainirobot.coreservice.client.ApiListener
 import com.ainirobot.coreservice.client.Definition
 import com.ainirobot.coreservice.client.RobotApi
@@ -54,26 +53,22 @@ sealed interface ChargeOutcome {
 
 enum class NavEvent { BLOCKED, CLEAR }
 
-// chassis, vision and battery side (RobotAPI). voice is off in RobotApi on agentos, everything
+// chassis, vision, radar and battery side (RobotAPI). voice is off in RobotApi on agentos, everything
 // spoken goes through AgentCore. every call here was checked in RobotAPI_en.md and with javap
 // on the bundled core jar (com.orionstar.robot:core 1.0.20250821-SNAPSHOT).
 object Robot {
-
-    private const val TAG = "NovaRobot"
 
     // RobotAPI doc recommends 0.2 m arrival range and a 30 s obstacle timeout; a bit more range so it stops before the door
     private const val ARRIVE_RANGE_M = 0.3
     private const val AVOID_TIMEOUT_MS = 30_000L
     private const val NAV_TIMEOUT_MS = 4 * 60_000L
-    // blocked longer than this in total during one drive -> give up
-    private const val BLOCKED_LIMIT_MS = 25_000L
     private const val WATCH_MS = 250L
+    // a pose from the STATUS_POSE listener counts as "now" this long
+    private const val POSE_FRESH_MS = 2_000L
     // RobotAPI "Rotational Motion": speed 0-50 degrees/s. calm, about 4.5 s for a half turn
     private const val TURN_DEG_PER_S = 40f
     // after stopNavigation the chassis needs a moment before a turn (FAQ: resource conflict)
     const val NAV_RELEASE_MS = 700L
-    // while still blocked, ask again this often
-    private const val NAG_EVERY_MS = 10_000L
     // "Stop Charging and Undock": speed and distance are the doc defaults
     private const val LEAVE_SPEED = 0.7f
     private const val LEAVE_DISTANCE_M = 0.2f
@@ -93,14 +88,40 @@ object Robot {
     private val reqIds = AtomicInteger(1)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    private val bootAt = System.currentTimeMillis()
+
     @Volatile var connected = false
         private set
 
-    // the system took the chassis (emergency stop, ota ...)
+    // handleApiDisabled: no chassis rights for this app (not started from the robot's home screen)
+    @Volatile var disabled = false
+        private set
+
+    // the system took the chassis (emergency stop, low battery, ota ... FAQ "app suspended")
     @Volatile var suspended = false
         private set
 
+    // STATUS_EMERGENCY as far as it can be read (Json.emergency), null = unknown
+    @Volatile var emergency: Boolean? = null
+        private set
+
     val ready: Boolean get() = connected && !suspended
+
+    // why nova can't drive right now, null = she can (or is still starting up)
+    fun chassisIssue(): ChassisIssue? =
+        Chassis.issue(connected, disabled, suspended, emergency, System.currentTimeMillis() - bootAt)
+
+    // the spot of the drive that runs right now (live map target), null when not driving
+    @Volatile var driving: String? = null
+        private set
+
+    // RobotApi getVersion(), read once after connecting
+    @Volatile var systemVersion: String? = null
+        private set
+
+    // latest pose from the STATUS_POSE listener
+    @Volatile private var lastPose: RobotPose? = null
+    @Volatile private var lastPoseAt = 0L
 
     @Volatile var note: String? = null
         private set
@@ -155,20 +176,25 @@ object Robot {
     private val apiListener = object : ApiListener {
         override fun handleApiConnected() {
             connected = true
+            disabled = false
             suspended = false
             runCatching { api.setCallback(moduleCallback) }
             scope.launch { setUp() }
+            RobotLog.i(LogSource.NAV, "Robot API connected")
             health(true, null)
         }
 
         override fun handleApiDisabled() {
             connected = false
+            disabled = true
+            RobotLog.e(LogSource.NAV, "Robot API disabled: start Nova Clinic from the robot's home screen")
             health(false, "Robot API disabled")
         }
 
         override fun handleApiDisconnected() {
             connected = false
             following = null
+            RobotLog.w(LogSource.NAV, "Robot API disconnected")
             health(false, "Robot API disconnected")
         }
     }
@@ -180,14 +206,43 @@ object Robot {
         override fun onSuspend() {
             suspended = true
             following = null
+            RobotLog.w(LogSource.NAV, "Suspended by the robot system")
             health(false, "Paused by the robot system")
         }
 
         override fun onRecovery() {
             suspended = false
+            RobotLog.i(LogSource.NAV, "Control is back from the robot system")
             health(true, null)
         }
     }
+
+    // RobotAPI "Listen for Position State Changes": Definition.STATUS_POSE, a Pose as json, continuously
+    private val poseListener = object : StatusListener() {
+        override fun onStatusUpdate(type: String?, data: String?) {
+            Json.robotPose(data)?.let {
+                lastPose = it
+                lastPoseAt = System.currentTimeMillis()
+            }
+        }
+    }
+
+    // RobotAPI "System Status Monitoring": Definition.STATUS_EMERGENCY. the value format is not in the
+    // docs: every change of the raw value goes to the log so the robot tells us
+    @Volatile private var emergencyRaw: String? = null
+    private val emergencyListener = object : StatusListener() {
+        override fun onStatusUpdate(type: String?, data: String?) {
+            val raw = data?.trim()?.take(80)
+            if (raw != emergencyRaw) {
+                emergencyRaw = raw
+                RobotLog.i(LogSource.NAV, "Emergency status: \"$raw\"")
+            }
+            emergency = Json.emergency(data)
+        }
+    }
+
+    // radar data (RobotAPI "Radar Data Listener"), only while Radar asks for it
+    @Volatile private var radarListener: StatusListener? = null
 
     // battery and charging, pushed by the robot (RobotAPI "Register Status Listener", Definition.STATUS_BATTERY)
     private val batteryListener = object : StatusListener() {
@@ -201,7 +256,7 @@ object Robot {
         if (connected) return
         runCatching { api.connectServer(context.applicationContext, apiListener) }
             .onFailure {
-                Log.w(TAG, "connectServer failed", it)
+                RobotLog.e(LogSource.NAV, "connectServer failed: ${it.javaClass.simpleName} ${it.message.orEmpty().take(80)}")
                 health(false, "Robot API not available")
             }
     }
@@ -212,6 +267,16 @@ object Robot {
         runCatching { api.disableBattery() }
         runCatching { api.unregisterStatusListener(batteryListener) }
         runCatching { api.registerStatusListener(Definition.STATUS_BATTERY, batteryListener) }
+        runCatching { api.unregisterStatusListener(poseListener) }
+        runCatching { api.registerStatusListener(Definition.STATUS_POSE, poseListener) }
+            .onFailure { RobotLog.w(LogSource.NAV, "Pose listener not registered: ${it.message}") }
+        runCatching { api.unregisterStatusListener(emergencyListener) }
+        runCatching { api.registerStatusListener(Definition.STATUS_EMERGENCY, emergencyListener) }
+        // sync binder call (RobotAPI "Get System Version"); we are on a worker thread here
+        runCatching { api.version }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            systemVersion = it
+            RobotLog.i(LogSource.APP, "Robot system version $it")
+        }
         // current value once (the listener only reports changes), with its own listener object
         runCatching {
             api.getRobotStatus(Definition.STATUS_BATTERY, object : StatusListener() {
@@ -362,13 +427,26 @@ object Robot {
         if (stopFollow()) delay(FOLLOW_RELEASE_MS)
         position = null
         atHome = false
+        driving = spot
         var outcome: NavOutcome = NavOutcome.Failed(NavFailure.OTHER)
-        for (attempt in 0..1) {
-            outcome = watched(spot, speed, stopWhen, interrupt, onTick, onEvent)
-            // the chassis may still be held (focus following, a turn that just ended) - try once more
-            val busy = (outcome as? NavOutcome.Failed)?.why == NavFailure.BUSY
-            if (!busy || attempt == 1) break
-            delay(1_000)
+        try {
+            for (attempt in 0..1) {
+                outcome = watched(spot, speed, stopWhen, interrupt, onTick, onEvent)
+                // the chassis may still be held (focus following, a turn that just ended) - try once more
+                val busy = (outcome as? NavOutcome.Failed)?.why == NavFailure.BUSY
+                if (!busy || attempt == 1) break
+                delay(1_000)
+            }
+        } finally {
+            driving = null
+        }
+        when (outcome) {
+            NavOutcome.Arrived -> RobotLog.i(LogSource.NAV, "Arrived at $spot")
+            NavOutcome.Interrupted -> RobotLog.d(LogSource.NAV, "Stopped on the way to $spot")
+            is NavOutcome.Failed -> RobotLog.w(
+                LogSource.NAV,
+                "Could not reach $spot: ${outcome.why.screen}${outcome.code?.let { " (code $it)" }.orEmpty()}",
+            )
         }
         when (outcome) {
             NavOutcome.Arrived -> {
@@ -395,20 +473,50 @@ object Robot {
         onTick: (Boolean) -> Unit,
         onEvent: (NavEvent) -> Unit,
     ): NavOutcome = coroutineScope {
-        val clock = BlockedClock()
+        // asks people to step aside (twice), then gives up on this way (BlockedWatch)
+        val blocked = BlockedWatch()
+        var blockedFrom: Point? = null
+        val lock = Any()
         val nav = async {
             navigate(spot, speed) { ev ->
-                if (ev == NavEvent.BLOCKED) clock.blocked(now()) else clock.clear(now())
-                onEvent(ev)
+                synchronized(lock) {
+                    if (ev == NavEvent.BLOCKED) {
+                        blocked.blocked(now())
+                    } else {
+                        blocked.clear(now())
+                    }
+                }
+                if (ev == NavEvent.CLEAR) onEvent(ev)
             }
         }
-        var nagAt = now()
+        RobotLog.i(LogSource.NAV, "Driving to $spot" + (speed?.let { " at ${it.linear} m/s" } ?: ""))
         var result: NavOutcome? = null
         while (result == null) {
             result = withTimeoutOrNull(WATCH_MS) { nav.await() }
             if (result != null) break
             val t = now()
-            onTick(clock.isBlocked())
+            // "blocked" but the robot drove on: the end-of-obstacle status got lost, so it is clear
+            val pose = latestPose(t)
+            val unstuck = synchronized(lock) {
+                if (!blocked.isBlocked) {
+                    blockedFrom = null
+                    false
+                } else {
+                    val from = blockedFrom ?: pose?.point.also { blockedFrom = it }
+                    if (from != null && pose != null && blocked.moved(t, from.distanceTo(pose.point))) {
+                        blockedFrom = null
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+            if (unstuck) {
+                RobotLog.i(LogSource.NAV, "Obstacle status cleared: Nova moved on")
+                onEvent(NavEvent.CLEAR)
+            }
+            val step = synchronized(lock) { blocked.step(t) }
+            onTick(synchronized(lock) { blocked.isBlocked })
             when {
                 stopWhen() -> {
                     nav.cancel()
@@ -418,13 +526,13 @@ object Robot {
                     nav.cancel()
                     result = NavOutcome.Interrupted
                 }
-                clock.total(t) > BLOCKED_LIMIT_MS -> {
+                step == BlockedStep.GIVE_UP -> {
                     nav.cancel()
+                    RobotLog.w(LogSource.NAV, "Way to $spot stays blocked after asking ${blocked.asksDone} times")
                     result = NavOutcome.Failed(NavFailure.BLOCKED)
                 }
-                !clock.isBlocked() -> nagAt = t
-                t - nagAt >= NAG_EVERY_MS -> {
-                    nagAt = t
+                step == BlockedStep.ASK -> {
+                    RobotLog.i(LogSource.NAV, "Blocked on the way to $spot, asking people to step aside")
                     onEvent(NavEvent.BLOCKED)
                 }
             }
@@ -486,7 +594,7 @@ object Robot {
                         api.startNavigation(id, spot, ARRIVE_RANGE_M, AVOID_TIMEOUT_MS, listener)
                     }
                 }.getOrElse {
-                    Log.w(TAG, "startNavigation threw", it)
+                    RobotLog.e(LogSource.NAV, "startNavigation threw: ${it.javaClass.simpleName} ${it.message.orEmpty().take(80)}")
                     -1
                 }
                 if (started < 0) {
@@ -520,7 +628,7 @@ object Robot {
                         finish(result == Definition.RESULT_OK || message?.contains("succeed") == true)
 
                     override fun onError(errorCode: Int, errorString: String?) {
-                        Log.w(TAG, "turn error $errorCode")
+                        RobotLog.w(LogSource.NAV, "Turn error $errorCode")
                         finish(false)
                     }
                 }
@@ -542,18 +650,33 @@ object Robot {
         runCatching { api.stopMove(reqIds.getAndIncrement(), object : CommandListener() {}) }
     }
 
-    // RobotAPI "Get Robot Current Position" (needs localization); null when it can't tell
-    suspend fun pose(): Point? {
+    // the STATUS_POSE value when it is fresh, else null
+    fun latestPose(now: Long = now()): RobotPose? = lastPose?.takeIf { now - lastPoseAt <= POSE_FRESH_MS }
+
+    // heading in radians from the fresh pose, for the turn check
+    fun heading(): Double? = latestPose()?.theta
+
+    // where nova is: the fresh STATUS_POSE value, else RobotAPI "Get Robot Current Position"
+    // (needs localization). null when it can't tell
+    suspend fun robotPose(): RobotPose? {
         if (!ready) return null
+        latestPose()?.let { return it }
         return withTimeoutOrNull(2_500) {
-            suspendCancellableCoroutine<Point?> { cont ->
+            suspendCancellableCoroutine<RobotPose?> { cont ->
                 val finished = AtomicBoolean(false)
-                fun finish(p: Point?) {
+                fun finish(p: RobotPose?) {
                     if (finished.compareAndSet(false, true)) cont.resume(p)
                 }
                 val started = runCatching {
                     api.getPosition(reqIds.getAndIncrement(), object : CommandListener() {
-                        override fun onResult(result: Int, message: String?) = finish(Json.pose(message))
+                        override fun onResult(result: Int, message: String?) {
+                            val p = Json.robotPose(message)
+                            if (p != null) {
+                                lastPose = p
+                                lastPoseAt = System.currentTimeMillis()
+                            }
+                            finish(p)
+                        }
 
                         override fun onError(errorCode: Int, errorString: String?) = finish(null)
                     })
@@ -561,6 +684,61 @@ object Robot {
                 if (started < 0) finish(null)
             }
         }
+    }
+
+    suspend fun pose(): Point? = robotPose()?.point
+
+    // RobotAPI "Get Current Map Name"; null when it can't tell
+    suspend fun mapName(): String? {
+        if (!ready) return null
+        return withTimeoutOrNull(3_000) {
+            suspendCancellableCoroutine<String?> { cont ->
+                val finished = AtomicBoolean(false)
+                fun finish(v: String?) {
+                    if (finished.compareAndSet(false, true)) cont.resume(v)
+                }
+                val started = runCatching {
+                    api.getMapName(reqIds.getAndIncrement(), object : CommandListener() {
+                        override fun onResult(result: Int, message: String?) = finish(message?.trim()?.takeIf { it.isNotEmpty() })
+
+                        override fun onError(errorCode: Int, errorString: String?) = finish(null)
+                    })
+                }.getOrDefault(-1)
+                if (started < 0) finish(null)
+            }
+        }
+    }
+
+    // ---- radar (RobotAPI "Enable/Disable Radar Data Reporting" + "Radar Data Listener"):
+    // setNavigationLineData(reqId, enabled) and Definition.STATUS_LINE_DATA. off again after use. ----
+
+    // true when the robot took it. onData runs on a binder thread with the raw json
+    fun startRadar(onData: (String?) -> Unit): Boolean {
+        if (!ready) return false
+        stopRadar()
+        val listener = object : StatusListener() {
+            override fun onStatusUpdate(type: String?, data: String?) = onData(data)
+        }
+        val enabled = runCatching { api.setNavigationLineData(reqIds.getAndIncrement(), true) }.getOrDefault(-1)
+        if (enabled < 0) {
+            RobotLog.w(LogSource.LIDAR, "Radar data could not be switched on ($enabled)")
+            return false
+        }
+        val reg = runCatching { api.registerStatusListener(Definition.STATUS_LINE_DATA, listener) }
+        if (reg.isFailure) {
+            RobotLog.w(LogSource.LIDAR, "Radar listener not registered: ${reg.exceptionOrNull()?.message}")
+            runCatching { api.setNavigationLineData(reqIds.getAndIncrement(), false) }
+            return false
+        }
+        radarListener = listener
+        return true
+    }
+
+    fun stopRadar() {
+        val l = radarListener ?: return
+        radarListener = null
+        runCatching { api.unregisterStatusListener(l) }
+        runCatching { api.setNavigationLineData(reqIds.getAndIncrement(), false) }
     }
 
     // ---- charging ----
@@ -625,7 +803,7 @@ object Robot {
                         override fun onResult(result: Int, message: String?) = finish(result == Definition.RESULT_OK)
 
                         override fun onError(errorCode: Int, errorString: String?) {
-                            Log.w(TAG, "leaveChargingPile error $errorCode")
+                            RobotLog.w(LogSource.NAV, "leaveChargingPile error $errorCode")
                             finish(false)
                         }
                     })

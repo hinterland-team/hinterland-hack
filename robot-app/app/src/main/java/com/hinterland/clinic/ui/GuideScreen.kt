@@ -1,7 +1,13 @@
 package com.hinterland.clinic.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -26,11 +32,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
@@ -44,6 +53,8 @@ import androidx.compose.ui.unit.sp
 import com.hinterland.clinic.GuidePhase
 import com.hinterland.clinic.GuideUi
 import com.hinterland.clinic.Pace
+import com.hinterland.clinic.TalkStage
+import com.hinterland.clinic.TalkUi
 import com.hinterland.clinic.UiState
 
 private enum class GuideLayout { PICKUP, PACE, WALK, ARRIVED, END }
@@ -88,12 +99,20 @@ fun GuideContent(state: UiState, actions: ScreenActions) {
 @Composable
 private fun Pickup(g: GuideUi, actions: ScreenActions) {
     Column(Modifier.fillMaxSize()) {
-        Text("YOUR TICKET", style = text(Type.label, FontWeight.Bold, Nova.Blue, spacing = 3.sp))
-        Text(
-            g.ticket.ifBlank { "–" },
-            style = text(Type.ticket, FontWeight.Black, Nova.Ink, lineHeight = Type.ticket, tabular = true),
-            maxLines = 1,
-        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text("YOUR TICKET", style = text(Type.label, FontWeight.Bold, Nova.Blue, spacing = 3.sp))
+                Text(
+                    g.ticket.ifBlank { "–" },
+                    style = text(if (g.walkUrl != null) Type.ticket * 0.86f else Type.ticket, FontWeight.Black, Nova.Ink, lineHeight = Type.ticket, tabular = true),
+                    maxLines = 1,
+                )
+            }
+            g.walkUrl?.let { url ->
+                Spacer(Modifier.width(Space.m))
+                PhoneCard(url)
+            }
+        }
         Spacer(Modifier.height(Space.s))
         Text(g.step(), style = text(Type.step, FontWeight.Bold, Nova.Ink), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(Space.s))
@@ -107,13 +126,37 @@ private fun Pickup(g: GuideUi, actions: ScreenActions) {
     }
 }
 
+// the phone companion: scan, then wait / slower / talk from the phone while walking behind nova
 @Composable
-private fun Destination(g: GuideUi) {
+private fun PhoneCard(url: String) {
+    val shape = RoundedCornerShape(Space.radius)
+    Row(
+        Modifier
+            .clip(shape)
+            .background(Nova.Card)
+            .border(1.5.dp, Nova.Line, shape)
+            .padding(Space.s),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        QrCode(url, 176.dp)
+        Spacer(Modifier.width(Space.s))
+        Column(Modifier.width(150.dp)) {
+            Glyph(GlyphKind.PHONE, Nova.Teal, 34.dp)
+            Spacer(Modifier.height(Space.xs))
+            Text("Walk with your phone", style = text(Type.caption, FontWeight.Bold, Nova.Ink), maxLines = 2)
+            Spacer(Modifier.height(6.dp))
+            Text("Wait, slower or talk to me from behind", style = text(18.sp, FontWeight.Normal, Nova.InkSoft), maxLines = 3)
+        }
+    }
+}
+
+@Composable
+private fun Destination(g: GuideUi, prefix: String = "To ") {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Glyph(if (g.exit) GlyphKind.DOOR else GlyphKind.ROUTE, Nova.InkSoft, 32.dp)
         Spacer(Modifier.width(12.dp))
         Text(
-            listOfNotNull("To ${g.destination}", g.destinationNote).joinToString("  ·  "),
+            listOfNotNull("$prefix${g.destination}", g.destinationNote).joinToString("  ·  "),
             style = text(Type.body, FontWeight.Medium, Nova.InkSoft),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -160,6 +203,101 @@ private fun paceGlyph(p: Pace) = when (p) {
 
 @Composable
 private fun Walk(g: GuideUi, actions: ScreenActions) {
+    val reduced = LocalReducedMotion.current
+    AnimatedContent(
+        targetState = g.talk != null,
+        transitionSpec = {
+            if (reduced) fadeIn(tween(0)) togetherWith fadeOut(tween(0))
+            else (fadeIn(tween(380, delayMillis = 80)) + scaleIn(tween(380, delayMillis = 80), initialScale = 0.98f)) togetherWith fadeOut(tween(160))
+        },
+        label = "talk",
+        modifier = Modifier.fillMaxSize(),
+    ) { talking ->
+        val talk = g.talk
+        if (talking && talk != null) Talk(g, talk, actions) else WalkProgress(g, actions)
+    }
+}
+
+// face to face at a check-back: the question, nova listening, three big answers
+@Composable
+private fun Talk(g: GuideUi, talk: TalkUi, actions: ScreenActions) {
+    val first = talk.question.substringBefore('?').trim() + "?"
+    val rest = talk.question.substringAfter('?', "").trim()
+    Column(Modifier.fillMaxSize()) {
+        Chips(g)
+        Spacer(Modifier.height(Space.l))
+        Text(first, style = text(Type.title, FontWeight.Bold, Nova.Ink), maxLines = 1)
+        if (rest.isNotEmpty()) {
+            Spacer(Modifier.height(Space.xs))
+            Text(rest, style = text(Type.step, FontWeight.Medium, Nova.InkSoft), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.height(Space.l))
+        Listening(talk)
+        Spacer(Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth().height(TALK_BUTTON), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+            BigButton("All good", GlyphKind.CHECK, onClick = actions.allGood, modifier = Modifier.weight(1.3f), height = TALK_BUTTON)
+            BigButton("Slower", GlyphKind.PACE_1, onClick = actions.talkSlower, modifier = Modifier.weight(1f), primary = false, height = TALK_BUTTON)
+            BigButton("Wait", GlyphKind.PAUSE, onClick = actions.talkWait, modifier = Modifier.weight(1f), primary = false, height = TALK_BUTTON)
+        }
+        Spacer(Modifier.height(Space.m))
+        Privacy()
+    }
+}
+
+private val TALK_BUTTON = 112.dp
+
+// a mic in a soft circle; while nova listens a ring runs down over the listening time
+@Composable
+private fun Listening(talk: TalkUi) {
+    val reduced = LocalReducedMotion.current
+    val ring = remember(talk.id) { Animatable(talk.listened ?: 0f) }
+    LaunchedEffect(talk.id, talk.stage) {
+        if (talk.stage == TalkStage.LISTENING && talk.listened == null && !reduced) {
+            ring.animateTo(1f, tween(talk.listenMs.toInt(), easing = LinearEasing))
+        }
+    }
+    val breathe = if (reduced || talk.stage == TalkStage.LISTENING) {
+        0f
+    } else {
+        val loop = rememberInfiniteTransition(label = "talkWait")
+        val v by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1_100), RepeatMode.Reverse), label = "breathe")
+        v
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(88.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.fillMaxSize()) {
+                val w = 6.dp.toPx()
+                drawCircle(Nova.TealSoft, size.minDimension / 2f)
+                if (talk.stage == TalkStage.LISTENING) {
+                    drawArc(
+                        Nova.Teal, -90f, 360f * (1f - ring.value), false,
+                        topLeft = Offset(w / 2f, w / 2f), size = Size(size.width - w, size.height - w),
+                        style = Stroke(w, cap = StrokeCap.Round),
+                    )
+                } else {
+                    drawCircle(Nova.Teal.copy(alpha = 0.25f + 0.25f * breathe), size.minDimension / 2f - w / 2f, style = Stroke(w))
+                }
+            }
+            Glyph(GlyphKind.MIC, Nova.Teal, 40.dp)
+        }
+        Spacer(Modifier.width(Space.m))
+        Column {
+            Text(
+                when (talk.stage) {
+                    TalkStage.ASKING -> "Let me ask you"
+                    TalkStage.LISTENING -> "I'm listening"
+                    TalkStage.REPLYING -> "One moment"
+                },
+                style = text(Type.bodyLarge, FontWeight.SemiBold, Nova.Teal),
+            )
+            Spacer(Modifier.height(6.dp))
+            Text("Just say it, or tap below.", style = text(Type.body, FontWeight.Normal, Nova.InkSoft))
+        }
+    }
+}
+
+@Composable
+private fun WalkProgress(g: GuideUi, actions: ScreenActions) {
     val alert = g.phase == GuidePhase.LOOKING || g.phase == GuidePhase.LOST
     val accent = when (g.phase) {
         GuidePhase.LOOKING, GuidePhase.LOST -> Nova.Amber
@@ -221,8 +359,8 @@ private fun Walk(g: GuideUi, actions: ScreenActions) {
 }
 
 private fun support(g: GuideUi): String = when (g.phase) {
-    GuidePhase.WALKING -> "Walk behind me, I'll check on you now and then."
-    GuidePhase.CHECKING -> "All good? Shall I slow down?"
+    GuidePhase.WALKING -> if (g.detour) "The way ahead is blocked. Stay close to me." else "Walk behind me, I'll check on you now and then."
+    GuidePhase.CHECKING -> "I'm turning around to see you."
     GuidePhase.WAITING -> "Take your time, I'll wait right here."
     GuidePhase.PAUSED -> "Tell me or tap when you're ready."
     GuidePhase.LOOKING -> "Ticket ${g.ticket}, I'm over here."
@@ -290,14 +428,27 @@ private fun Arrived(g: GuideUi, actions: ScreenActions) {
         }
         Spacer(Modifier.height(Space.m))
         Text(
-            if (g.exit) "Goodbye and get well soon" else "This is ${g.destination}",
+            when {
+                g.exit -> "Goodbye and get well soon"
+                g.waiting -> "Please take a seat"
+                else -> "This is ${g.destination}"
+            },
             style = text(Type.endTitle, FontWeight.Bold, Nova.Ink),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(Space.s))
+        if (g.waiting) {
+            // a waiting room: where we are, and that nova comes back for this ticket
+            Destination(g.copy(destination = g.destination, destinationNote = null), prefix = "")
+            Spacer(Modifier.height(Space.s))
+        }
         Text(
-            if (g.exit) "Thank you for visiting. Take care!" else "Please take a seat. The team knows you're here.",
+            when {
+                g.exit -> "Thank you for visiting. Take care!"
+                g.waiting -> if (g.ticket.isBlank()) "I'll come back for you when it's your turn." else "I'll come back for ticket ${g.ticket} when it's your turn."
+                else -> "Please take a seat. The team knows you're here."
+            },
             style = text(Type.bodyLarge, FontWeight.Normal, Nova.InkSoft),
         )
         Spacer(Modifier.weight(1f))

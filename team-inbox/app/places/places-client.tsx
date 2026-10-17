@@ -49,7 +49,7 @@ function KindIcon({ kind, size = 20 }: { kind: PlaceKind; size?: number }) {
   return <DoorOpen {...props} />;
 }
 
-export function PlacesClient({ practiceChannel }: { practiceChannel: boolean }) {
+export function PlacesClient({ practiceChannel, emailOn }: { practiceChannel: boolean; emailOn: boolean }) {
   const [places, setPlaces] = useState<Place[] | null>(null);
   const [adding, setAdding] = useState<PlaceKind | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -136,6 +136,7 @@ export function PlacesClient({ practiceChannel }: { practiceChannel: boolean }) 
               initialKind={adding}
               places={places ?? []}
               practiceChannel={practiceChannel}
+              emailOn={emailOn}
               onCancel={() => setAdding(null)}
               onSaved={async () => {
                 setAdding(null);
@@ -175,6 +176,7 @@ export function PlacesClient({ practiceChannel }: { practiceChannel: boolean }) 
                           place={p}
                           places={places}
                           practiceChannel={practiceChannel}
+                          emailOn={emailOn}
                           onCancel={() => setEditing(null)}
                           onSaved={async () => {
                             setEditing(null);
@@ -226,6 +228,8 @@ function PlaceRow({
     waiting ? `Waits in ${waiting.name}` : null,
     place.kind === "room" || place.kind === "other" ? `${place.avgMinutes} min per patient` : null,
     place.kind !== "exit" ? teams : null,
+    place.notifyEmail ? `Email to ${place.notifyEmail}` : null,
+    place.viaSpot ? `Detour via ${place.viaSpot}` : null,
   ].filter(Boolean) as string[];
 
   const remove = async () => {
@@ -258,7 +262,7 @@ function PlaceRow({
           {chips.length > 0 && (
             <ul className="mt-2 flex flex-wrap gap-1.5">
               {chips.map((c) => (
-                <li key={c} className="rounded-full bg-subtle px-2.5 py-1 text-xs font-semibold text-muted">
+                <li key={c} className="max-w-full truncate rounded-full bg-subtle px-2.5 py-1 text-xs font-semibold text-muted">
                   {c}
                 </li>
               ))}
@@ -305,6 +309,7 @@ function PlaceForm({
   initialKind,
   places,
   practiceChannel,
+  emailOn,
   onCancel,
   onSaved,
 }: {
@@ -312,6 +317,7 @@ function PlaceForm({
   initialKind?: PlaceKind;
   places: Place[];
   practiceChannel: boolean;
+  emailOn: boolean;
   onCancel: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -324,6 +330,8 @@ function PlaceForm({
   const [selfCheckIn, setSelfCheckIn] = useState(place?.selfCheckIn ?? false);
   const [waitingId, setWaitingId] = useState(place?.waitingPlaceId ?? "");
   const [webhook, setWebhook] = useState(place?.teamsWebhookUrl ?? "");
+  const [email, setEmail] = useState(place?.notifyEmail ?? "");
+  const [via, setVia] = useState(place?.viaSpot ?? "");
   const [active, setActive] = useState(place?.active ?? true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -345,6 +353,8 @@ function PlaceForm({
       public: alwaysPublic || isPublic,
       avgMinutes: minutes,
       teamsWebhookUrl: webhook,
+      notifyEmail: email,
+      viaSpot: via,
       waitingPlaceId: roomKind ? waitingId : "",
       selfCheckIn: roomKind && selfCheckIn,
       active,
@@ -354,6 +364,8 @@ function PlaceForm({
       else {
         if (!room) delete body.room;
         if (!webhook) delete body.teamsWebhookUrl;
+        if (!email.trim()) delete body.notifyEmail;
+        if (!via.trim()) delete body.viaSpot;
         if (!body.waitingPlaceId) delete body.waitingPlaceId;
         await post("/api/places", body);
       }
@@ -448,6 +460,25 @@ function PlaceForm({
         />
         <p id={`spot-help-${formId}`} className="mt-1 text-sm text-muted">
           Exactly as the spot is called on Nova&apos;s map. Empty means the same as the name.
+        </p>
+      </div>
+
+      <div className="mt-4">
+        <label htmlFor={`via-${formId}`} className="text-sm font-semibold">
+          Detour spot <span className="font-normal text-muted">(optional)</span>
+        </label>
+        <input
+          id={`via-${formId}`}
+          className={`${INPUT} mt-2 font-mono`}
+          value={via}
+          onChange={(e) => setVia(e.target.value)}
+          maxLength={80}
+          autoComplete="off"
+          aria-describedby={`via-help-${formId}`}
+        />
+        <p id={`via-help-${formId}`} className="mt-1 text-sm text-muted">
+          A spot on Nova&apos;s map for another way there. When the normal way stays blocked, Nova tries it once before it
+          calls the team.
         </p>
       </div>
 
@@ -561,6 +592,30 @@ function PlaceForm({
             {practiceChannel
               ? "Empty means the practice channel gets the cards."
               : "Empty means no Teams card for this place (no practice channel is set up)."}
+          </p>
+        </div>
+      )}
+
+      {kind !== "exit" && (
+        <div className="mt-4">
+          <label htmlFor={`email-${formId}`} className="text-sm font-semibold">
+            Email <span className="font-normal text-muted">(optional)</span>
+          </label>
+          <input
+            id={`email-${formId}`}
+            className={`${INPUT} mt-2`}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            type="text"
+            inputMode="email"
+            autoComplete="off"
+            maxLength={1300}
+            aria-describedby={`email-help-${formId}`}
+          />
+          <p id={`email-help-${formId}`} className="mt-1 text-sm text-muted">
+            {emailOn
+              ? "Gets the same message as the Teams card: ticket and room, never a name. Up to 5 addresses, separated by commas."
+              : "Email is off on this server (RESEND_API_KEY and EMAIL_FROM are not set). You can already save an address."}
           </p>
         </div>
       )}

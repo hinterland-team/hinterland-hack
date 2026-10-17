@@ -76,7 +76,7 @@ GDPR still applies. We don't claim otherwise. We keep the data as small as we ca
 - Detecting a person without identifying them is not biometric processing under GDPR Article 9 (EDPB Guidelines 3/2019). A live camera image can still be personal data, so people must be told.
 - The robot screen says: "Nova only knows your ticket and the room. Nothing is recorded."
 - The Teams message has the ticket, room, pace and expected time. No name.
-- The live dashboard shows what Nova does and says. What the patient says is shown only as a short intent, like "asked to slow down". This feed stays in memory only, is never written to the database, and is cleared with the journey.
+- The live dashboard shows what Nova does and says. What the patient says is shown only as a short intent, like "asked to slow down". Nova's own lines and these short intents are kept for at most 12 hours and are deleted when the journey ends. The patient's own words are not kept: a message from the phone is passed on to Nova and wiped as soon as Nova has it.
 - Journeys are deleted 12 hours after they end. Only anonymous daily counts stay.
 - Open point: Nova's speech runs through the robot's AI (OrionStar AgentOS). Before a real deployment we have to check where the audio is processed.
 
@@ -133,7 +133,7 @@ One full loop, live on the robot:
 4. The doctor taps "Call in". Nova picks up A17 in the waiting room and brings them to the doctor's room.
 5. On arrival the patient can tap thumbs up or down.
 6. After the visit the doctor taps "Done - guide to exit". Nova walks the patient to the exit: "Goodbye and get well soon."
-7. The whole time, the dashboard shows live what Nova is doing: a mirror of the robot screen, the conversation feed and the journey timeline. The conversation is not stored.
+7. The whole time, the dashboard shows live what Nova is doing: a mirror of the robot screen, the conversation feed and the journey timeline. Nova's lines and the short intents are deleted when the journey ends, at the latest after 12 hours; the patient's own words are not kept.
 
 The same loop also starts from the reception desk: staff pick the room and the pace, and Nova calls ticket A17 at the pickup point.
 

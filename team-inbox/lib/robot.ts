@@ -1,7 +1,8 @@
-import { now, numberOrNull, retention, robotName, today } from "./common";
-import { addFeed, listFeed } from "./feed";
+import { hoursAgo, now, numberOrNull, retention, robotName, today } from "./common";
 import { ApiError, text } from "./http";
 import { markAssigned } from "./journeys";
+import { feedId, readFeed, saveFeed } from "./live-feed";
+import { cleanMapFrame } from "./robot-data";
 import { getStore } from "./store";
 import { helpCard, sendToTeams } from "./teams";
 import {
@@ -11,7 +12,9 @@ import {
   type HelpRequest,
   type RobotCommand,
   type RobotScreen,
+  MAP_TRAIL_MAX,
   SCREEN_VIEWS,
+  WALK_ACTIONS,
   isOneOf,
   normalizeTicket,
   robotStatus,
@@ -54,11 +57,15 @@ export async function createRobotCommand(body: Record<string, unknown>): Promise
     if (!spot) throw new ApiError(400, "spot is required");
     return getStore().createCommand({ id, robot, type: "go_to", spot, createdAt });
   }
-  throw new ApiError(400, "type must be ask, say or go_to");
+  if (body.type === "walk_control") throw new ApiError(400, `walk_control needs journeyId and action (${WALK_ACTIONS.join(", ")})`);
+  throw new ApiError(400, "type must be ask, say, go_to or walk_control");
 }
 
-export async function listCommands(robot: string, limit: number) {
-  return getStore().listCommands(robot, Math.min(50, Math.max(1, Math.round(limit) || 10)));
+// what a patient asked on the phone only shows with the demo switch on (and is gone once nova has it)
+export async function listCommands(robot: string, limit: number, showPatientWords?: boolean) {
+  const show = showPatientWords ?? (await showPatientText());
+  const list = await getStore().listCommands(robot, Math.min(50, Math.max(1, Math.round(limit) || 10)));
+  return list.map((c) => (c.type === "ask" && c.origin === "phone" && !show ? { ...c, text: "" } : c));
 }
 
 // ---------- heartbeat
@@ -80,11 +87,25 @@ function cleanScreen(value: unknown): RobotScreen | null {
   return screen;
 }
 
-// the robot reports every 15 s. never refused for odd values: they are stored as null
+// a heartbeat pose keeps the map alive when no map frame came for a while (map frames win: they have more)
+export const HEARTBEAT_POSE_AFTER_SECONDS = 20;
+
+// the robot reports every 15 s (5 s while moving). never refused for odd values: they are stored as null
 export async function saveHeartbeat(body: Record<string, unknown>) {
   const battery = numberOrNull(body.battery);
+  const robot = robotName(body.robot);
+  if (body.pose && typeof body.pose === "object") {
+    const at = now();
+    const cleaned = cleanMapFrame({ pose: body.pose }, robot, at);
+    if ("frame" in cleaned) {
+      const map = await getStore().getMap(robot);
+      if (!map || Date.parse(at) - Date.parse(map.updatedAt) > HEARTBEAT_POSE_AFTER_SECONDS * 1000) {
+        await getStore().saveMap(cleaned.frame, MAP_TRAIL_MAX);
+      }
+    }
+  }
   await getStore().saveHeartbeat({
-    robot: robotName(body.robot),
+    robot,
     battery: battery === null ? null : Math.round(Math.min(100, Math.max(0, battery))),
     charging: body.charging === true,
     state: text(body.state, 40)?.toLowerCase() ?? null,
@@ -92,6 +113,8 @@ export async function saveHeartbeat(body: Record<string, unknown>) {
     goal: text(body.goal, 200) ?? null,
     detail: text(body.detail, 300) ?? null,
     screen: cleanScreen(body.screen),
+    server: text(body.server, 200) ?? null,
+    version: text(body.version, 40) ?? null,
     at: now(),
   });
 }
@@ -170,22 +193,28 @@ export async function postFeed(body: Record<string, unknown>) {
       continue;
     }
     const when = typeof r.at === "string" && !Number.isNaN(Date.parse(r.at)) ? new Date(r.at).toISOString() : at;
+    const clamped = when > at ? at : when;
+    // older than the 12 h the feed may keep
+    if (clamped < hoursAgo(12)) {
+      dropped++;
+      continue;
+    }
     items.push({
-      id: crypto.randomUUID(),
+      id: feedId(),
       robot,
       ...(journeyId ? { journeyId } : {}),
-      at: when > at ? at : when,
+      at: clamped,
       who,
       kind,
       text: t,
     });
   }
-  addFeed(items);
+  await saveFeed(robot, items);
   return { ok: true, stored: items.length, dropped, showPatientText: show };
 }
 
 export async function getFeed(robot: string, limit = 50) {
-  return { items: listFeed(robot, Math.min(200, Math.max(1, limit))), showPatientText: await showPatientText() };
+  return { items: await readFeed(robot, Math.min(200, Math.max(1, limit))), showPatientText: await showPatientText() };
 }
 
 // ---------- stats

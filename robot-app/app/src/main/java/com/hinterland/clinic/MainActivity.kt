@@ -61,6 +61,13 @@ class MainActivity : AppCompatActivity() {
             checkInBack = Clinic::tapCheckInBack,
             checkInClose = Clinic::tapCheckInClose,
             checkInConfirm = Clinic::tapCheckInConfirm,
+            allGood = Clinic::tapAllGood,
+            talkSlower = Clinic::tapTalkSlower,
+            talkWait = Clinic::tapTalkWait,
+            openStaff = Clinic::openStaff,
+            closeStaff = Clinic::closeStaff,
+            staffTouched = Clinic::staffTouched,
+            recheckServers = Clinic::staffRecheckServers,
         )
 
         setContent {

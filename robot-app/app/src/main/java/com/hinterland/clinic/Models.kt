@@ -45,8 +45,14 @@ data class Journey(
     val leg: Leg? get() = legs.lastOrNull()
 }
 
-// a stop of a guide command (from / to)
-data class Stop(val name: String, val spot: String, val room: String? = null, val kind: String? = null) {
+// a stop of a guide command (from / to). viaSpot = optional waypoint when the way is blocked (6.6)
+data class Stop(
+    val name: String,
+    val spot: String,
+    val room: String? = null,
+    val kind: String? = null,
+    val viaSpot: String? = null,
+) {
     val label: String get() = room?.let { "Room $it" } ?: name
 }
 
@@ -63,12 +69,40 @@ data class RobotCommand(
     val to: Stop? = null,
     val spot: String? = null,
     val text: String? = null,
+    // walk_control: wait | resume | slower | faster
+    val action: String? = null,
+    // guide: the phone companion link (walkUrl from the server, or walkCode to build it)
+    val walkCode: String? = null,
+    val walkUrl: String? = null,
 ) {
     companion object {
         const val GUIDE = "guide"
         const val GO_TO = "go_to"
         const val SAY = "say"
         const val ASK = "ask"
+        const val WALK_CONTROL = "walk_control"
+    }
+}
+
+// walk_control actions from the phone page or the dashboard (docs/journeys.md 6.4)
+enum class WalkControl(val wire: String) {
+    WAIT("wait"), RESUME("resume"), SLOWER("slower"), FASTER("faster");
+
+    companion object {
+        fun of(wire: String?): WalkControl? = values().firstOrNull { it.wire == wire?.trim()?.lowercase(Locale.ROOT) }
+    }
+}
+
+// the QR code on the pickup screen: <base>/walk/<walkCode>. a full walkUrl from the server wins;
+// else the walk base url from local.properties, else the server nova uses right now.
+object WalkLink {
+    private val code = Regex("^[A-Za-z0-9_-]{4,32}$")
+
+    fun url(walkUrl: String?, walkCode: String?, base: String?): String? {
+        walkUrl?.trim()?.takeIf { it.startsWith("https://") || it.startsWith("http://") }?.let { return it }
+        val c = walkCode?.trim()?.takeIf { code.matches(it) } ?: return null
+        val b = base?.trim()?.trimEnd('/')?.takeIf { it.startsWith("https://") || it.startsWith("http://") } ?: return null
+        return "$b/walk/$c"
     }
 }
 
@@ -140,6 +174,7 @@ object Json {
             active = o.bool("active") ?: true,
             selfCheckIn = o.bool("selfCheckIn") ?: false,
             waitingPlaceId = o.str("waitingPlaceId"),
+            viaSpot = o.str("viaSpot"),
         )
     }
 
@@ -204,13 +239,16 @@ object Json {
             to = o.optJSONObject("to")?.let(::stop),
             spot = o.str("spot"),
             text = o.str("text"),
+            action = o.str("action")?.lowercase(Locale.ROOT),
+            walkCode = o.str("walkCode"),
+            walkUrl = o.str("walkUrl"),
         )
     }
 
     private fun stop(o: JSONObject): Stop? {
         val name = o.str("name")
         val spot = o.str("spot") ?: name ?: return null
-        return Stop(name = name ?: spot, spot = spot, room = o.str("room"), kind = o.str("kind"))
+        return Stop(name = name ?: spot, spot = spot, room = o.str("room"), kind = o.str("kind"), viaSpot = o.str("viaSpot"))
     }
 
     // PATCH /api/journeys/:id body
@@ -226,8 +264,16 @@ object Json {
         return o
     }
 
-    // POST /api/robot/heartbeat body. unknown values go as json null, detail only when there is one
-    fun heartbeat(robot: String, s: BrainStatus, screen: ScreenMirror? = null): JSONObject {
+    // POST /api/robot/heartbeat body. unknown values go as json null, detail only when there is one.
+    // server = the team-inbox url nova uses (6.1), version = the app version
+    fun heartbeat(
+        robot: String,
+        s: BrainStatus,
+        screen: ScreenMirror? = null,
+        server: String? = null,
+        version: String? = null,
+        pose: RobotPose? = null,
+    ): JSONObject {
         val o = JSONObject()
             .put("robot", robot)
             .put("battery", s.battery?.coerceIn(0, 100) ?: JSONObject.NULL)
@@ -237,7 +283,113 @@ object Json {
             .put("goal", s.goal.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
         s.detail?.takeIf { it.isNotBlank() }?.let { o.put("detail", it) }
         screen?.let { o.put("screen", screen(it)) }
+        server?.takeIf { it.isNotBlank() }?.let { o.put("server", it) }
+        version?.takeIf { it.isNotBlank() }?.let { o.put("version", it) }
+        // map coordinates from getPosition, also while driving (field test: position was empty then)
+        pose?.let { o.put("pose", JSONObject().put("x", round(it.x, 2)).put("y", round(it.y, 2)).put("theta", round(ScanMath.wrap(it.theta), 2))) }
         return o
+    }
+
+    // POST /api/robot/logs body
+    fun logs(robot: String, items: List<LogLine>): JSONObject {
+        val arr = JSONArray()
+        items.forEach { l ->
+            arr.put(
+                JSONObject()
+                    .put("at", Instant.ofEpochMilli(l.at).toString())
+                    .put("level", l.level.wire)
+                    .put("source", l.source.wire)
+                    .put("text", l.text),
+            )
+        }
+        return JSONObject().put("robot", robot).put("items", arr)
+    }
+
+    // POST /api/robot/map body (docs/journeys.md 6.5). places only when they are due, at most
+    // MAP_SCAN_MAX scan points (map frame), numbers rounded so a report stays a few kB.
+    fun mapReport(r: MapReport): JSONObject {
+        val o = JSONObject().put("robot", r.robot)
+        r.mapName?.takeIf { it.isNotBlank() }?.let { o.put("mapName", it) }
+        o.put(
+            "pose",
+            JSONObject().put("x", round(r.pose.x, 3)).put("y", round(r.pose.y, 3)).put("theta", round(ScanMath.wrap(r.pose.theta), 3)),
+        )
+        r.places?.let { list ->
+            val arr = JSONArray()
+            list.forEach { p -> arr.put(JSONObject().put("name", p.name).put("x", round(p.point.x, 2)).put("y", round(p.point.y, 2))) }
+            o.put("places", arr)
+        }
+        if (r.scan.isNotEmpty()) {
+            val arr = JSONArray()
+            ScanMath.downsample(r.scan, MAP_SCAN_MAX).forEach { p -> arr.put(JSONArray().put(round(p.x, 2)).put(round(p.y, 2))) }
+            o.put("scan", arr)
+        }
+        r.follower?.let { f ->
+            o.put("follower", JSONObject().put("x", round(f.x, 2)).put("y", round(f.y, 2)).put("source", r.followerSource ?: "lidar"))
+        }
+        r.target?.let { t -> o.put("target", JSONObject().put("name", t.name).put("x", round(t.point.x, 2)).put("y", round(t.point.y, 2))) }
+        r.remainingMeters?.let { o.put("remainingMeters", round(it, 1)) }
+        return o
+    }
+
+    const val MAP_SCAN_MAX = 240
+
+    // RobotApi getPosition / STATUS_POSE: {"px":..,"py":..,"theta":..}; x/y also accepted
+    fun robotPose(message: String?): RobotPose? {
+        val o = runCatching { JSONObject(message.orEmpty()) }.getOrNull() ?: return null
+        val x = o.number("px") ?: o.number("x") ?: return null
+        val y = o.number("py") ?: o.number("y") ?: return null
+        val t = o.number("theta") ?: o.number("z") ?: 0.0
+        return RobotPose(x, y, ScanMath.theta(t))
+    }
+
+    // Definition.STATUS_LINE_DATA: a list of Pose ({"px":..,"py":..}), also [[x,y],...] or {"points":[...]}.
+    // bad entries are skipped; null when it is not a list at all
+    fun scan(data: String?): List<Point>? {
+        val t = data?.trim().orEmpty()
+        if (t.isEmpty()) return null
+        val arr = when {
+            t.startsWith("[") -> runCatching { JSONArray(t) }.getOrNull()
+            t.startsWith("{") -> runCatching { JSONObject(t).let { it.optJSONArray("points") ?: it.optJSONArray("data") } }.getOrNull()
+            else -> null
+        } ?: return null
+        val out = ArrayList<Point>(arr.length())
+        for (i in 0 until arr.length()) {
+            val p = when (val item = arr.opt(i)) {
+                is JSONObject -> {
+                    val x = item.number("px") ?: item.number("x")
+                    val y = item.number("py") ?: item.number("y")
+                    if (x != null && y != null) Point(x, y) else null
+                }
+                is JSONArray -> if (item.length() >= 2) {
+                    val x = item.optDouble(0)
+                    val y = item.optDouble(1)
+                    if (!x.isNaN() && !y.isNaN()) Point(x, y) else null
+                } else {
+                    null
+                }
+                else -> null
+            }
+            if (p != null && p.x.isFinite() && p.y.isFinite()) out += p
+        }
+        return out
+    }
+
+    // Definition.STATUS_EMERGENCY. the docs do not show the value, so only clear forms count:
+    // "1"/"true" = pressed, "0"/"false" = released, or a json object with one of those under a known key
+    fun emergency(data: String?): Boolean? {
+        val t = data?.trim().orEmpty()
+        when (t.lowercase(Locale.ROOT)) {
+            "1", "true" -> return true
+            "0", "false" -> return false
+        }
+        val o = runCatching { JSONObject(t) }.getOrNull() ?: return null
+        return listOf("emergency", "isEmergency", "status", "state").firstNotNullOfOrNull { o.bool(it) }
+    }
+
+    private fun round(v: Double, digits: Int): Double {
+        val f = Math.pow(10.0, digits.toDouble())
+        return Math.round(v * f) / f
     }
 
     fun screen(m: ScreenMirror): JSONObject {
@@ -283,12 +435,7 @@ object Json {
     }
 
     // RobotApi getPosition: {"px":..,"py":..,"theta":..} (Definition.JSON_NAVI_POSITION_X/Y), x/y also accepted
-    fun pose(message: String?): Point? {
-        val o = runCatching { JSONObject(message.orEmpty()) }.getOrNull() ?: return null
-        val x = o.number("px") ?: o.number("x") ?: return null
-        val y = o.number("py") ?: o.number("y") ?: return null
-        return Point(x, y)
-    }
+    fun pose(message: String?): Point? = robotPose(message)?.point
 
     // RobotApi getPlaceList: [{"name":..,"x":..,"y":..}, ...]
     fun mapPlaces(message: String?): List<MapPlace> {
