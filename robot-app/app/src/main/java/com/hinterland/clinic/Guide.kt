@@ -132,6 +132,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     private val tried = mutableSetOf<String>()
     private var helpCalled = false
     private var blockedSince = 0L
+    // the demo: its detour part was said in this blocked stretch
+    @Volatile private var demoWaySaid = false
     // legDriven at the last detour step: once otto drove on a few meters, the steps start again
     @Volatile private var jamDriven: Double? = null
 
@@ -545,7 +547,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                         pauseWanted || wantedPace != null || if (d == null) {
                             schedule.due(now()) != null && !legBlock.isBlocked
                         } else {
-                            d.held() || d.nextWanted() || (d.plan.due() != null && !legBlock.isBlocked)
+                            d.held() || d.nextWanted() || (d.plan.due() != null && !legBlock.isBlocked) || (legBlock.isBlocked && atTheDoor())
                         }
                     },
                     onTick = { blocked -> tick(blocked, schedule, watch, scope, targetPoint) },
@@ -569,6 +571,11 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                         OttoBrain.helpActive() -> {
                             patch(LegStatus.FAILED, JourneyEvent.FAILED, "Stopped: urgent help was called")
                             return result(GuideOutcome.STOPPED)
+                        }
+                        // the demo: blocked right at the destination (people at the doctor's door) is arrived
+                        demo != null && (o.why == NavFailure.BLOCKED || o.why == NavFailure.NO_PATH) && atTheDoor() -> {
+                            RobotLog.i(LogSource.APP, "Demo: the way is blocked within ${DEMO_DOOR_M} m of $destination, that counts as arrived")
+                            return arrive()
                         }
                         o.why == NavFailure.BLOCKED || o.why == NavFailure.NO_PATH -> {
                             val next = nextWay(target, o.why)
@@ -663,6 +670,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         // past the jam: the blocked count of this leg starts again
         if (legBlock.progress(t, targetPoint?.let { p -> here?.distanceTo(p) }, legDriven)) {
             RobotLog.i(LogSource.NAV, "Past the blocked spot, the blocked count starts again")
+            demoWaySaid = false
         }
         // a few meters past the last jam: a later one gets every detour step again, also its own team call
         val jam = jamDriven
@@ -671,6 +679,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             detours.reset()
             helpCalled = false
             RobotLog.i(LogSource.NAV, "Drove on past the jam, the detour steps are ready again")
+            demoWaySaid = false
         }
         val due = schedule.due(t) ?: return
         // the demo's other check-backs: no stop, no turn, a log line
@@ -771,7 +780,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         val patientBehind = p == null || (abs(p.bearingDeg) >= PATIENT_BEHIND_DEG && (p.distance ?: 0.0) < BACK_PATIENT_M)
         val clear = Radar.clearBehind(BACK_CLEAR_M)
         val backed = if (clear && !patientBehind) {
-            say(LineKey.BACK_UP, SpeechKind.WAY)
+            val d = demo
+            if (d != null) demoWayLine(d) else say(LineKey.BACK_UP, SpeechKind.WAY)
             Robot.back(BACK_OFF_M)
         } else {
             false
@@ -795,7 +805,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         Clinic.feed.ottoDid(now(), "The way is blocked, taking another way")
         Clinic.updateGuide { it.copy(detour = true) }
         val d = demo
-        if (d != null) d.play(DemoPart.DETOUR) else say(LineKey.DETOUR, SpeechKind.WAY)
+        if (d != null) demoWayLine(d) else say(LineKey.DETOUR, SpeechKind.WAY)
     }
 
     // detour step C: the way stays blocked. the patient hears it, the team gets a call (once), otto waits
@@ -812,7 +822,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             Clinic.feed.ottoDid(now(), "The way is blocked, asked the team for help")
             setPhase(GuidePhase.BLOCKED)
             Clinic.flash(Mood.SORRY, 3_000)
-            say(LineKey.BLOCKED_HELP, SpeechKind.ALERT)
+            val d = demo
+            if (d != null) demoWayLine(d) else say(LineKey.BLOCKED_HELP, SpeechKind.ALERT)
         }
         if (now() - blockedSince >= BLOCKED_WAIT_MS) {
             RobotLog.w(LogSource.NAV, "Way to ${to.spot} blocked for ${(now() - blockedSince) / 1000} s after the team call: this leg ends")
@@ -904,6 +915,10 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
 
     // the demo's walk stopped on purpose: the operator's hold, Next, a walk part that is due, a pace change
     private suspend fun demoInterrupted(d: DemoWalk, scope: CoroutineScope): GuideOutcome? {
+        if (legBlock.isBlocked && atTheDoor()) {
+            RobotLog.i(LogSource.APP, "Demo: blocked within ${DEMO_DOOR_M} m of $destination, that counts as arrived")
+            return arrive()
+        }
         if (d.held()) return holdForDemo()
         val byHand = d.takeNext()
         val part = byHand ?: d.plan.due()
@@ -941,6 +956,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         OttoBrain.activity(RobotState.WALKING, if (fell) "Waiting for ${ticketOr()}" else "Checking on ${ticketOr()}")
         Clinic.feed.ottoDid(now(), if (fell) "Waiting for the patient to catch up" else "Turning to check on the patient")
         if (fell) patch(null, JourneyEvent.WAITING_FOR_PATIENT, "Patient fell behind, Otto waits")
+        val startHeading = Robot.heading()
         val predicted = track.predict(now(), Robot.latestPose())
         val turn = when {
             predicted != null -> TurnPlan.toward(predicted.bearingDeg, side, s.turnSide)
@@ -952,7 +968,11 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             delay(TURN_RETRY_MS)
             turnOnSpot(turn, "to the patient, once more")
         })
-        val target = TurnPlan.target(predicted, if (turned) turn else null, Robot.latestPose(), side)
+        val turnedFirst = TurnPlan.target(predicted, if (turned) turn else null, Robot.latestPose(), side)
+        // face the patient: corrected by their fresh bearing, at most twice
+        val faced = faceThePatient(turnedFirst)
+        val counted = (if (turned) turn?.signedDeg ?: 0.0 else 0.0) + faced
+        val target = TurnPlan.shifted(turnedFirst, faced)
         val look = look(target, DEMO_GATE_M)
         val m = look.match
         if (m != null) {
@@ -967,8 +987,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
                 (m?.let { ", the patient %.1f m away".format(Locale.ROOT, it.distance) } ?: ", nobody at that spot"),
         )
         d.play(part)
-        // back the same angle, then on
-        if (turned && turn != null) turnOnSpot(Turn(turn.degrees, !turn.left), "back to the way")
+        // back by the total turned, the shorter way, then on
+        turnBack(startHeading, counted)
         patch(null, JourneyEvent.CHECK_BACK, if (fell) "Patient is back with Otto" else "Patient close, all fine")
         d.plan.played(part)
         checks++
@@ -981,6 +1001,22 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         setPhase(GuidePhase.WALKING)
         OttoBrain.activity(RobotState.WALKING, Brain.guideGoal(ticket, destination))
         return null
+    }
+
+    // the demo: otto is this close to the destination (blocked here = arrived)
+    private fun atTheDoor(): Boolean {
+        val p = Robot.latestPose()?.point ?: here
+        val d = dest
+        return p != null && d != null && p.distanceTo(d) <= DEMO_DOOR_M
+    }
+
+    // the demo: the walk's way and alert lines while the way is blocked are no script lines, so the script's
+    // detour part is said instead, once per blocked stretch (otto never stands there in silence)
+    private suspend fun demoWayLine(d: DemoWalk) {
+        if (demoWaySaid) return
+        demoWaySaid = true
+        RobotLog.i(LogSource.APP, "Demo: the way is blocked, the detour part")
+        d.play(DemoPart.DETOUR)
     }
 
     // the demo operator holds: otto stands until resume (no journey event, it is the team's own pause)
@@ -1003,6 +1039,61 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     private suspend fun turnOnSpot(signedDeg: Double, why: String): Turn? {
         val t = TurnPlan.choose(signedDeg, s.turnSide) ?: return null
         return if (turnOnSpot(t, why)) t else null
+    }
+
+    // after a check-back turn otto faces the patient (Facing, field test b16: still 79 deg off while he talked):
+    // their fresh bearing, more than 15 deg off = a correction the shorter way and a new look, at most twice.
+    // the degrees turned (+ = left)
+    private suspend fun faceThePatient(target: Target?): Double {
+        var turned = 0.0
+        var done = 0
+        var t = target
+        while (true) {
+            delay(FACE_LOOK_MS)
+            val b = patientBearing(t)
+            val c = Facing.correction(b, done)
+            if (c == null || b == null) {
+                RobotLog.i(
+                    LogSource.VISION,
+                    when {
+                        b == null -> "Facing: patient not seen after the turn"
+                        abs(b) <= Facing.BAND_DEG -> "Facing: patient straight ahead (%.0f deg)".format(Locale.ROOT, abs(b))
+                        else -> "Facing: patient still at %+.0f deg after %d corrections".format(Locale.ROOT, b, done)
+                    },
+                )
+                return turned
+            }
+            done++
+            RobotLog.i(
+                LogSource.VISION,
+                "Facing: patient at %+.0f deg after the turn, turning %s %.0f deg (correction %d)".format(Locale.ROOT, b, if (c.left) "left" else "right", c.degrees, done),
+            )
+            if (!turnOnSpot(c, "facing the patient, correction $done")) return turned
+            turned += c.signedDeg
+            t = t?.let { TurnPlan.shifted(it, c.signedDeg) }
+        }
+    }
+
+    // the patient's bearing now (+ = left): the ticket lock's radar fix when fresh, else the camera person nearest
+    // the spot (within FACE_CAMERA_M). the camera's side is not documented: with the spot straight ahead a person
+    // off to one side gives no correction
+    private fun patientBearing(target: Target?): Double? {
+        val now = now()
+        Radar.follower?.takeIf { now - it.at < FACE_RADAR_FRESH_MS }?.let { return Bearing.of(it.robot) }
+        val t = target ?: return null
+        val m = PatientMatch.best(Robot.people().orEmpty(), emptyList(), t, FACE_CAMERA_M) ?: return null
+        val b = Bearing.of(m.point)
+        if (abs(b) > Facing.BAND_DEG && abs(t.bearingDeg) < Facing.BAND_DEG) return null
+        return b
+    }
+
+    // driving on after a stop: back by the total turned (the shorter way). startHeading = where otto faced when he
+    // stopped; without a pose, the turns counted at the stop
+    private suspend fun turnBack(startHeading: Double?, counted: Double) {
+        val h = Robot.heading()
+        val total = if (startHeading != null && h != null) Math.toDegrees(ScanMath.wrap(h - startHeading)) else counted
+        val back = Facing.back(total) ?: return
+        turnOnSpot(back, "back to the way, %.0f deg turned in all".format(Locale.ROOT, total))
     }
 
     private suspend fun turnOnSpot(t: Turn, why: String): Boolean {
@@ -1053,6 +1144,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             },
         )
         delay(Robot.NAV_RELEASE_MS)
+        // where otto faces now: he turns back by the total when he drives on
+        val startHeading = Robot.heading()
         val predicted = track.predict(now(), Robot.latestPose())
         val turn = TurnPlan.toward(predicted?.bearingDeg, side, s.turnSide)
         // the radar saw them beside just now: the question already while otto turns to them
@@ -1070,7 +1163,11 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             delay(TURN_RETRY_MS)
             turnOnSpot(turn, "$towards, once more")
         }
-        val target = TurnPlan.target(predicted, if (turned) turn else null, Robot.latestPose(), side)
+        val turnedFirst = TurnPlan.target(predicted, if (turned) turn else null, Robot.latestPose(), side)
+        // face the patient: corrected by their fresh bearing, at most twice
+        val faced = faceThePatient(turnedFirst)
+        val counted = (if (turned) turn?.signedDeg ?: 0.0 else 0.0) + faced
+        val target = TurnPlan.shifted(turnedFirst, faced)
         var look = look(target)
         if (turned && look.match == null && now() - presenceAt >= PRESENCE_MS) {
             // nobody near the spot: a little to each side once before deciding
@@ -1158,6 +1255,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         RobotLog.i(LogSource.BRAIN, "Stop %d took %.1f s".format(Locale.ROOT, no, (now() - stopAt) / 1000.0))
         if (result != null) return result to distance
         if (cancelled) return cancelledNow() to distance
+        // driving on: back towards the way by the total turned
+        turnBack(startHeading, counted)
         wantedPace?.let {
             wantedPace = null
             setPace(it, announce = false)
@@ -1523,6 +1622,12 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         private const val DEMO_ARRIVED_MS = 1_500L
         // the demo's check-back: the camera takes only someone this close to the predicted spot (ticket lock)
         private const val DEMO_GATE_M = 0.8
+        // facing the patient after a turn: a fresh look, the radar fix this fresh, the camera this close to the spot
+        private const val FACE_LOOK_MS = 400L
+        private const val FACE_RADAR_FRESH_MS = 500L
+        private const val FACE_CAMERA_M = 1.5
+        // the demo: blocked this close to the destination counts as arrived (people at the doctor's door)
+        private const val DEMO_DOOR_M = 1.5
 
         // the guide that runs right now, for the actions and the screen
         @Volatile var current: Guide? = null

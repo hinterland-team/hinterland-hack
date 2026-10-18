@@ -183,6 +183,28 @@ object TurnPlan {
     fun shifted(t: Target, deg: Double): Target = t.copy(bearingDeg = Bearing.wrap(t.bearingDeg - deg))
 }
 
+// after a check-back turn otto must face the patient (field test b16: after "turned right 103 deg" the patient
+// was still at -79 deg while otto talked). bearing = the patient's fresh bearing (+ = left), done = corrections
+// made so far. the correction turn the shorter way, null = facing them (within BAND_DEG), no bearing, or
+// MAX_CORRECTIONS made
+object Facing {
+    const val BAND_DEG = 15.0
+    const val MAX_CORRECTIONS = 2
+
+    fun correction(bearingDeg: Double?, done: Int): Turn? {
+        val b = bearingDeg?.let { Bearing.wrap(it) } ?: return null
+        if (abs(b) <= BAND_DEG || done >= MAX_CORRECTIONS) return null
+        return Turn(abs(b).toFloat(), left = b > 0)
+    }
+
+    // driving on: back by the total turned at the stop (+ = left), the shorter way. null = less than BAND_DEG
+    fun back(totalDeg: Double): Turn? {
+        val t = Bearing.wrap(totalDeg)
+        if (abs(t) < BAND_DEG) return null
+        return Turn(abs(t).toFloat(), left = t < 0)
+    }
+}
+
 // the person taken as the patient: how far, where (robot frame), how far off the predicted spot
 data class Match(val distance: Double, val point: Point, val cost: Double, val source: FixSource)
 
