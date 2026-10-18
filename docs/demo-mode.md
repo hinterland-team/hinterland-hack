@@ -7,9 +7,9 @@ A fixed, rehearsed demo for the judges. The microphone is OFF the whole time. Ot
 1. Demo starts (dashboard `/demo`, the mode switch, or the staff menu): Otto goes into demo mode, mic off, drives to the reception place and waits there with his face on.
 2. Otto sees a person standing in front of him (camera, within `personM`, for ~1 s) or the operator presses Next: the `reception` part starts.
 3. `reception`: greeting, the patient's answer, the check-in (a real self check-in journey to the destination, ticket on the screen), the pace question, then the walk starts.
-4. Walk to the destination at the chosen pace, patient on Otto's `walkSide` (default right). Otto follows the patient with the **ticket lock** (below), because the demo is in public with many people, faces and noise (field test b16: the radar mixed the patient up with walls and other people; b17's fixed turn was rejected - Otto must find the patient himself):
-   - `firstCheck`: Otto's first check-back stop (~10 s after leaving): he turns towards where the lock says the patient is (turn rule, the shorter way), the camera confirms the person at that spot, he plays the part, turns back and drives on.
-   - `fellBack`: when the lock notices the patient fell back (lost beside while driving, after firstCheck), at the latest `fellBackAfterS` after the firstCheck part, or on Next: Otto stops, turns towards the patient (a turn-around goes via the right), says the lines and waits until the locked patient is close again (`wait_close`). Skipped when Otto is within 2 m of the destination.
+4. Walk to the destination at the chosen pace, patient on Otto's `walkSide` (default right). The demo walk is a fixed routine (b20, the user's choice after the b19 field test: lock-guided turns were inconsistent at 96-106 deg, and a fixed 90 deg turn to the right faces both the patient and the audience):
+   - `firstCheck`: Otto's first check-back stop (~10 s after leaving): he turns exactly `glanceDeg` (default 90) towards the walk side, plays the part, turns back by the same angle and drives on. No lock-guided turn, no corrections.
+   - `fellBack`: only if the script has it: `fellBackAfterS` seconds of driving after the firstCheck part, or on Next. Otto stops facing forward (no turn), says the lines and waits until the patient is close again (`wait_close`). Skipped within 2 m of the destination. The demo script saved on the dashboard for the hackathon has no fellBack part (it fired at odd moments).
    Later check-backs in the demo do nothing (no stop, no turn). Obstacles and detours use the real handling with the fixed lines `obstacle` / `detour`.
 
 ### Ticket lock (all walks)
@@ -19,7 +19,7 @@ Otto locks onto the person who got the ticket and ignores everyone and everythin
 - Candidates: person-sized LiDAR clusters within 2.5 m. Static things (a cluster that keeps its map position while Otto drives on: walls, pillars, chairs) are never the patient. Other people (moving differently from Otto, or more than 0.7 m from the predicted spot) are ignored.
 - Prediction: the patient walks with Otto, so the spot keeps its place next to him (last relative position and speed, turned along with Otto's own turns).
 - Lost: no candidate at the predicted spot for walk.besideLostS while driving = fell back (predicted: behind on the walk side).
-- Check-backs: turn towards the predicted spot, the camera picks the person nearest to it (within 0.8 m), everyone else is ignored, the lock is anchored there again.
+- Check-backs (normal walks): turn towards the predicted spot, then re-measure and correct until the patient is straight ahead (more than 15 deg off, at most 2 corrections), the camera picks the person nearest to the spot, everyone else is ignored, the lock is anchored there again; driving on turns back by the total turned.
 5. `arrive`: the arrival lines at the destination.
 6. Otto drives back to the reception place without talking and waits for the next person (step 2 again), until the demo is stopped.
 
@@ -107,7 +107,7 @@ The whole run:
 ```
 
 - `destination` / `reception`: place names (or ids) on Otto's current map. `start`: `person` (camera) or `next` (operator only). `personM`: how close the person must stand (0.5-3 m).
-- `walkSide`: `right` | `left`, the patient's side on the demo walk (the setting walk.walkSide is not used in demo runs). `glanceDeg`: only used when the lock has no idea where the patient is: how far Otto looks towards the walk side (0-90). `fellBackAfterS`: the latest fellBack, in seconds of driving after the firstCheck part, when the lock has not noticed it before (2-30). `closeMaxS`: the longest `wait_close` (3-20 s).
+- `walkSide`: `right` | `left`, the patient's side on the demo walk (the setting walk.walkSide is not used in demo runs). `glanceDeg`: the firstCheck turn towards the walk side and back (0-90, default 90). `fellBackAfterS`: seconds of driving after the firstCheck part until fellBack (2-30). `closeMaxS`: the longest `wait_close` (3-20 s).
 - `otto` step: Otto says `text` exactly (placeholders `{ticket}`, `{place}`), waits until it was said, then `waitS` (default: the voice setting `linePauseS`).
 - `patient` step: Otto is silent and waits for the patient's line: `waitS` if set, else 1.2 s + 0.4 s per word. Next ends the wait at once. Not shown on Otto's screen.
 - `action` steps: `check_in` (self check-in journey to `destination`, `{ticket}` is set from then on), `pace` (`value` normal | slow | very_slow), `wait_close` (until a person is within 1.5 m beside, by LiDAR, or in front, by camera, for 1 s; at most `closeMaxS`, or Next).
