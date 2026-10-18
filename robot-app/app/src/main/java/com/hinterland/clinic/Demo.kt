@@ -452,10 +452,10 @@ object Demo {
         return listOfNotNull(face, body).minOrNull()
     }
 
-    // someone close again (wait_close): a person-like shape beside otto on the radar, either side, or a person in
-    // front on the camera
+    // the locked patient close again (wait_close): the ticket lock's patient beside otto on the radar, or a person
+    // in front on the camera (otto turned to the patient)
     private fun nearestClose(): Double? = listOfNotNull(
-        Radar.nearestBeside(now())?.takeIf { it > 0.0 },
+        Radar.besideFix(now())?.distance?.takeIf { it > 0.0 },
         Robot.peopleDistances()?.filter { it > 0.0 }?.minOrNull(),
     ).minOrNull()
 

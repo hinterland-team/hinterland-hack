@@ -299,8 +299,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         if (own != null) {
             patch(LegStatus.PICKUP, JourneyEvent.PICKUP_STARTED, "Patient asked Otto directly")
             patch(null, JourneyEvent.PATIENT_CONFIRMED, "Patient is with Otto")
-            // the demo's walk does not follow the patient's position
-            if (demo == null) rememberStart("asked at the robot")
+            rememberStart("asked at the robot")
             return true
         }
         val fromSpot = cmd.from?.spot?.trim().orEmpty()
@@ -452,7 +451,10 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             RobotLog.i(LogSource.VISION, "Patient at the start ($how): not seen, the first look goes to otto's ${side.wire} side")
             return
         }
-        track.noteStart(m.point, Robot.latestPose(), now())
+        val pose = Robot.latestPose()
+        track.noteStart(m.point, pose, now())
+        // the ticket lock starts from this spot (positions only, in memory)
+        Radar.lockStart(pose?.let { ScanMath.toMap(m.point, it) })
         RobotLog.i(
             LogSource.VISION,
             "Patient at the start ($how): %.1f m, %+.0f deg (%s)".format(Locale.ROOT, m.distance, Bearing.of(m.point), m.source.wire),
@@ -645,7 +647,13 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         // sensors.radarWatch off: the radar does not call check-backs, the schedule alone decides
         if (s.radarWatch && watch.check(t, Radar.everSeen(), Radar.lastSeenAt())) {
             if (demo != null) {
-                RobotLog.i(LogSource.LIDAR, "Nobody beside on the radar for ${watch.thresholdMs / 1000} s (demo walk: no check-back)")
+                // the lock lost the patient while driving: after the firstCheck part that is fellBack
+                if (demo.plan.wasPlayed(DemoPart.FIRST_CHECK)) {
+                    demo.plan.lockLost()
+                    RobotLog.i(LogSource.APP, "Demo: the lock lost the patient for ${watch.thresholdMs / 1000} s while driving, fellBack now")
+                } else {
+                    RobotLog.i(LogSource.LIDAR, "Nobody at the patient's spot for ${watch.thresholdMs / 1000} s (demo: before firstCheck, no stop)")
+                }
             } else {
                 sideLost = true
                 RobotLog.i(LogSource.LIDAR, "Nobody beside on the radar for ${watch.thresholdMs / 1000} s, checking back now")
@@ -912,12 +920,14 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         }
     }
 
-    // the demo's walk parts as a fixed routine (docs/demo-mode.md flow 4, field test b16): nothing here follows
-    // where the radar thinks the patient is. firstCheck = stop, glanceDeg towards the walk side, the part, the
-    // same angle back; fellBack = stop facing forward, the part (its wait_close waits for the patient), skipped
-    // in the last meters
+    // the demo's walk parts with the caring check-back (docs/demo-mode.md flow 4, ticket lock): otto turns towards
+    // where the lock says the patient is (turn rule), the camera takes the person nearest that spot (within
+    // DEMO_GATE_M, everyone else is ignored) and anchors the lock there, the part plays, otto turns back the same
+    // angle and drives on. no idea at all: glanceDeg towards the walk side (firstCheck), behind on the walk side
+    // (fellBack). fellBack is skipped in the last meters
     private suspend fun demoStop(d: DemoWalk, part: String, byHand: Boolean, scope: CoroutineScope): GuideOutcome? {
-        if (part == DemoPart.FELL_BACK && NearGoal.skipCheck(here, dest)) {
+        val fell = part == DemoPart.FELL_BACK
+        if (fell && NearGoal.skipCheck(here, dest)) {
             RobotLog.i(LogSource.APP, "Demo: fellBack skipped, Otto is within ${NearGoal.SKIP_WITHIN_M.toInt()} m of $destination")
             d.plan.played(part)
             return null
@@ -927,26 +937,39 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             "Demo: $part" + if (byHand) " (Next)" else " after %.0f s of driving".format(Locale.ROOT, d.plan.drivenMs() / 1000.0),
         )
         delay(Robot.NAV_RELEASE_MS)
-        when (part) {
-            DemoPart.FIRST_CHECK -> {
-                setPhase(GuidePhase.CHECKING)
-                OttoBrain.activity(RobotState.WALKING, "Checking on ${ticketOr()}")
-                Clinic.feed.ottoDid(now(), "Turning to check on the patient")
-                val glance = if (d.glanceDeg > 0.0) turnOnSpot(side.sign * d.glanceDeg, "the demo's glance to the ${side.wire}") else null
-                d.play(part)
-                glance?.let { turnOnSpot(-it.signedDeg, "back from the glance") }
-                patch(null, JourneyEvent.CHECK_BACK, "Patient close, all fine")
-            }
-            DemoPart.FELL_BACK -> {
-                setPhase(GuidePhase.WAITING)
-                OttoBrain.activity(RobotState.WALKING, "Waiting for ${ticketOr()}")
-                Clinic.feed.ottoDid(now(), "Waiting for the patient to catch up")
-                patch(null, JourneyEvent.WAITING_FOR_PATIENT, "Patient fell behind, Otto waits")
-                d.play(part)
-                patch(null, JourneyEvent.CHECK_BACK, "Patient is back with Otto")
-            }
-            else -> d.play(part)
+        setPhase(if (fell) GuidePhase.WAITING else GuidePhase.CHECKING)
+        OttoBrain.activity(RobotState.WALKING, if (fell) "Waiting for ${ticketOr()}" else "Checking on ${ticketOr()}")
+        Clinic.feed.ottoDid(now(), if (fell) "Waiting for the patient to catch up" else "Turning to check on the patient")
+        if (fell) patch(null, JourneyEvent.WAITING_FOR_PATIENT, "Patient fell behind, Otto waits")
+        val predicted = track.predict(now(), Robot.latestPose())
+        val turn = when {
+            predicted != null -> TurnPlan.toward(predicted.bearingDeg, side, s.turnSide)
+            fell -> TurnPlan.toward(null, side, s.turnSide)
+            d.glanceDeg > 0.0 -> TurnPlan.choose(side.sign * d.glanceDeg, s.turnSide)
+            else -> null
         }
+        val turned = turn != null && (turnOnSpot(turn, "to the patient") || run {
+            delay(TURN_RETRY_MS)
+            turnOnSpot(turn, "to the patient, once more")
+        })
+        val target = TurnPlan.target(predicted, if (turned) turn else null, Robot.latestPose(), side)
+        val look = look(target, DEMO_GATE_M)
+        val m = look.match
+        if (m != null) {
+            track.noteCamera(m.point, look.matchMap, now())
+            look.matchMap?.let { cameraFix = it to now() }
+            Radar.anchor(m.point, look.matchMap)
+        }
+        RobotLog.i(
+            LogSource.APP,
+            "Demo: $part, " + (turn?.let { "turned %s %.0f deg".format(Locale.ROOT, if (it.left) "left" else "right", it.degrees) + if (turned) "" else " (not taken)" } ?: "no turn") +
+                (predicted?.let { " towards the %s fix".format(Locale.ROOT, it.source.wire) } ?: " (no idea where the patient is)") +
+                (m?.let { ", the patient %.1f m away".format(Locale.ROOT, it.distance) } ?: ", nobody at that spot"),
+        )
+        d.play(part)
+        // back the same angle, then on
+        if (turned && turn != null) turnOnSpot(Turn(turn.degrees, !turn.left), "back to the way")
+        patch(null, JourneyEvent.CHECK_BACK, if (fell) "Patient is back with Otto" else "Patient close, all fine")
         d.plan.played(part)
         checks++
         if (cancelled) return cancelledNow()
@@ -1070,6 +1093,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         if (m != null) {
             track.noteCamera(m.point, look.matchMap, now())
             look.matchMap?.let { cameraFix = it to now() }
+            // the ticket lock is anchored on the person the camera picked
+            Radar.anchor(m.point, look.matchMap)
         }
         if (!cameraLogged && look.people.isNotEmpty()) {
             cameraLogged = true
@@ -1152,7 +1177,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
     }
 
     // a few looks after the turn (the camera needs a moment), over early when someone is right at the spot
-    private suspend fun look(target: Target): Look {
+    // gate = how far from the predicted spot someone may be (the demo: DEMO_GATE_M, everyone else is ignored)
+    private suspend fun look(target: Target, gate: Double = PatientMatch.GATE_M): Look {
         val samples = ArrayList<List<Double>?>()
         val people = ArrayList<SeenPerson>()
         var best: Match? = null
@@ -1162,7 +1188,7 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
             val seen = Robot.people()
             samples += seen?.map { it.distance }
             seen?.let { people += it }
-            val m = PatientMatch.best(seen.orEmpty(), Radar.aheadPoints(), target)
+            val m = PatientMatch.best(seen.orEmpty(), Radar.aheadPoints(), target, gate)
             if (m != null && (best == null || m.cost < best.cost)) {
                 best = m
                 bestMap = Robot.latestPose()?.let { ScanMath.toMap(m.point, it) }
@@ -1495,6 +1521,8 @@ class Guide private constructor(val cmd: RobotCommand, private val own: OwnReque
         private const val RETRY_LIMIT_MS = 10_000L
         // the demo: a moment at the door after its arrive part
         private const val DEMO_ARRIVED_MS = 1_500L
+        // the demo's check-back: the camera takes only someone this close to the predicted spot (ticket lock)
+        private const val DEMO_GATE_M = 0.8
 
         // the guide that runs right now, for the actions and the screen
         @Volatile var current: Guide? = null

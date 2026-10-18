@@ -457,6 +457,8 @@ class DemoWalkPlan(private val script: DemoScript, private val firstCheckMs: Lon
     private var lastTick: Long? = null
     // the driving time when the firstCheck part was played (or its moment passed without one in the script)
     private var firstDoneAt: Long? = null
+    // the ticket lock lost the patient while driving (after the firstCheck part): fellBack at once
+    private var lost = false
 
     val fellBackAfterMs: Long get() = Settings.ms(script.fellBackAfterS)
 
@@ -486,7 +488,13 @@ class DemoWalkPlan(private val script: DemoScript, private val firstCheckMs: Lon
         }
         val from = firstDoneAt ?: return null
         if (DemoPart.FELL_BACK in played || !script.has(DemoPart.FELL_BACK)) return null
-        return DemoPart.FELL_BACK.takeIf { driven - from >= fellBackAfterMs }
+        return DemoPart.FELL_BACK.takeIf { lost || driven - from >= fellBackAfterMs }
+    }
+
+    // the ticket lock lost the patient for walk.besideLostS while driving; counts only after the firstCheck part
+    @Synchronized
+    fun lockLost() {
+        if (firstDoneAt != null) lost = true
     }
 
     // played (or skipped): it does not come again

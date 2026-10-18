@@ -327,17 +327,43 @@ data class FollowerFix(val robot: Point, val map: Point?, val distance: Double, 
 
 // follows one leg-like shape beside or behind otto from frame to frame. a shape that stays put on the map
 // while otto drives on is furniture, not a patient: it is ignored for a while.
+// the ticket lock (docs/demo-mode.md, field test b16: walls and other people were taken for the patient): once
+// the patient is confirmed, only a candidate within lockGateM of their predicted spot next to otto counts (the
+// last relative spot, turned along with otto's own turns); a candidate that keeps its map spot while otto
+// drives on is never the patient (its spot is remembered for this walk); the lock starts from the patient's
+// spot at the walk start. positions only, in memory, no faces
 class FollowerTracker(
     private val gateM: Double = 0.8,
     private val keepMs: Long = 1_500,
     private val confirmHits: Int = 2,
+    private val lockGateM: Double = LOCK_GATE_M,
 ) {
     private class Sample(val t: Long, val cand: Point, val robot: Point)
+
+    // the candidates of one frame on the map, and where otto was
+    private class Frame(val t: Long, val maps: List<Point>, val robot: Point)
 
     private var track: FollowerFix? = null
     private var hits = 0
     private val history = ArrayDeque<Sample>()
     private val ignored = ArrayList<Pair<Point, Long>>()
+
+    // the lock: the patient's last spot next to otto (robot frame) and otto's heading then
+    var locked = false
+        private set
+    private var relative: Point? = null
+    private var relativeHeading: Double? = null
+    // where the patient stood at the walk start (map), the lock starts within START_M of it
+    private var start: Point? = null
+    private val frames = ArrayDeque<Frame>()
+    // map spots that are never the patient in this walk (static things)
+    private val statics = ArrayList<Point>()
+
+    // the last frame: candidates left out as static, and as someone else (the lock)
+    var ignoredStatic = 0
+        private set
+    var ignoredOther = 0
+        private set
 
     // last time the follower was seen for sure (confirmed track), null = not yet
     var lastSeenAt: Long? = null
@@ -354,21 +380,65 @@ class FollowerTracker(
         ignored.clear()
         lastSeenAt = null
         everSeen = false
+        locked = false
+        relative = null
+        relativeHeading = null
+        start = null
+        frames.clear()
+        statics.clear()
+        ignoredStatic = 0
+        ignoredOther = 0
+    }
+
+    // the patient's spot at the walk start (map frame): the lock starts from the candidate nearest it
+    fun lockStart(map: Point?) {
+        start = map
+    }
+
+    // a check-back found the patient (camera): the lock is anchored there again
+    fun anchor(now: Long, robot: Point, map: Point?, pose: RobotPose?) {
+        track = FollowerFix(robot, map, ScanMath.range(robot), now)
+        hits = confirmHits
+        locked = true
+        relative = robot
+        relativeHeading = pose?.theta
+        history.clear()
+    }
+
+    // where the patient should be next to otto now (robot frame): the last relative spot, turned with otto
+    fun predicted(pose: RobotPose?): Point? {
+        val r = relative ?: return null
+        val h0 = relativeHeading
+        if (pose == null || h0 == null) return r
+        val a = -ScanMath.wrap(pose.theta - h0)
+        return Point(r.x * cos(a) - r.y * sin(a), r.x * sin(a) + r.y * cos(a))
     }
 
     // one radar frame: leg candidates in the robot frame (the side sectors) and the pose, if known
     fun update(now: Long, candidates: List<LegCandidate>, pose: RobotPose?): FollowerFix? {
         ignored.removeAll { now - it.second > IGNORE_MS }
-        val usable = candidates.filter { c ->
-            val m = pose?.let { ScanMath.toMap(c.at, it) }
-            m == null || ignored.none { it.first.distanceTo(m) < IGNORE_RADIUS_M }
+        val maps = candidates.map { c -> pose?.let { ScanMath.toMap(c.at, it) } }
+        if (pose != null) noteStatics(now, maps.filterNotNull(), pose.point)
+        var staticN = 0
+        val usable = candidates.filterIndexed { i, _ ->
+            val m = maps[i]
+            val still = m != null && (statics.any { it.distanceTo(m) < STATIC_SPOT_M } || ignored.any { it.first.distanceTo(m) < IGNORE_RADIUS_M })
+            if (still) staticN++
+            !still
         }
+        ignoredStatic = staticN
         val last = track?.takeIf { now - it.at <= keepMs }
-        val pick = if (last != null) {
-            usable.minByOrNull { distanceToTrack(it, last, pose) }?.takeIf { distanceToTrack(it, last, pose) <= gateM }
-        } else {
-            usable.minWithOrNull(compareBy<LegCandidate>({ it.kind.ordinal }, { it.distance }))
+        val startSpot = start
+        val pick = when {
+            // locked: only near the patient's predicted spot next to otto, everyone else is ignored
+            locked -> predicted(pose)?.let { p -> usable.filter { it.at.distanceTo(p) <= lockGateM }.minByOrNull { it.at.distanceTo(p) } }
+            last != null -> usable.minByOrNull { distanceToTrack(it, last, pose) }?.takeIf { distanceToTrack(it, last, pose) <= gateM }
+            // the lock starts from the patient's spot at the walk start
+            startSpot != null && pose != null ->
+                usable.filter { ScanMath.toMap(it.at, pose).distanceTo(startSpot) <= START_M }.minByOrNull { ScanMath.toMap(it.at, pose).distanceTo(startSpot) }
+            else -> usable.minWithOrNull(compareBy<LegCandidate>({ it.kind.ordinal }, { it.distance }))
         }
+        ignoredOther = usable.size - if (pick != null) 1 else 0
         if (pick == null) {
             if (last == null) {
                 track = null
@@ -398,8 +468,27 @@ class FollowerTracker(
         if (hits >= confirmHits) {
             lastSeenAt = now
             everSeen = true
+            // the lock follows the confirmed patient
+            locked = true
+            relative = pick.at
+            relativeHeading = pose?.theta
         }
         return current
+    }
+
+    // a candidate that kept its map spot (within STATIC_M for STATIC_MS) while otto moved STATIC_MOVE_M or more
+    // is a static thing: its spot is never the patient in this walk
+    private fun noteStatics(now: Long, maps: List<Point>, robot: Point) {
+        frames.addLast(Frame(now, maps, robot))
+        while (frames.isNotEmpty() && now - frames.first().t > FRAMES_MS) frames.removeFirst()
+        val then = frames.lastOrNull { now - it.t >= STATIC_MS } ?: return
+        if (then.robot.distanceTo(robot) < STATIC_MOVE_M) return
+        for (m in maps) {
+            if (then.maps.none { it.distanceTo(m) <= STATIC_M }) continue
+            if (statics.any { it.distanceTo(m) < STATIC_SPOT_M }) continue
+            statics += m
+            if (statics.size > MAX_STATICS) statics.removeAt(0)
+        }
     }
 
     private fun distanceToTrack(c: LegCandidate, last: FollowerFix, pose: RobotPose?): Double {
@@ -423,6 +512,15 @@ class FollowerTracker(
         const val STATIC_RATIO = 0.25
         const val IGNORE_MS = 15_000L
         const val IGNORE_RADIUS_M = 0.35
+        // the ticket lock
+        const val LOCK_GATE_M = 0.7
+        const val START_M = 1.0
+        const val STATIC_M = 0.15
+        const val STATIC_MS = 1_000L
+        const val STATIC_MOVE_M = 0.3
+        const val STATIC_SPOT_M = 0.3
+        const val FRAMES_MS = 2_500L
+        const val MAX_STATICS = 300
     }
 }
 

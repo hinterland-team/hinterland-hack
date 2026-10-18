@@ -26,6 +26,8 @@ object Radar {
     // in front after the turn: people up to this far count
     private const val AHEAD_MAX_M = 6.0
     private const val STATUS_EVERY_MS = 10_000L
+    // the lock's line while it sees the patient, at most this often
+    private const val LOCK_LOG_MS = 2_000L
     // nobody beside for this long is worth a log line (shorter gaps are the normal flicker)
     private const val UNSEEN_LOG_MS = 2_000L
     private const val SUMMARY_EVERY_MS = 1_000L
@@ -189,33 +191,69 @@ object Radar {
         }
     }
 
-    // seen / not seen without the 1-2 s flicker: the first sighting, gaps of 2 s and more, a status now and then
+    // the ticket lock without the 1-2 s flicker: on, the patient at most every LOCK_LOG_MS (with what was
+    // ignored), lost after a gap of 2 s, found again, a status now and then
     private fun logFollower(now: Long) {
         val f = follower?.takeIf { now - it.at <= BESIDE_FRESH_MS }
         val last = tracker.lastSeenAt
+        val ignoredNote = "ignored ${tracker.ignoredStatic} static, ${tracker.ignoredOther} other"
         when {
             f != null && !seenOnce -> {
                 seenOnce = true
                 statusAt = now
-                RobotLog.i(LogSource.LIDAR, "Patient seen beside: %.1f m at %+.0f deg".format(Locale.ROOT, f.distance, Bearing.of(f.robot)))
+                RobotLog.i(LogSource.LIDAR, "Lock: on the patient %.1f m at %+.0f deg (%s)".format(Locale.ROOT, f.distance, Bearing.of(f.robot), ignoredNote))
             }
             f != null && unseenLogged -> {
                 unseenLogged = false
                 statusAt = now
-                RobotLog.i(LogSource.LIDAR, "Patient beside again: %.1f m at %+.0f deg".format(Locale.ROOT, f.distance, Bearing.of(f.robot)))
+                RobotLog.i(LogSource.LIDAR, "Lock: patient found again %.1f m at %+.0f deg (%s)".format(Locale.ROOT, f.distance, Bearing.of(f.robot), ignoredNote))
             }
             f == null && last != null && !unseenLogged && now - last >= UNSEEN_LOG_MS -> {
                 unseenLogged = true
-                RobotLog.i(LogSource.LIDAR, "Nobody beside for ${(now - last) / 1000} s")
+                RobotLog.i(LogSource.LIDAR, "Lock lost: nobody at the patient's spot for ${(now - last) / 1000} s ($ignoredNote)")
             }
-            now - statusAt >= STATUS_EVERY_MS -> {
+            f != null && now - statusAt >= LOCK_LOG_MS -> {
                 statusAt = now
-                RobotLog.i(
-                    LogSource.LIDAR,
-                    if (f != null) "Patient beside: %.1f m at %+.0f deg".format(Locale.ROOT, f.distance, Bearing.of(f.robot))
-                    else "Nobody beside" + (last?.let { " for ${(now - it) / 1000} s" } ?: " yet"),
-                )
+                RobotLog.i(LogSource.LIDAR, "Lock: patient %.1f m at %+.0f deg (%s)".format(Locale.ROOT, f.distance, Bearing.of(f.robot), ignoredNote))
             }
+            f == null && now - statusAt >= STATUS_EVERY_MS -> {
+                statusAt = now
+                RobotLog.i(LogSource.LIDAR, (if (tracker.locked) "Lock: nobody at the patient's spot" else "Lock: not on anyone yet") + (last?.let { " for ${(now - it) / 1000} s" } ?: "") + " ($ignoredNote)")
+            }
+        }
+    }
+
+    // the patient's spot at the walk start (map frame): the ticket lock starts from it
+    fun lockStart(map: Point?) {
+        lock.lock()
+        try {
+            tracker.lockStart(map)
+        } finally {
+            lock.unlock()
+        }
+        if (map != null) RobotLog.i(LogSource.LIDAR, "Lock: starts from the patient's spot at the walk start")
+    }
+
+    // a check-back found the patient (camera, robot frame now): the lock is anchored there again
+    fun anchor(robot: Point, map: Point?) {
+        val now = System.currentTimeMillis()
+        lock.lock()
+        try {
+            tracker.anchor(now, robot, map, Robot.latestPose(now))
+            follower = tracker.current
+        } finally {
+            lock.unlock()
+        }
+        RobotLog.i(LogSource.LIDAR, "Lock: anchored on the patient %.1f m at %+.0f deg (camera)".format(Locale.ROOT, ScanMath.range(robot), Bearing.of(robot)))
+    }
+
+    // where the lock expects the patient next to otto now (robot frame), null = no idea
+    fun lockPredicted(now: Long = System.currentTimeMillis()): Point? {
+        lock.lock()
+        try {
+            return if (tracker.locked) tracker.predicted(Robot.latestPose(now)) else null
+        } finally {
+            lock.unlock()
         }
     }
 
