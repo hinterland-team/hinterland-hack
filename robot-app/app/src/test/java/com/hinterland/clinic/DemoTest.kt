@@ -297,7 +297,7 @@ class DemoTest {
     fun theDemoWalkFieldsAreReadWithTheirRanges() {
         val d = DemoScripts.default
         assertEquals(WalkSide.RIGHT, d.walkSide)
-        assertEquals(60.0, d.glanceDeg, 1e-9)
+        assertEquals(90.0, d.glanceDeg, 1e-9)
         assertEquals(6.0, d.fellBackAfterS, 1e-9)
         assertEquals(8.0, d.closeMaxS, 1e-9)
         val parts = """"parts": {"arrive": [{"who": "otto", "text": "Here we are."}]}"""
@@ -311,17 +311,17 @@ class DemoTest {
         val bare = DemoScripts.parse("""{"destination": "Dr. Green", "reception": "Reception", $parts}""")
         assertTrue(bare.warnings.isEmpty())
         assertEquals(WalkSide.RIGHT, bare.script.walkSide)
-        assertEquals(60.0, bare.script.glanceDeg, 1e-9)
+        assertEquals(90.0, bare.script.glanceDeg, 1e-9)
         // unknown or out of range: the default, with a warning each
         val bad = DemoScripts.parse("""{"destination": "Dr. Green", "reception": "Reception", "walkSide": "behind", "glanceDeg": 120, "fellBackAfterS": 1, "closeMaxS": "long", $parts}""")
         assertFalse(bad.builtIn)
         assertEquals(WalkSide.RIGHT, bad.script.walkSide)
-        assertEquals(60.0, bad.script.glanceDeg, 1e-9)
+        assertEquals(90.0, bad.script.glanceDeg, 1e-9)
         assertEquals(6.0, bad.script.fellBackAfterS, 1e-9)
         assertEquals(8.0, bad.script.closeMaxS, 1e-9)
         assertEquals(4, bad.warnings.size)
         assertTrue(bad.warnings.any { it == "walkSide must be right or left, using right" })
-        assertTrue(bad.warnings.any { it == "glanceDeg must be 0-90 deg, using 60" })
+        assertTrue(bad.warnings.any { it == "glanceDeg must be 0-90 deg, using 90" })
         assertTrue(bad.warnings.any { it == "fellBackAfterS must be 2-30 s, using 6" })
         assertTrue(bad.warnings.any { it == "closeMaxS must be 3-20 s, using 8" })
     }

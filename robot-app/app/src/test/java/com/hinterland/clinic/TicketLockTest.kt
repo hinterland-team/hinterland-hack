@@ -80,15 +80,17 @@ class TicketLockTest {
     }
 
     @Test
-    fun theDemosFellBackComesWhenTheLockLostThePatientAfterFirstCheck() {
+    fun theDemosFellBackIsTimedOnly() {
+        // b20: the lock does not trigger fellBack in the demo, only fellBackAfterS of driving after firstCheck does
         val plan = DemoWalkPlan(DemoScripts.default, firstCheckMs = 10_000)
-        // before firstCheck a lost lock does nothing
-        plan.lockLost()
-        assertNull(plan.due())
         plan.played(DemoPart.FIRST_CHECK)
         assertNull(plan.due())
-        // after it: fellBack at once, not only after fellBackAfterS
-        plan.lockLost()
+        plan.tick(t0, blocked = false)
+        plan.tick(t0 + 1_500, blocked = false)
+        plan.tick(t0 + 3_000, blocked = false)
+        plan.tick(t0 + 4_500, blocked = false)
+        assertNull(plan.due())
+        plan.tick(t0 + 6_000, blocked = false)
         assertEquals(DemoPart.FELL_BACK, plan.due())
     }
 

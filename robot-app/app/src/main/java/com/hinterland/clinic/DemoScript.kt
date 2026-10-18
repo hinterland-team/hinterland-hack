@@ -105,7 +105,7 @@ object DemoScripts {
     const val MIN_PERSON_M = 0.5
     const val MAX_PERSON_M = 3.0
     // the demo walk (docs/demo-mode.md flow 4): the defaults and the ranges of the script's fields
-    const val GLANCE_DEG = 60.0
+    const val GLANCE_DEG = 90.0
     const val MAX_GLANCE_DEG = 90.0
     const val FELL_BACK_AFTER_S = 6.0
     const val MIN_FELL_BACK_AFTER_S = 2.0
@@ -129,7 +129,7 @@ object DemoScripts {
   "start": "person",
   "personM": 1.2,
   "walkSide": "right",
-  "glanceDeg": 60,
+  "glanceDeg": 90,
   "fellBackAfterS": 6,
   "closeMaxS": 8,
   "parts": {
@@ -457,8 +457,6 @@ class DemoWalkPlan(private val script: DemoScript, private val firstCheckMs: Lon
     private var lastTick: Long? = null
     // the driving time when the firstCheck part was played (or its moment passed without one in the script)
     private var firstDoneAt: Long? = null
-    // the ticket lock lost the patient while driving (after the firstCheck part): fellBack at once
-    private var lost = false
 
     val fellBackAfterMs: Long get() = Settings.ms(script.fellBackAfterS)
 
@@ -488,13 +486,7 @@ class DemoWalkPlan(private val script: DemoScript, private val firstCheckMs: Lon
         }
         val from = firstDoneAt ?: return null
         if (DemoPart.FELL_BACK in played || !script.has(DemoPart.FELL_BACK)) return null
-        return DemoPart.FELL_BACK.takeIf { lost || driven - from >= fellBackAfterMs }
-    }
-
-    // the ticket lock lost the patient for walk.besideLostS while driving; counts only after the firstCheck part
-    @Synchronized
-    fun lockLost() {
-        if (firstDoneAt != null) lost = true
+        return DemoPart.FELL_BACK.takeIf { driven - from >= fellBackAfterMs }
     }
 
     // played (or skipped): it does not come again
