@@ -26,7 +26,7 @@ android {
         versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 3
         versionName = providers.gradleProperty("versionName").orNull ?: "0.3"
 
-        // base url of team-inbox without a path, e.g. http://192.168.2.214:3000
+        // base url of team-inbox without a path, e.g. http://<laptop-ip>:3000
         buildConfigField("String", "BACKEND_URL", "\"${local("teamInbox.url")}\"")
         // several servers, comma separated, first = preferred (online, then the laptop). otto uses the
         // first one whose /api/health answers. empty = only teamInbox.url (docs/journeys.md 6.1)
