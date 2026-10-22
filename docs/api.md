@@ -5,7 +5,7 @@ The contract is now `journeys.md` (v3 and v3.1: places, journeys, tickets, the `
 This file keeps what still holds from v2 and writes down the details `journeys.md` leaves open.
 
 Backend = `team-inbox/` (Next.js). Robot app = `robot-app/` (Android, AgentOS SDK 0.4.5).
-Base URL on the robot = `teamInbox.url` without the path, e.g. `http://192.168.2.214:3000`.
+Base URL on the robot = `teamInbox.url` without the path, e.g. `http://<laptop-ip>:3000`.
 
 ## Auth
 
