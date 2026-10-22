@@ -9,7 +9,7 @@ OrionStar ships these rules for AI coding assistants (original, in Chinese: `ref
 
 ## 0. Our robot
 
-- GreetingBot Nova, model OS-R-SG04, SN M03SHW2A30025032951B, name 小豹, OrionStar OS **12.1**, AgentOS (never switch it to RobotOS).
+- GreetingBot Nova, model OS-R-SG04, OrionStar OS **12.1**, AgentOS (never switch it to RobotOS).
 - People know the robot as **Otto** (he): screen, speech, persona. "Nova" stays for the product brand (Nova Clinic, Nova Deploy, Nova Remote), the hardware model and technical ids (robot id and feed value `nova`).
 - SDK `com.orionstar.agent:sdk:0.4.5-SNAPSHOT` (newest one below ROM 12.3). It bundles RobotAPI (RobotCore). Do not use APIs that only exist in 0.4.11+ (`ttsParallel`, `ttsRequest*`, `setVoiceMode`).
 - Screen: 1920 x 1080 px, density 3.5, so about 549 x 308 dp. OrionStar says: keep layouts compact, small text and components, no deep nesting, nothing outside the screen.

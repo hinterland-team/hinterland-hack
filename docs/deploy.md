@@ -22,7 +22,7 @@ Nova Clinic is deployed by Nova Deploy, our "Vercel for OrionStar robots" in the
 "Set it up" on the Nova Deploy dashboard sets all three. `NOVA_APP_PROPERTIES` looks like this:
 
 ```
-teamInbox.url=http://192.168.2.214:3000
+teamInbox.url=http://<laptop-ip>:3000
 teamInbox.token=<same as TEAM_INBOX_TOKEN>
 robot.name=nova
 robot.homeSpot=Reception Point
